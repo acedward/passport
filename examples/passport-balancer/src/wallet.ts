@@ -75,6 +75,11 @@ import {
 } from '@midnight-ntwrk/wallet-sdk/unshielded';
 import { V1Builder as UnshieldedV1Builder } from '@midnight-ntwrk/wallet-sdk/unshielded/v1';
 
+import {
+  MidnightBech32m,
+  ShieldedAddress,
+} from '@midnight-ntwrk/wallet-sdk-address-format';
+
 import type { BalancerConfig } from './config.js';
 import { askIndexers, type IndexerUrls } from './endpoints.js';
 import {
@@ -1124,6 +1129,85 @@ export interface ContractWalletProviderOptions {
   initialDustPadding?: number;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Paying a shielded address                                                  */
+/* -------------------------------------------------------------------------- */
+
+/** One shielded coin, out of this wallet, to somebody else's shielded address. */
+export interface ShieldedTransferRequest {
+  /** The raw token type of the colour being paid. */
+  tokenType: string;
+  /**
+   * The coin this transfer is FOR, already spendable here.
+   *
+   * The facade does its own input selection and is not told to take this one —
+   * see {@link submitShieldedTransfer} — so the nonce travels for the sake of
+   * the log rather than the ledger. It is how a spare coin from a failed run
+   * becomes visible instead of being quietly spent in somebody else's place.
+   */
+  coin: { nonce: string; value: bigint };
+  /** The bech32m `mn_shield-addr_…` being paid. */
+  to: string;
+  /** What the journal calls this leg. */
+  label: string;
+}
+
+/**
+ * The four steps `ops/split-night.ts` runs for an unshielded self-transfer,
+ * run here for a shielded one to a stranger: build, sign, prove, submit.
+ *
+ * EXPORTED AND FACADE-SHAPED rather than buried in the closure so that the
+ * order of the four, the TTL, and `payFees` can be pinned by a test. They are
+ * worth pinning: `payFees: true` is what balances the DUST leg out of this
+ * wallet's OWN coins — there is no sponsor for the sponsor — and a
+ * `finalizeRecipe` called on the unsigned recipe proves a transaction the node
+ * then rejects for a missing signature, which is an error with no useful text
+ * on it.
+ *
+ * `block` is always null. `submitTransaction` answers with an identifier and
+ * nothing else; the caller resolves the block through the indexer, which is
+ * the only thing that knows it.
+ */
+export async function submitShieldedTransfer(deps: {
+  facade: Pick<
+    WalletFacade,
+    'transferTransaction' | 'signRecipe' | 'finalizeRecipe' | 'submitTransaction'
+  >;
+  secretKeys: {
+    shieldedSecretKeys: ledger.ZswapSecretKeys;
+    dustSecretKey: ledger.DustSecretKey;
+  };
+  signSegment: UnshieldedKeystore['signDataAsync'];
+  /** The decoded recipient — the facade takes the object, not the bech32m. */
+  recipient: ShieldedAddress;
+  tokenType: string;
+  amount: bigint;
+  ttlMs: number;
+  now?: () => number;
+}): Promise<{ txHash: string; block: number | null }> {
+  const ttl = new Date((deps.now ?? (() => Date.now()))() + deps.ttlMs);
+  const recipe = await deps.facade.transferTransaction(
+    [
+      {
+        type: 'shielded',
+        outputs: [
+          {
+            type: deps.tokenType as ledger.RawTokenType,
+            receiverAddress: deps.recipient,
+            amount: deps.amount,
+          },
+        ],
+      },
+    ],
+    deps.secretKeys,
+    { ttl, payFees: true },
+  );
+  const signed = await deps.facade.signRecipe(recipe, deps.signSegment);
+  const finalized = await deps.facade.finalizeRecipe(signed);
+  const txHash = await deps.facade.submitTransaction(finalized);
+  return { txHash: String(txHash), block: null };
+}
+
 export interface BalancerWallet {
   readonly address: string;
   /** `'server'` when an external prover is configured, `'wasm'` when in-process. */
@@ -1161,6 +1245,25 @@ export interface BalancerWallet {
    * recipient a mint pays to when the balancer is minting to itself.
    */
   shieldedCoinPublicKeyBytes(): Promise<Uint8Array>;
+  /**
+   * Pays one shielded coin this wallet holds to somebody else's shielded
+   * address, and submits it.
+   *
+   * The one thing an account contract does NOT need: a Passport account is
+   * paid by a circuit — `deposit_shielded` — and a wallet is paid by an
+   * ordinary Zswap spend, which needs this wallet's own shielded secret keys
+   * for the input and the recipient's encryption key for the output ciphertext
+   * their wallet scans for. Both live behind the facade, so both live here.
+   *
+   * Taken under {@link BalancerWallet.exclusive} like every other spend, and
+   * it holds the queue across the node's finalisation wait — 15 to 25 seconds
+   * on stagenet. That is affordable for a gift and would not be for fee
+   * sponsorship; see `submitTx` in {@link contractWalletProvider} for the
+   * version that takes the two steps apart when it matters.
+   */
+  transferShielded(
+    request: ShieldedTransferRequest,
+  ): Promise<{ txHash: string; block: number | null }>;
   /** How many DUST UTxOs back that balance — `/wallet-status` reports it. */
   dustUtxoCount(state?: FacadeState): Promise<number>;
   /**
@@ -2260,6 +2363,64 @@ export async function openBalancerWallet(
          drill minted against. */
       const shieldedAddress = await facade.shielded.getAddress();
       return new Uint8Array(shieldedAddress.coinPublicKey.data);
+    },
+
+    async transferShielded(
+      request: ShieldedTransferRequest,
+    ): Promise<{ txHash: string; block: number | null }> {
+      /* Decoded here rather than in the caller: the facade takes a
+         `ShieldedAddress` object, and a module that only knows it has a
+         bech32m string should not have to learn the facade's types to pay
+         one. A bad address throws before any lock is taken. */
+      const parsed = MidnightBech32m.parse(request.to);
+      const recipient = parsed.decode(ShieldedAddress, config.networkId);
+
+      /* THE COIN SELECTION CAVEAT, made visible rather than assumed away.
+         `transferTransaction` does its own input selection — see
+         `ops/splitInputs.ts`, where the same behaviour is what made a pinned
+         selector necessary for the NIGHT split — so it may spend ANY coin of
+         this colour, not the one the caller just minted. With exactly one
+         such coin that is the same thing. With more than one it is not, and
+         the spare is almost always a coin left behind by a run whose second
+         leg failed. The transfer still goes through (the recipient gets a
+         coin of the right colour and value either way) but the operator is
+         told, because a silently drifting coin set is how this wallet loses
+         track of what it owns. */
+      const spendable = (await currentState()).shielded.availableCoins.filter(
+        (entry) => String(entry.coin.type) === request.tokenType,
+      );
+      const wanted = request.coin.nonce.replace(/^0x/, '').toLowerCase();
+      if (spendable.length === 0) {
+        throw new Error(
+          `this wallet holds no spendable coin of ${request.tokenType}, so ${request.label} cannot be built. The mint may not have been applied yet.`,
+        );
+      }
+      if (spendable.length > 1) {
+        console.warn(
+          `[wallet] ${request.label}: this wallet holds ${spendable.length} spendable coins of ${request.tokenType} (${spendable
+            .map(
+              (entry) =>
+                `${String(entry.coin.nonce).replace(/^0x/, '').slice(0, 12)}…=${entry.coin.value}`,
+            )
+            .join(', ')}). The facade picks its own input, so the coin minted for this payout (${wanted.slice(0, 12)}…) may not be the one spent — a spare from an earlier run is the usual reason.`,
+        );
+      }
+
+      return exclusive(
+        () =>
+          submitShieldedTransfer({
+            facade,
+            secretKeys: { shieldedSecretKeys, dustSecretKey },
+            signSegment: unshieldedKeystore.signDataAsync,
+            recipient,
+            tokenType: request.tokenType,
+            amount: request.coin.value,
+            /* The same window a balanced transaction is given. A shorter one
+               would expire while the prover is still working. */
+            ttlMs: config.balanceTtlMs,
+          }),
+        { label: request.label },
+      );
     },
 
     async registerDustIfNeeded(): Promise<

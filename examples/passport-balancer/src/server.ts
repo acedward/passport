@@ -205,11 +205,13 @@ import {
 } from './wallet.js';
 import { activationLegs, GRANT_RETRY_DELAY_MS, shouldRetryGrant } from './activationLegs.js';
 import {
+  GIFT_REQUEST_SHAPES,
   createColourPayer,
   createGiftDesk,
   giftLedgerOf,
   type GiftDesk,
   type GiftEntry,
+  type GiftRequestBody,
 } from './gift.js';
 import {
   SWAP_ASSET_SYMBOL,
@@ -2730,6 +2732,10 @@ async function main(): Promise<void> {
     config,
     wallet,
     ledger: giftLedgerOf(giftLedger),
+    /* The third request shape. An account contract is paid by a circuit the
+       desk already owns; a plain shielded address is an ordinary Zswap spend,
+       and the only thing that can build one is the wallet. */
+    transferShielded: (request) => wallet.transferShielded(request),
   });
   if (giftDesk.available) {
     console.log(`[gift] items mint under colour ${giftDesk.colourHex}`);
@@ -3104,11 +3110,14 @@ async function main(): Promise<void> {
         } catch {
           respond(request, response, 400, {
             error: 'invalid-request',
-            message: 'The request body must be JSON of the form {"account": "64 hex"}.',
+            message: `The request body must be JSON. ${GIFT_REQUEST_SHAPES}`,
           });
           return;
         }
-        const outcome = await giftDesk.give((body ?? {}) as { account?: unknown; network?: unknown });
+        /* Every other judgement — which of the three shapes this is, whether
+           the name resolves, whether the address is ours — belongs to the
+           desk, and `docs/demo/partner-api.md` is written from it. */
+        const outcome = await giftDesk.give((body ?? {}) as GiftRequestBody);
         respond(request, response, outcome.status, outcome.body);
         return;
       }
@@ -3168,7 +3177,7 @@ async function main(): Promise<void> {
       respond(request, response, 404, {
         error: 'not-found',
         message:
-          'Routes: GET /status, GET /wallet-status, GET /swap/quote, POST /balance-only, POST /balance-only/abandon, POST /register-alias, POST /repoint-alias, POST /fund-account, POST /swap, POST /gift-nft.',
+          'Routes: GET /status, GET /wallet-status, GET /swap/quote, POST /balance-only, POST /balance-only/abandon, POST /register-alias, POST /repoint-alias, POST /fund-account, POST /swap, POST /gift-nft (one of {"account"}, {"name"}, or {"address"} — see docs/demo/partner-api.md).',
       });
     })()
       .catch((cause) => {

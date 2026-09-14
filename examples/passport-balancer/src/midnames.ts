@@ -586,6 +586,81 @@ export async function runPooledLegs<T>(
   return { kind: 'registered', registerTx };
 }
 
+/* -------------------------------------------------------------------------- */
+/* Resolving a name, with no wallet and nothing to prove                      */
+/* -------------------------------------------------------------------------- */
+
+/** Reads the registry and one leaf. Shared by the sponsor and the resolver. */
+type LedgerReader = (address: string) => Promise<MidnamesLedger | null>;
+
+/**
+ * `label` -> where it points, in two indexer reads: the TLD's `domains` map
+ * gives the resolver leaf, and the leaf's `DOMAIN_TARGET` gives the target.
+ *
+ * `null` covers every "there is nothing to point at" case — the registry did
+ * not answer, the label is not in it, or its leaf did not answer — because a
+ * caller can do nothing different about any of them.
+ */
+async function resolveDomainIn(
+  readLedger: LedgerReader,
+  tldAddress: string,
+  label: string,
+): Promise<{ resolverAddress: string; target: ResolvedDomainTarget } | null> {
+  const registry = await readLedger(tldAddress);
+  if (!registry) return null;
+  const { key } = domainToKey(label);
+  if (!registry.domains.member(key)) return null;
+  const resolverAddress = rawContractAddress(
+    bytesToHex(registry.domains.lookup(key).resolver.bytes),
+  );
+  const leaf = await readLedger(resolverAddress);
+  if (!leaf) return null;
+  return { resolverAddress, target: decodeDomainTarget(leaf.DOMAIN_TARGET) };
+}
+
+/** The read half of {@link MidnamesSponsor}, on its own. */
+export interface DomainResolver {
+  /** The registry these answers come out of. */
+  readonly tldAddress: string;
+  /** What the label resolves to right now, or null when it is not registered. */
+  resolve(label: string): Promise<{ resolverAddress: string; target: ResolvedDomainTarget } | null>;
+}
+
+/**
+ * A resolver that needs neither the wallet nor a proving key.
+ *
+ * {@link createMidnamesSponsor} can answer this question too, but it is the
+ * wrong thing to build for it: it compiles the leaf contract, derives the
+ * service's caller secret, and opens a proof provider, none of which a READ
+ * touches. `./gift.ts` resolves a `.night` name on the way to a deposit and
+ * has no business paying for any of that — so it builds this instead, which is
+ * the contract module for its `ledger()` decoder and an indexer reader.
+ */
+export async function createDomainResolver(config: BalancerConfig): Promise<DomainResolver> {
+  if (!config.midnamesTldAddress) {
+    throw new Error(
+      `No .night registry is configured for ${config.networkId}, so no name can be resolved.`,
+    );
+  }
+  /* A LITERAL relative specifier, for the reason spelled out at the sponsor's
+     own import: a computed absolute path into `contracts-stagenet` resolves a
+     SECOND compact-runtime and decoding dies on `ChargedState`. */
+  const midnames = (await import(
+    '../contracts-stagenet/managed/midnames/contract/index.js'
+  )) as unknown as MidnamesModule;
+  const reader = await publicDataProviderFor(config);
+  const tldAddress = rawContractAddress(config.midnamesTldAddress);
+  const readLedger: LedgerReader = async (address) => {
+    const state = await reader.queryContractState(address);
+    if (!state) return null;
+    return midnames.ledger((state as { data: unknown }).data);
+  };
+  return {
+    tldAddress,
+    resolve: (label) => resolveDomainIn(readLedger, tldAddress, label),
+  };
+}
+
 /**
  * Builds the sponsor. Loading the compiled contract here rather than per
  * request means a broken or missing artefact set fails at start-up, where an
@@ -787,20 +862,14 @@ export async function createMidnamesSponsor(
     return !registry.domains.member(domainToKey(label).key);
   };
 
+  /* The same two reads {@link createDomainResolver} makes, through the same
+     function: `/gift-nft` resolves a name without a wallet and this sponsor
+     resolves one with a wallet already open, and two copies of the walk would
+     be two places for the key encoding to drift. */
   const resolveAlias = async (
     label: string,
-  ): Promise<{ resolverAddress: string; target: ResolvedDomainTarget } | null> => {
-    const registry = await readLedger(tldAddress);
-    if (!registry) return null;
-    const { key } = domainToKey(label);
-    if (!registry.domains.member(key)) return null;
-    const resolverAddress = rawContractAddress(
-      bytesToHex(registry.domains.lookup(key).resolver.bytes),
-    );
-    const leaf = await readLedger(resolverAddress);
-    if (!leaf) return null;
-    return { resolverAddress, target: decodeDomainTarget(leaf.DOMAIN_TARGET) };
-  };
+  ): Promise<{ resolverAddress: string; target: ResolvedDomainTarget } | null> =>
+    resolveDomainIn(readLedger, tldAddress, label);
 
   return {
     tldAddress,
