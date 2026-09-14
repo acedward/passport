@@ -149,15 +149,19 @@ function stage({ name, assets }) {
         '  PASSPORT_STAGENET_CONTRACTS at them if they live elsewhere.',
     );
   }
+  if (!assets) {
+    /* MODULE ONLY. Its artefacts are another contract's, already staged, so
+       the keys/ and zkir/ check below must not run for it: a fresh checkout
+       and the release bundle carry no artefacts under this name, and asking
+       for them here failed every build that did not happen on the machine
+       that compiled it (found 2026/09/14). */
+    stageModule(name, source, moduleDestination);
+    return;
+  }
   for (const subdirectory of STAGED_SUBDIRECTORIES) {
     if (!existsSync(resolve(source, subdirectory))) {
       fail(`the ${name} build is incomplete — ${subdirectory}/ is missing.`);
     }
-  }
-  if (!assets) {
-    /* MODULE ONLY. Its artefacts are another contract's, already staged. */
-    stageModule(name, source, moduleDestination);
-    return;
   }
   if (!existsSync(resolve(source, 'compiler', 'contract-manifest.json'))) {
     fail(
