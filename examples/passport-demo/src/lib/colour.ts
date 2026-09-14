@@ -319,7 +319,18 @@ export interface ColourHolding {
 /**
  * Which shelf a holding belongs on.
  *
- * THE RULE: a holding is an item iff the account holds exactly ONE of it AND
+ * THE RULE, IN TWO PARTS.
+ *
+ * A colour in {@link ItemArt}'s own registry is an item at ANY amount it is
+ * held in. That is the part added on 2026/09/14, and it exists because a
+ * partner's reward is earned repeatedly: a person who has been to the
+ * redemption terminal three times holds three of one colour, and three is not
+ * a balance they spend down — it is a count of the same thing, and the card
+ * says "×3". Without this half, the third visit would move their rewards off
+ * the item shelf and onto the balance table as a row reading "3", which is the
+ * opposite of what the registry is for.
+ *
+ * Otherwise: a holding is an item iff the account holds exactly ONE of it AND
  * nothing can name the colour. Both halves matter.
  *
  * The second half is what keeps a NAMED colour off the item shelf however
@@ -342,6 +353,10 @@ export function classifyHolding(
   holding: ColourHolding,
   sponsored?: { colourHex: string; symbol: string } | null,
 ): HoldingClass {
+  /* A drawn item, held at all, is an item — however many of it there are. A
+     holding of nothing is not a holding, so it falls through to the rule
+     below and lands where every other zero lands. */
+  if (holding.amount > 0n && describeItem(holding.colourHex)) return 'nft';
   if (holding.amount !== 1n) return 'token';
   return describeColour(holding.colourHex, sponsored).known ? 'token' : 'nft';
 }
@@ -408,6 +423,17 @@ export interface ItemArt {
   image: string;
   /** One line under the title, saying what the thing is. */
   description: string;
+  /**
+   * The ticker its issuer publishes, where there is one — ABSENT rather than
+   * invented for an item that has none.
+   *
+   * It is not a {@link TokenIdentity.symbol}: a colour in this registry is
+   * deliberately NOT nameable (see {@link KNOWN_ITEMS}), so nothing on the
+   * balance table will ever read it. It is shown beside the title on the item
+   * card, which is where a person who earned several of the same thing looks
+   * to check they earned the right one.
+   */
+  symbol?: string;
 }
 
 /**
@@ -426,6 +452,24 @@ export const GENESIS_PASS_COLOUR_HEX =
   '815183a74a98593bf16344ef6e920313f9c57ccb2feef3f9fe944ba5c4079e26';
 
 /**
+ * Otrix's loyalty reward, as the same faucet computes it.
+ *
+ * `rawTokenType(separator, faucet)` with the separator `otrix-loyalty-reward`
+ * (ASCII, zero-padded to 32 bytes) against the same stagenet faucet
+ * `4fc92e15…be78e92f` — the second entry in the sponsor's own item catalogue,
+ * which pins this identical literal in `passport-balancer/test/gift.test.ts`.
+ * The two sides must agree or a reward lands as an anonymous card.
+ *
+ * FUNGIBLE, AND STILL AN ITEM. A person earns one of these every time they
+ * come back to the redemption terminal, so a Passport may hold several — which
+ * is exactly why {@link classifyHolding} keeps a drawn colour on the item
+ * shelf at any amount. Several rewards are one card reading "×3", not a
+ * balance and not three identical cards.
+ */
+export const OTRIX_LOYALTY_COLOUR_HEX =
+  'd086a9e29154d03f507a589c89ea61a453f444c2881b8d0d88192f2965fa2cea';
+
+/**
  * Items Passport can show a picture of.
  *
  * DELIBERATELY NOT `KNOWN_COLOURS`. A colour in that table has a NAME, and a
@@ -442,6 +486,12 @@ const KNOWN_ITEMS: Readonly<Record<string, ItemArt>> = {
     title: 'Midnight Genesis Pass',
     image: '/nft/genesis-pass.svg',
     description: 'Midnight Passport · genesis edition',
+  },
+  [OTRIX_LOYALTY_COLOUR_HEX]: {
+    title: 'Otrix Loyalty Reward',
+    image: '/nft/otrix-loyalty.png',
+    description: 'Loyalty reward issued by Otrix at the redemption terminal.',
+    symbol: 'OTRIX',
   },
 };
 

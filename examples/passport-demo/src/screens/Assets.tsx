@@ -230,10 +230,16 @@ export default function AssetsScreen(props: AssetsScreenProps) {
         colourHex: item.colourHex,
         amount: item.amount,
         icon: <Gem size={14} aria-hidden="true" />,
-        /* An item is not a quantity, so its card does not carry one. The
-           amount IS one — that is what filed it here — and "1 of 1" is what
-           says so without printing a balance beside a thing that has none. */
-        value: '1 of 1',
+        /* A one-of-a-kind is not a quantity, so its card does not carry one:
+           "1 of 1" says there is one of it without printing a balance beside a
+           thing that has none.
+
+           A COUNT WHERE THERE IS ONE TO COUNT. Since 2026/09/14 a drawn item
+           can be held several times over — a reward earned again on each visit
+           — and those are neither a balance nor a shelf of identical cards.
+           "×3" is the count of the same thing, which is what a person who
+           earned them is actually looking for. See `classifyHolding`. */
+        value: item.amount === 1n ? '1 of 1' : `×${item.amount}`,
         item: true,
       })
     }
@@ -572,6 +578,11 @@ function NftCard(props: NftCardProps) {
       <p className="mnassets-card-head">
         {icon}
         <span className="mnassets-micro">{label}</span>
+        {/* The ticker its issuer publishes, where there is one. It rides the
+            same pill the shelf counts use rather than earning a style of its
+            own — it is the same kind of small, secondary fact, and a second
+            pill shape would be a distinction nobody asked for. */}
+        {art?.symbol ? <span className="mnassets-count">{art.symbol}</span> : null}
       </p>
       <p className="mnassets-card-value">{value}</p>
       <p

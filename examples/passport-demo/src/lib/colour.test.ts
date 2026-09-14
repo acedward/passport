@@ -15,6 +15,7 @@ import {
   describeColours,
   describeItem,
   GENESIS_PASS_COLOUR_HEX,
+  OTRIX_LOYALTY_COLOUR_HEX,
   MUSD_COLOUR_HEX,
   NIGHT_COLOUR_HEX,
   SUSD_COLOUR_HEX,
@@ -384,10 +385,15 @@ describe('the Genesis Pass on the shelves', () => {
     ]);
   });
 
-  it('is a token again the moment an account holds two of it', () => {
-    /* The classification rule is unchanged by the registry: one unit is what
-       makes an item, and a second one makes it a quantity. */
-    expect(classifyHolding({ colourHex: GENESIS_PASS_COLOUR_HEX, amount: 2n })).toBe('token');
+  it('stays an item even where two of it somehow landed', () => {
+    /* CHANGED 2026/09/14. A drawn colour is an item at any amount it is held
+       in — see `classifyHolding` — because a partner's reward is earned again
+       on every visit. The Pass is not supposed to arrive twice, but if it did,
+       the honest answer is one card carrying a count rather than a balance row
+       reading "2" for a thing that is not money. */
+    expect(classifyHolding({ colourHex: GENESIS_PASS_COLOUR_HEX, amount: 2n })).toBe('nft');
+    /* Nothing is still nothing. */
+    expect(classifyHolding({ colourHex: GENESIS_PASS_COLOUR_HEX, amount: 0n })).toBe('token');
   });
 
   it('is the colour the faucet computes, not a chosen one', () => {
@@ -501,5 +507,63 @@ describe('the mark a colour is shown under', () => {
        colour carries a mark. */
     expect(classifyHolding({ colourHex: GENESIS_PASS_COLOUR_HEX, amount: 1n })).toBe('nft');
     expect(describeColour(GENESIS_PASS_COLOUR_HEX).mark).toBeUndefined();
+  });
+});
+
+describe('the Otrix loyalty reward', () => {
+  it('is the colour the faucet computes, pinned on both sides of the boundary', () => {
+    /* `rawTokenType(separator "otrix-loyalty-reward", faucet 4fc92e15…be78e92f)`,
+       asserted against the same function in
+       `passport-balancer/test/gift.test.ts`. This side pins the literal, so a
+       change to either half fails here rather than showing a reward as an
+       anonymous card. */
+    expect(OTRIX_LOYALTY_COLOUR_HEX).toBe(
+      'd086a9e29154d03f507a589c89ea61a453f444c2881b8d0d88192f2965fa2cea',
+    );
+    expect(normalisedColourHex(OTRIX_LOYALTY_COLOUR_HEX)).toBe(OTRIX_LOYALTY_COLOUR_HEX);
+    expect(OTRIX_LOYALTY_COLOUR_HEX).not.toBe(GENESIS_PASS_COLOUR_HEX);
+  });
+
+  it('is drawn, named, and ticketed, with the artwork Passport ships itself', () => {
+    expect(describeItem(OTRIX_LOYALTY_COLOUR_HEX)).toEqual({
+      title: 'Otrix Loyalty Reward',
+      image: '/nft/otrix-loyalty.png',
+      description: 'Loyalty reward issued by Otrix at the redemption terminal.',
+      symbol: 'OTRIX',
+    });
+  });
+
+  it('is an item however many of it a person has earned', () => {
+    /* THE POINT. A reward is earned again on every visit, so a person who came
+       back three times holds three — and three of the same thing is a count on
+       one card, not a balance they spend down and not a token row. */
+    for (const amount of [1n, 2n, 3n, 40n]) {
+      expect(classifyHolding({ colourHex: OTRIX_LOYALTY_COLOUR_HEX, amount })).toBe('nft');
+    }
+  });
+
+  it('keeps its colour off the balance table, where a name would put it', () => {
+    /* The registry draws it; it does not NAME it. A named colour is a token at
+       any amount — see `classifyHolding` — and naming this one would move a
+       person's rewards onto the balance table as a row reading "3". */
+    expect(describeColour(OTRIX_LOYALTY_COLOUR_HEX).known).toBe(false);
+    expect(describeColour(OTRIX_LOYALTY_COLOUR_HEX).mark).toBeUndefined();
+  });
+
+  it('goes on the item shelf beside the Pass and leaves the tokens alone', () => {
+    const split = splitHoldings([
+      { colourHex: NIGHT_COLOUR_HEX, amount: 12n },
+      { colourHex: OTRIX_LOYALTY_COLOUR_HEX, amount: 3n },
+      { colourHex: GENESIS_PASS_COLOUR_HEX, amount: 1n },
+      { colourHex: MUSD_COLOUR_HEX, amount: 40n },
+    ]);
+    expect(split.nfts.map((held) => held.colourHex)).toEqual([
+      OTRIX_LOYALTY_COLOUR_HEX,
+      GENESIS_PASS_COLOUR_HEX,
+    ]);
+    expect(split.tokens.map((held) => held.colourHex)).toEqual([
+      NIGHT_COLOUR_HEX,
+      MUSD_COLOUR_HEX,
+    ]);
   });
 });
