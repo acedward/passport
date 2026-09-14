@@ -604,6 +604,128 @@ export function createColourPayer(deps: {
 }
 
 /* -------------------------------------------------------------------------- */
+/* The catalogue                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One thing this desk can mint and deliver.
+ *
+ * `label` IS the colour — the faucet computes a coin's colour as
+ * `tokenType(separator, kernel.self())` — so two entries carrying two labels
+ * are two currencies, and an entry whose label changed is a DIFFERENT thing
+ * wearing the same name. The labels are literals here and pinned against the
+ * faucet stagenet actually uses by `test/gift.test.ts`, which is the same hex
+ * the client's own registry is keyed on.
+ *
+ * WHY EACH ENTRY DECLARES ITS OWN RULE. The Genesis Pass is a one-of-a-kind: a
+ * Passport either has it or does not, and a second ask is a client that
+ * reloaded rather than a person who earned another. A loyalty reward is the
+ * opposite — it is earned again every time somebody comes back to the
+ * terminal — so the gate that protects the first would make the second
+ * impossible. An entry says which it is rather than the desk guessing from the
+ * name.
+ */
+export interface GiftItem {
+  /** What a partner sends as `item`. */
+  id: string;
+  /** The domain separator, which IS the colour. */
+  label: string;
+  /** What the response, and the card the holder sees, call it. */
+  name: string;
+  /** The ticker its issuer publishes, where there is one. */
+  symbol?: string;
+  /** Whether one recipient may hold more than one of it. */
+  onePerRecipient: boolean;
+  /**
+   * Whether a partner may ask for SEVERAL in one delivery — their own test
+   * stock — and then only into a shielded address they hold themselves. Never
+   * into a Passport: a person earns one at a time, at the terminal.
+   */
+  stockToAddress: boolean;
+}
+
+/**
+ * What `item` means when a request does not carry one.
+ *
+ * The default is the Genesis Pass, so every integration written before there
+ * was a catalogue keeps asking for exactly what it always asked for and gets
+ * exactly what it always got.
+ */
+export const DEFAULT_GIFT_ITEM_ID = 'genesis-pass';
+
+/**
+ * The largest stock one request may ask for.
+ *
+ * A cap rather than no cap because `amount` is minted in a SINGLE
+ * `mint_shielded` call paid for by this service's own DUST, and a partner who
+ * typed one zero too many would spend it. A hundred is enough to fill a
+ * terminal's till for a demo and small enough that the mistake is cheap.
+ */
+export const MAX_GIFT_AMOUNT = 100n;
+
+/** Everything this desk mints. */
+export const GIFT_CATALOGUE: readonly GiftItem[] = [
+  {
+    id: DEFAULT_GIFT_ITEM_ID,
+    label: DEFAULT_SEPARATOR_LABEL,
+    name: DEFAULT_ITEM_NAME,
+    onePerRecipient: true,
+    stockToAddress: false,
+  },
+  {
+    /* Otrix's own reward, handed out at their redemption terminal. Fungible
+       and earned repeatedly, which is why it is neither one-per-recipient nor
+       one-of-a-kind: the holder sees a count on one card, not a shelf of
+       identical cards. */
+    id: 'otrix-loyalty',
+    label: 'otrix-loyalty-reward',
+    name: 'Otrix Loyalty Reward',
+    symbol: 'OTRIX',
+    onePerRecipient: false,
+    stockToAddress: true,
+  },
+];
+
+/** The entry `id` names, or `null` for something this desk does not mint. */
+export function giftItem(id: string): GiftItem | null {
+  return GIFT_CATALOGUE.find((entry) => entry.id === id.trim()) ?? null;
+}
+
+/** The catalogue in the words a refusal shows the caller verbatim. */
+export const GIFT_CATALOGUE_IDS = GIFT_CATALOGUE.map((entry) => `"${entry.id}"`).join(', ');
+
+/**
+ * Where a delivery is filed.
+ *
+ * THE DEFAULT ITEM KEEPS THE BARE RECIPIENT KEY IT ALWAYS HAD. That is not
+ * tidiness, it is the reason the ledger already on the droplet keeps working:
+ * prefixing it would make every Passport that has had its Genesis Pass look
+ * like one that has not, and every one of them would be given a second. Every
+ * other item is namespaced by its own id, so two items to one recipient are
+ * two rows rather than one row that overwrote the other.
+ *
+ * For an item that is NOT one-per-recipient this is a prefix rather than a
+ * key: the delivering transaction is appended, so every reward a person earns
+ * is its own row and none of them replaces the last.
+ */
+export function giftLedgerKey(item: GiftItem, recipient: string): string {
+  return item.id === DEFAULT_GIFT_ITEM_ID ? recipient : `${item.id}#${recipient}`;
+}
+
+/**
+ * Where a delivery that has just landed is WRITTEN.
+ *
+ * The same key it is read back under for an item that is one-per-recipient —
+ * the read and the write must agree, or the gate would never close. For an
+ * item that is not, the delivering transaction is appended, so the row is
+ * unique per delivery, the ledger keeps every reward a person earned, and
+ * nothing overwrites the row before it.
+ */
+export function giftRecordKey(item: GiftItem, key: string, deliveryTx: string): string {
+  return item.onePerRecipient ? key : `${key}#${deliveryTx}`;
+}
+
+/* -------------------------------------------------------------------------- */
 /* The gift desk                                                              */
 /* -------------------------------------------------------------------------- */
 
@@ -640,6 +762,12 @@ export interface GiftEntry {
   recipientKind?: GiftRecipientKind;
   /** The `.night` name the caller asked under, when they asked by name. */
   domain?: string;
+  /**
+   * Which catalogue entry was delivered. Absent in entries written before
+   * 2026/09/14, and every one of those is the Genesis Pass — the only thing
+   * this desk minted then — so {@link DEFAULT_GIFT_ITEM_ID} reads them right.
+   */
+  item?: string;
   name: string;
   colourHex: string;
   amount: string;
@@ -688,6 +816,10 @@ export interface GiftRequestBody {
   account?: unknown;
   name?: unknown;
   address?: unknown;
+  /** Which catalogue entry. Absent means {@link DEFAULT_GIFT_ITEM_ID}. */
+  item?: unknown;
+  /** How many, for a partner's own stock. See {@link MAX_GIFT_AMOUNT}. */
+  amount?: unknown;
   network?: unknown;
 }
 
@@ -703,7 +835,17 @@ export interface GiftRefusal {
   message: string;
 }
 
-export type GiftRead = { ok: true; ask: GiftAsk } | { ok: false; refusal: GiftRefusal };
+/**
+ * A readable request: who is being paid, WHICH thing, and how many of it.
+ *
+ * `item` and `amount` travel BESIDE the ask rather than inside it because the
+ * ask is about the recipient and nothing else — the three shapes are what a
+ * partner gets wrong, and widening them would make every one of them carry two
+ * fields that have nothing to do with who is being paid.
+ */
+export type GiftRead =
+  | { ok: true; ask: GiftAsk; item: GiftItem; amount: bigint }
+  | { ok: false; refusal: GiftRefusal };
 
 /** The three shapes, in the words a refusal shows the caller verbatim. */
 export const GIFT_REQUEST_SHAPES =
@@ -745,6 +887,19 @@ export function readGiftRequest(body: GiftRequestBody, networkId: string): GiftR
     );
   }
 
+  /* WHICH thing, before WHO gets it. An unknown item is a partner reading an
+     older page of the documentation, and the refusal lists what there IS
+     rather than only saying what there is not. */
+  const askedItem = body.item === undefined || body.item === null ? DEFAULT_GIFT_ITEM_ID : body.item;
+  const item = typeof askedItem === 'string' ? giftItem(askedItem) : null;
+  if (!item) {
+    return refuse(
+      400,
+      'unknown-item',
+      `This service mints nothing called ${JSON.stringify(String(askedItem))}. It mints ${GIFT_CATALOGUE_IDS}; omit "item" for "${DEFAULT_GIFT_ITEM_ID}".`,
+    );
+  }
+
   const keys = (['account', 'name', 'address'] as const).filter(
     (key) => body[key] !== undefined && body[key] !== null,
   );
@@ -759,12 +914,57 @@ export function readGiftRequest(body: GiftRequestBody, networkId: string): GiftR
     );
   }
 
+  /**
+   * How many, which almost every request must NOT say.
+   *
+   * `amount` is a partner filling their own till, not a Passport being given
+   * something: a person earns one at a time, at the terminal, and a request
+   * that named a Passport and asked for five would be a mistake nobody would
+   * see until five of them were on a stranger's card. So it is refused for
+   * every item that does not sell a stock and for every shape but `address`,
+   * and the refusal says which of those two it fell foul of.
+   */
+  let amount = 1n;
+  if (body.amount !== undefined && body.amount !== null) {
+    if (!item.stockToAddress) {
+      return refuse(
+        400,
+        'amount-not-allowed',
+        `"${item.id}" is delivered one at a time, so it takes no "amount". Ask again without it.`,
+      );
+    }
+    if (keys[0] !== 'address') {
+      return refuse(
+        400,
+        'amount-not-allowed',
+        `"amount" is only for a stock paid to a shielded address you hold yourself. A Passport named by "${keys[0]}" earns one at a time, so ask again without it.`,
+      );
+    }
+    if (typeof body.amount !== 'number' || !Number.isInteger(body.amount)) {
+      return refuse(
+        400,
+        'invalid-amount',
+        `"amount" must be a whole number between 1 and ${MAX_GIFT_AMOUNT}, not ${JSON.stringify(body.amount)}.`,
+      );
+    }
+    if (body.amount < 1 || BigInt(body.amount) > MAX_GIFT_AMOUNT) {
+      return refuse(
+        400,
+        'invalid-amount',
+        `"amount" must be between 1 and ${MAX_GIFT_AMOUNT}; ${body.amount} is not.`,
+      );
+    }
+    amount = BigInt(body.amount);
+  }
+
+  const accept = (ask: GiftAsk): GiftRead => ({ ok: true, ask, item, amount });
+
   if (keys[0] === 'account') {
     if (typeof body.account !== 'string' || !body.account.trim()) {
       return refuse(400, 'invalid-account', `"account" must be a string. ${GIFT_REQUEST_SHAPES}`);
     }
     try {
-      return { ok: true, ask: { shape: 'account', account: rawContractAddress(body.account) } };
+      return accept({ shape: 'account', account: rawContractAddress(body.account) });
     } catch (cause) {
       return refuse(
         400,
@@ -780,7 +980,7 @@ export function readGiftRequest(body: GiftRequestBody, networkId: string): GiftR
     }
     try {
       const label = normalisePassportAlias(body.name);
-      return { ok: true, ask: { shape: 'name', label, domain: aliasDomain(label) } };
+      return accept({ shape: 'name', label, domain: aliasDomain(label) });
     } catch (cause) {
       return refuse(400, 'invalid-name', cause instanceof Error ? cause.message : String(cause));
     }
@@ -834,14 +1034,31 @@ export function readGiftRequest(body: GiftRequestBody, networkId: string): GiftR
       `That shielded address could not be decoded: ${cause instanceof Error ? cause.message : String(cause)}`,
     );
   }
-  return { ok: true, ask: { shape: 'address', address } };
+  return accept({ shape: 'address', address });
+}
+
+/** One catalogue entry with the colour it actually mints under. */
+export interface GiftColour {
+  id: string;
+  name: string;
+  symbol?: string;
+  /** The domain separator, which IS the colour. */
+  label: string;
+  /** 64 lowercase hex, or `null` where no faucet is configured. */
+  colourHex: string | null;
+  available: boolean;
 }
 
 export interface GiftDesk {
-  /** The colour this desk mints, for `/status` and for the client's registry. */
+  /**
+   * The colour the DEFAULT item mints under — the Genesis Pass, as it always
+   * was. Everything this desk can mint is in {@link GiftDesk.catalogue}.
+   */
   readonly colourHex: string | null;
   readonly available: boolean;
   readonly unavailableReason: string | null;
+  /** Every item this desk mints, and the colour each one carries. */
+  readonly catalogue: readonly GiftColour[];
   give(body: GiftRequestBody): Promise<GiftOutcome>;
 }
 
@@ -849,14 +1066,20 @@ export function createGiftDesk(deps: {
   config: BalancerConfig;
   wallet: BalancerWallet;
   ledger: GiftLedger;
-  label?: string;
-  name?: string;
   now?: () => number;
   /**
-   * The desk that mints and delivers. Defaults to one built from `config` and
-   * `wallet`; injected by the tests, which have neither a faucet nor a chain.
+   * The desk that mints and delivers, for EVERY item at every amount.
+   * Injected by the tests, which have neither a faucet nor a chain, and which
+   * care about who is paid rather than what the coin is.
    */
   payer?: ColourPayer;
+  /**
+   * The same, per catalogue entry and per amount, for a test that needs two
+   * items to be two colours. Defaults to one {@link createColourPayer} built
+   * from `config` and `wallet` — which is cheap: the contracts and the proof
+   * providers behind it are built once per config and shared.
+   */
+  payerFor?: (item: GiftItem, amount: bigint) => ColourPayer;
   /**
    * How a `.night` label is resolved. Defaults to a read-only registry reader
    * built lazily from `config` — see {@link createDomainResolver} for why this
@@ -868,19 +1091,51 @@ export function createGiftDesk(deps: {
   transferShielded?: ShieldedTransfer;
 }): GiftDesk {
   const { config } = deps;
-  const label = deps.label ?? DEFAULT_SEPARATOR_LABEL;
-  const name = deps.name ?? DEFAULT_ITEM_NAME;
   const now = deps.now ?? (() => Date.now());
-  const payer =
-    deps.payer ??
-    createColourPayer({
-      config,
-      wallet: deps.wallet,
-      label,
-      name,
-      amount: ITEM_AMOUNT,
-      transferShielded: deps.transferShielded,
-    });
+  const injected = deps.payer ?? null;
+  const build =
+    deps.payerFor ??
+    (injected
+      ? () => injected
+      : (item: GiftItem, amount: bigint) =>
+          createColourPayer({
+            config,
+            wallet: deps.wallet,
+            label: item.label,
+            name: item.name,
+            amount,
+            transferShielded: deps.transferShielded,
+          }));
+
+  /* One payer per (item, amount), kept because a stock of five and a stock of
+     six are two payers over one colour and there is no reason to build the
+     second one twice. Nothing expensive hangs off a payer — the compiled
+     contracts and the proof providers are shared per config — so this is a
+     cache for tidiness rather than for cost. */
+  const payers = new Map<string, ColourPayer>();
+  const payerFor = (item: GiftItem, amount: bigint): ColourPayer => {
+    const key = `${item.id}#${amount}`;
+    const existing = payers.get(key);
+    if (existing) return existing;
+    const made = build(item, amount);
+    payers.set(key, made);
+    return made;
+  };
+
+  /* Every colour, at one unit, so the service can say at start-up what each
+     item mints under and the client's registry can be checked against it. */
+  const catalogue: readonly GiftColour[] = GIFT_CATALOGUE.map((item) => {
+    const payer = payerFor(item, ITEM_AMOUNT);
+    return {
+      id: item.id,
+      name: item.name,
+      ...(item.symbol ? { symbol: item.symbol } : {}),
+      label: item.label,
+      colourHex: payer.colourHex,
+      available: payer.available,
+    };
+  });
+  const defaultPayer = payerFor(giftItem(DEFAULT_GIFT_ITEM_ID) as GiftItem, ITEM_AMOUNT);
   const inFlight = new Set<string>();
 
   /* Built on the first name asked for, not at start-up: a service nobody asks
@@ -987,6 +1242,10 @@ export function createGiftDesk(deps: {
     const value = entry.recipient ?? entry.account ?? '';
     const kind: GiftRecipientKind = entry.recipientKind ?? 'account';
     const txHash = entry.txHash ?? entry.depositTx;
+    /* An entry written before there was a catalogue is a Genesis Pass: it was
+       the only thing this desk minted. See {@link GiftEntry.item}. */
+    const itemId = entry.item ?? DEFAULT_GIFT_ITEM_ID;
+    const symbol = giftItem(itemId)?.symbol;
     return {
       /* `given` and `repeat` are the fields the route has always answered
          with; `alreadyGiven` is the same fact under the name the partner API
@@ -1001,6 +1260,11 @@ export function createGiftDesk(deps: {
          straight onto the card. The `.night` name the caller asked under,
          when there was one, is `domain` — never this. */
       name: entry.name,
+      /* WHICH catalogue entry, in the same word the request named it by, so a
+         partner can match an answer to the thing they asked for without
+         comparing 64 characters of colour. */
+      item: itemId,
+      ...(symbol ? { symbol } : {}),
       colour: entry.colourHex,
       colourHex: entry.colourHex,
       amount: entry.amount,
@@ -1019,9 +1283,11 @@ export function createGiftDesk(deps: {
   const give = async (body: GiftRequestBody): Promise<GiftOutcome> => {
     const read = readGiftRequest(body, config.networkId);
     if (!read.ok) return refuse(read.refusal.status, read.refusal.error, read.refusal.message);
-    const ask = read.ask;
+    const { ask, item, amount } = read;
+    const name = item.name;
+    const payer = payerFor(item, amount);
     console.log(
-      `[gift] asked to give ${name} to ${ask.shape === 'account' ? ask.account : ask.shape === 'name' ? ask.domain : ask.address}`,
+      `[gift] asked to give ${amount > 1n ? `${amount} ` : ''}${name} to ${ask.shape === 'account' ? ask.account : ask.shape === 'name' ? ask.domain : ask.address}`,
     );
 
     /* Resolved BEFORE the availability check and the ledger read, because a
@@ -1047,32 +1313,45 @@ export function createGiftDesk(deps: {
       return refuse(503, 'gift-unsupported', payer.unavailableReason ?? 'No item can be minted.');
     }
 
-    /* The recipient IS the key — see {@link GiftEntry}. A name and the
+    /* The recipient IS the key — see {@link giftLedgerKey}. A name and the
        account it resolves to are one recipient, so asking both ways gets one
-       item and the same answer twice. */
-    const key = recipient.value;
-    const previous = deps.ledger.get(key);
-    if (previous) {
-      return {
-        status: 200,
-        body: bodyOf(
-          {
-            ...previous,
-            recipient: previous.recipient ?? previous.account ?? key,
-            recipientKind: previous.recipientKind ?? recipient.kind,
-            /* The name asked under THIS time, not the one recorded: the same
-               Passport may hold more than one name. */
-            domain: domain ?? previous.domain,
-          },
-          { alreadyGiven: true },
-        ),
-      };
+       item and the same answer twice.
+
+       ONLY FOR AN ITEM THAT IS ONE-PER-RECIPIENT. A loyalty reward is earned
+       again every time somebody comes back, so there is nothing to read back:
+       every delivery is a new row, filed under the same prefix with the
+       transaction that delivered it. */
+    const key = giftLedgerKey(item, recipient.value);
+    if (item.onePerRecipient) {
+      const previous = deps.ledger.get(key);
+      if (previous) {
+        return {
+          status: 200,
+          body: bodyOf(
+            {
+              ...previous,
+              recipient: previous.recipient ?? previous.account ?? recipient.value,
+              recipientKind: previous.recipientKind ?? recipient.kind,
+              item: previous.item ?? item.id,
+              /* The name asked under THIS time, not the one recorded: the same
+                 Passport may hold more than one name. */
+              domain: domain ?? previous.domain,
+            },
+            { alreadyGiven: true },
+          ),
+        };
+      }
     }
+    /* The lock is per (item, recipient) whether or not the item is gated: two
+       requests for the same person at the same moment would mint two coins and
+       race to deliver them, and a person owed a second reward is owed it AFTER
+       the first has landed, not beside it. A different item, or a different
+       person, is never blocked by it. */
     if (inFlight.has(key)) {
       return refuse(
         409,
         'gift-in-flight',
-        'An item for this Passport is already on its way. Wait for it to finish before asking again.',
+        `A ${name} for this recipient is already on its way. Wait for it to finish before asking again.`,
       );
     }
 
@@ -1085,6 +1364,7 @@ export function createGiftDesk(deps: {
           recipient: recipient.value,
           recipientKind: 'account',
           ...(domain ? { domain } : {}),
+          item: item.id,
           name,
           colourHex: payer.colourHex,
           amount: paid.amount.toString(),
@@ -1093,7 +1373,7 @@ export function createGiftDesk(deps: {
           txHash: paid.depositTx,
           at: new Date(now()).toISOString(),
         };
-        await deps.ledger.record(key, entry);
+        await deps.ledger.record(giftRecordKey(item, key, paid.depositTx), entry);
         console.log(
           `[gift] ${name} → ${recipient.value} (deposit ${entry.depositTx}, colour ${payer.colourHex})`,
         );
@@ -1113,6 +1393,7 @@ export function createGiftDesk(deps: {
       const entry: GiftEntry = {
         recipient: recipient.value,
         recipientKind: 'shielded-address',
+        item: item.id,
         name,
         colourHex: payer.colourHex,
         amount: sent.amount.toString(),
@@ -1121,7 +1402,7 @@ export function createGiftDesk(deps: {
         txHash: sent.transferTx,
         at: new Date(now()).toISOString(),
       };
-      await deps.ledger.record(key, entry);
+      await deps.ledger.record(giftRecordKey(item, key, sent.transferTx), entry);
       console.log(
         `[gift] ${name} → ${recipient.value} (transfer ${entry.txHash}, colour ${payer.colourHex})`,
       );
@@ -1144,9 +1425,10 @@ export function createGiftDesk(deps: {
   };
 
   return {
-    colourHex: payer.colourHex,
-    available: payer.available,
-    unavailableReason: payer.unavailableReason,
+    colourHex: defaultPayer.colourHex,
+    available: defaultPayer.available,
+    unavailableReason: defaultPayer.unavailableReason,
+    catalogue,
     give,
   };
 }

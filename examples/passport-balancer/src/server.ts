@@ -2738,7 +2738,16 @@ async function main(): Promise<void> {
     transferShielded: (request) => wallet.transferShielded(request),
   });
   if (giftDesk.available) {
-    console.log(`[gift] items mint under colour ${giftDesk.colourHex}`);
+    /* EVERY colour in the catalogue, at start-up, because a colour is the one
+       thing the client cannot be told at runtime: the item registry in
+       `passport-demo/src/lib/colour.ts` is keyed on the hex, and an item whose
+       hex has drifted shows as an anonymous card rather than as an error. A
+       line per item is what an operator compares against that registry. */
+    for (const item of giftDesk.catalogue) {
+      console.log(
+        `[gift] "${item.id}" — ${item.name}${item.symbol ? ` (${item.symbol})` : ''} mints under colour ${item.colourHex}`,
+      );
+    }
   } else {
     console.warn(`[gift] items are DISABLED: ${giftDesk.unavailableReason}`);
   }
@@ -3177,7 +3186,7 @@ async function main(): Promise<void> {
       respond(request, response, 404, {
         error: 'not-found',
         message:
-          'Routes: GET /status, GET /wallet-status, GET /swap/quote, POST /balance-only, POST /balance-only/abandon, POST /register-alias, POST /repoint-alias, POST /fund-account, POST /swap, POST /gift-nft (one of {"account"}, {"name"}, or {"address"} — see docs/demo/partner-api.md).',
+          'Routes: GET /status, GET /wallet-status, GET /swap/quote, POST /balance-only, POST /balance-only/abandon, POST /register-alias, POST /repoint-alias, POST /fund-account, POST /swap, POST /gift-nft (one of {"account"}, {"name"}, or {"address"}, with an optional "item" — see docs/demo/partner-api.md).',
       });
     })()
       .catch((cause) => {

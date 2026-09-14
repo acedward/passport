@@ -605,3 +605,264 @@ describe('the one-item-per-recipient rule', () => {
     assert.equal((await first).status, 200);
   });
 });
+
+/* -------------------------------------------------------------------------- */
+/* The catalogue, as a partner meets it (2026/09/14)                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A desk that mints TWO things, so the tests below can tell them apart.
+ *
+ * The payer is injected per item and per amount — the same boundary the single
+ * payer above sits on, widened by exactly the two facts the catalogue adds.
+ * Nothing here goes near a faucet: what is being pinned is which item was
+ * asked for, how many of it, and whether the desk was willing.
+ */
+const OTRIX_COLOUR = 'd086a9e29154d03f507a589c89ea61a453f444c2881b8d0d88192f2965fa2cea';
+
+interface Minted {
+  item: string;
+  amount: bigint;
+  to: string;
+  kind: 'account' | 'address';
+}
+
+function catalogueDesk(options: { ledger?: MemoryLedger; resolved?: { target: ResolvedDomainTarget } | null } = {}) {
+  const minted: Minted[] = [];
+  const ledger = options.ledger ?? memoryLedger();
+  let sequence = 0;
+  const made = createGiftDesk({
+    config: CONFIG,
+    wallet: null as never,
+    ledger,
+    payerFor: (item, amount) => ({
+      colourHex: item.id === 'otrix-loyalty' ? OTRIX_COLOUR : COLOUR,
+      available: true,
+      unavailableReason: null,
+      payInto: async (address) => {
+        sequence += 1;
+        minted.push({ item: item.id, amount, to: address, kind: 'account' });
+        return {
+          mintTx: `mint-${sequence}`,
+          mintBlock: sequence,
+          depositTx: `deposit-${sequence}`,
+          depositBlock: sequence,
+          amount,
+          held: amount,
+        };
+      },
+      payToAddress: async (address) => {
+        sequence += 1;
+        minted.push({ item: item.id, amount, to: address, kind: 'address' });
+        return {
+          mintTx: `mint-${sequence}`,
+          mintBlock: sequence,
+          transferTx: `transfer-${sequence}`,
+          transferBlock: sequence,
+          amount,
+        };
+      },
+    }),
+    resolve: async () => options.resolved ?? null,
+    now: () => Date.UTC(2026, 8, 14, 9, 0, 0),
+  });
+  return { desk: made, minted, ledger };
+}
+
+describe('which item a /gift-nft request asks for', () => {
+  it('reads the Genesis Pass out of a body that names no item', () => {
+    /* THE COMPATIBILITY TEST for every integration written before there was a
+       catalogue: an unchanged body still asks for exactly what it always did. */
+    const read = readGiftRequest({ account: ACCOUNT }, 'stagenet');
+    assert.ok(read.ok);
+    assert.equal(read.item.id, 'genesis-pass');
+    assert.equal(read.amount, 1n);
+    /* And the ask itself is untouched by the two new fields. */
+    assert.deepEqual(read.ask, { shape: 'account', account: ACCOUNT });
+  });
+
+  it('reads the item a body does name', () => {
+    const read = readGiftRequest({ name: 'alice', item: 'otrix-loyalty' }, 'stagenet');
+    assert.ok(read.ok);
+    assert.equal(read.item.id, 'otrix-loyalty');
+    assert.equal(read.item.symbol, 'OTRIX');
+  });
+
+  it('refuses an item it does not mint, and lists the ones it does', () => {
+    const read = readGiftRequest({ account: ACCOUNT, item: 'otrix' }, 'stagenet');
+    assert.ok(!read.ok);
+    assert.equal(read.refusal.status, 400);
+    assert.equal(read.refusal.error, 'unknown-item');
+    assert.match(read.refusal.message, /"genesis-pass"/);
+    assert.match(read.refusal.message, /"otrix-loyalty"/);
+  });
+
+  it('refuses an item that is not a string rather than stringifying it', () => {
+    const read = readGiftRequest({ account: ACCOUNT, item: 7 }, 'stagenet');
+    assert.ok(!read.ok);
+    assert.equal(read.refusal.error, 'unknown-item');
+  });
+
+  it('answers with the item it delivered, in the word the request named it by', async () => {
+    const { desk: made } = catalogueDesk();
+    const first = await made.give({ account: ACCOUNT });
+    assert.equal(first.body.item, 'genesis-pass');
+    assert.equal(first.body.symbol, undefined);
+    const second = await made.give({ account: OTHER_ACCOUNT, item: 'otrix-loyalty' });
+    assert.equal(second.body.item, 'otrix-loyalty');
+    assert.equal(second.body.symbol, 'OTRIX');
+    assert.equal(second.body.colourHex, OTRIX_COLOUR);
+    assert.equal(second.body.name, 'Otrix Loyalty Reward');
+  });
+
+  it('refuses an unknown item over the desk as well as off the reader', async () => {
+    const { desk: made, minted } = catalogueDesk();
+    const outcome = await made.give({ account: ACCOUNT, item: 'clubcoin' });
+    assert.equal(outcome.status, 400);
+    assert.equal(outcome.body.error, 'unknown-item');
+    assert.deepEqual(minted, []);
+  });
+});
+
+describe('how often one recipient may be given each item', () => {
+  it('still gives a Passport ONE Genesis Pass, however often it asks', async () => {
+    const { desk: made, minted } = catalogueDesk();
+    const first = await made.give({ account: ACCOUNT });
+    const second = await made.give({ account: ACCOUNT });
+    assert.equal(first.body.alreadyGiven, false);
+    assert.equal(second.body.alreadyGiven, true);
+    assert.equal(second.body.txHash, first.body.txHash);
+    assert.equal(minted.length, 1);
+  });
+
+  it('gives a person another Otrix reward every time they earn one', async () => {
+    /* THE POINT OF THE SECOND ENTRY. A reward is earned again at the terminal,
+       so the gate that protects the Pass must not close over it. */
+    const { desk: made, minted, ledger } = catalogueDesk();
+    const first = await made.give({ account: ACCOUNT, item: 'otrix-loyalty' });
+    const second = await made.give({ account: ACCOUNT, item: 'otrix-loyalty' });
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal(first.body.alreadyGiven, false);
+    assert.equal(second.body.alreadyGiven, false);
+    assert.notEqual(first.body.txHash, second.body.txHash);
+    assert.equal(minted.length, 2);
+    /* Every delivery is its own row, and none of them replaced the last. */
+    assert.equal(ledger.count, 2);
+    assert.deepEqual(
+      [...ledger.entries.keys()],
+      [
+        `otrix-loyalty#${ACCOUNT}#${first.body.txHash as string}`,
+        `otrix-loyalty#${ACCOUNT}#${second.body.txHash as string}`,
+      ],
+    );
+  });
+
+  it('keeps the two gates apart: a Pass already given does not owe a reward', async () => {
+    const { desk: made, minted, ledger } = catalogueDesk();
+    await made.give({ account: ACCOUNT });
+    const reward = await made.give({ account: ACCOUNT, item: 'otrix-loyalty' });
+    assert.equal(reward.body.alreadyGiven, false);
+    assert.equal(reward.body.item, 'otrix-loyalty');
+    assert.deepEqual(minted.map((one) => one.item), ['genesis-pass', 'otrix-loyalty']);
+    /* The Pass is still filed under the bare recipient key the droplet's own
+       ledger uses, and the reward beside it rather than over it. */
+    assert.ok(ledger.entries.has(ACCOUNT));
+    assert.equal(ledger.entries.get(ACCOUNT)?.item, 'genesis-pass');
+  });
+
+  it('reads an entry written before there was a catalogue as a Genesis Pass', async () => {
+    const ledger = memoryLedger();
+    ledger.entries.set(ACCOUNT, {
+      account: ACCOUNT,
+      name: 'Midnight Genesis Pass',
+      colourHex: COLOUR,
+      amount: '1',
+      mintTx: 'old-mint',
+      depositTx: 'old-deposit',
+      at: '2026-09-03T00:00:00.000Z',
+    });
+    const { desk: made, minted } = catalogueDesk({ ledger });
+    const outcome = await made.give({ account: ACCOUNT });
+    assert.equal(outcome.status, 200);
+    assert.equal(outcome.body.alreadyGiven, true);
+    assert.equal(outcome.body.item, 'genesis-pass');
+    assert.equal(outcome.body.txHash, 'old-deposit');
+    assert.deepEqual(minted, []);
+  });
+});
+
+describe('a stock of an item, for the partner who issues it', () => {
+  it('mints the whole stock in ONE delivery to the partner’s own address', async () => {
+    const { desk: made, minted } = catalogueDesk();
+    const outcome = await made.give({
+      address: SHIELDED_STAGENET,
+      item: 'otrix-loyalty',
+      amount: 25,
+    });
+    assert.equal(outcome.status, 200);
+    assert.equal(outcome.body.amount, '25');
+    assert.equal(outcome.body.transferTx, 'transfer-1');
+    assert.deepEqual(minted, [
+      { item: 'otrix-loyalty', amount: 25n, to: SHIELDED_STAGENET, kind: 'address' },
+    ]);
+  });
+
+  it('defaults to one when no stock is asked for', async () => {
+    const { desk: made, minted } = catalogueDesk();
+    await made.give({ address: SHIELDED_STAGENET, item: 'otrix-loyalty' });
+    assert.equal(minted[0].amount, 1n);
+  });
+
+  it('refuses a stock for an item that is handed out one at a time', () => {
+    const read = readGiftRequest(
+      { address: SHIELDED_STAGENET, item: 'genesis-pass', amount: 3 },
+      'stagenet',
+    );
+    assert.ok(!read.ok);
+    assert.equal(read.refusal.status, 400);
+    assert.equal(read.refusal.error, 'amount-not-allowed');
+    assert.match(read.refusal.message, /one at a time/);
+  });
+
+  it('refuses a stock aimed at a Passport rather than at the partner', () => {
+    /* A person earns one at a time, at the terminal. A request that named a
+       Passport and asked for five would put five on a stranger's card. */
+    for (const body of [
+      { account: ACCOUNT, item: 'otrix-loyalty', amount: 5 },
+      { name: 'alice.night', item: 'otrix-loyalty', amount: 5 },
+    ]) {
+      const read = readGiftRequest(body, 'stagenet');
+      assert.ok(!read.ok);
+      assert.equal(read.refusal.error, 'amount-not-allowed');
+      assert.match(read.refusal.message, /shielded address you hold yourself/);
+    }
+  });
+
+  it('refuses a stock that is not a whole number within the cap', () => {
+    for (const amount of [0, -1, 101, 2.5, '3', null as unknown as number]) {
+      const read = readGiftRequest(
+        { address: SHIELDED_STAGENET, item: 'otrix-loyalty', amount },
+        'stagenet',
+      );
+      if (amount === null) {
+        /* An absent stock is one, not a refusal. */
+        assert.ok(read.ok);
+        assert.equal(read.amount, 1n);
+        continue;
+      }
+      assert.ok(!read.ok, `${String(amount)} should be refused`);
+      assert.equal(read.refusal.status, 400);
+      assert.equal(read.refusal.error, 'invalid-amount');
+    }
+  });
+
+  it('takes the whole cap and nothing above it', () => {
+    const at = readGiftRequest(
+      { address: SHIELDED_STAGENET, item: 'otrix-loyalty', amount: 100 },
+      'stagenet',
+    );
+    assert.ok(at.ok);
+    assert.equal(at.amount, 100n);
+  });
+});
