@@ -82,6 +82,7 @@ import {
   compiledContractFor,
   indexerWsFrom,
   loadContractModule,
+  type PassportContractName,
 } from './contractRuntime.js';
 import {
   ONE_TX_TRANSFER_OPERATION,
@@ -839,9 +840,15 @@ export async function accountHoldsDevice(
  */
 const oneTransactionSendSupport = new Map<string, boolean>();
 
-/** Drops the cache. For drills, for tests, and for a network switch. */
+/**
+ * Drops the cache. For drills, for tests, and for a network switch.
+ *
+ * Both caches, because both are "what is deployed at this address" and a
+ * network switch invalidates the pair — see {@link accountModuleFor}.
+ */
 export function resetOneTransactionSendSupport(): void {
   oneTransactionSendSupport.clear();
+  accountModules.clear();
 }
 
 /**
@@ -884,6 +891,83 @@ export async function senderSupportsOneTransactionSend(
   if (supported === null) return false;
   oneTransactionSendSupport.set(address, supported);
   return supported;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Which build an account is, and therefore which module opens it             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Answered once per address per session, for the same reason
+ * {@link oneTransactionSendSupport} is: a deployed contract's entry points
+ * cannot move under this app. Only DEFINITE answers are kept — an unreadable
+ * one is asked again next time.
+ */
+const accountModules = new Map<string, PassportContractName>();
+
+/** Drops both per-address caches. For drills, for tests, and for a network switch. */
+export function resetAccountModuleChoice(): void {
+  accountModules.clear();
+}
+
+/**
+ * WHICH COMPILED MODULE OPENS THE ACCOUNT AT `contractAddress`.
+ *
+ * `findDeployedContract` is not a formality: it re-reads the deployed
+ * contract's verifier keys and refuses a build that declares an operation the
+ * chain does not carry, by name —
+ *
+ *     Following operations: transfer_shielded_to_account, are undefined or
+ *     have mismatched verifier keys for contract state ContractState (…)
+ *
+ * — so the twelve-circuit module cannot open ANY Passport deployed before the
+ * account contract gained that circuit. On 2026/09/14 that stopped a NIGHT send
+ * to `hector.night` after its first leg had already landed: the amount sat at
+ * the sender's own receiving address and leg two could not reach the recipient
+ * at all. The eleven-circuit `account-v1` module is the same build those
+ * Passports are running, and it opens them.
+ *
+ * THE CHOICE IS THE ACCOUNT'S OWN STATE, not a guess and not the caller's.
+ * `accountHasOneTxTransfer` reads `ContractState.operations()` — the deployed
+ * contract answering for itself — and the module follows it: present is
+ * `account`, absent is `account-v1`. The read and the name of the circuit are
+ * `./passportContract.ts`'s, so there is one spelling of "which build is this"
+ * in this app and not two.
+ *
+ * `null` IS NOT "NO", and this is the one caller that cannot smooth it over.
+ * {@link senderSupportsOneTransactionSend} may treat an unanswerable question
+ * as `false`, because the two-leg path it falls back to works against every
+ * account there is; here there is no such fall-back — a module guessed wrong is
+ * a connection refused after the user has waited, and guessing `account-v1` for
+ * an upgraded sender would take away the circuit it is about to call. So an
+ * unreadable answer REFUSES, with the reason attached.
+ *
+ * THE ONE EXCEPTION IS THE OWNER'S OWN ACCOUNT (`whenUnreadable: 'current'`).
+ * A device-authorised call is by definition against the Passport this device
+ * holds, its module has always been the current one, and refusing to open it
+ * because the indexer blinked would stop somebody sending at all. It keeps the
+ * current module, exactly as it did before this existed.
+ */
+export async function accountModuleFor(
+  network: AccountNetwork,
+  contractAddress: string,
+  options: { whenUnreadable?: 'refuse' | 'current' } = {},
+): Promise<PassportContractName> {
+  const address = rawContractAddress(contractAddress);
+  const known = accountModules.get(address);
+  if (known !== undefined) return known;
+  const carries = await accountHasOneTxTransfer(network.indexerHttpUrl, address);
+  if (carries === null) {
+    if (options.whenUnreadable === 'current') return 'account';
+    throw new AccountCustodyError(
+      'network-unreachable',
+      'We could not read which version that Passport’s account is, so nothing was submitted. Try again in a moment.',
+      `operations() could not be read for ${address.slice(0, 10)}…`,
+    );
+  }
+  const module: PassportContractName = carries ? 'account' : 'account-v1';
+  accountModules.set(address, module);
+  return module;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -931,18 +1015,28 @@ async function currentWalletState(wallet: LocalMidnightWallet): Promise<WalletFa
  */
 async function createAccountProviders(
   wallet: LocalMidnightWallet,
+  module: PassportContractName,
   privateStateId: string,
   initialPrivateState: unknown,
 ) {
   return createContractProviders(wallet, {
-    contract: 'account',
+    contract: module,
     privateStateId,
     initialPrivateState,
   });
 }
 
-async function compiledAccountContract(witnesses: unknown) {
-  return compiledContractFor('account', 'passport-account', witnesses);
+/**
+ * The compiled artefact for one build of the account contract.
+ *
+ * THE LABEL IS THE SAME ON BOTH, deliberately: `passport-account` is what names
+ * the circuit in every artefact URL the ZK config provider composes
+ * (`passport-account#withdraw_night`), and the eleven circuits' key files ARE
+ * the twelve-circuit build's key files — `cmp` clean, 2026/09/14. A second
+ * label would ask for artefacts under a name nothing has staged.
+ */
+async function compiledAccountContract(module: PassportContractName, witnesses: unknown) {
+  return compiledContractFor(module, 'passport-account', witnesses);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1024,6 +1118,12 @@ async function openAccountContract(
     address: string;
     privateStateId: string;
     secrets: { deviceSecret?: Uint8Array; grantSecret?: Uint8Array };
+    /**
+     * Which build of the account contract is deployed at `address` — see
+     * {@link accountModuleFor}. Passed in rather than read here so one call
+     * asks the chain once and the answer is visible at the call site.
+     */
+    module: PassportContractName;
   },
 ): Promise<{ providers: unknown; callTx: AccountCallTx }> {
   /* The witness factory and private-state builder from `./passportContract.ts`
@@ -1049,8 +1149,8 @@ async function openAccountContract(
      through this same plumbing later without changing it. */
   const initialPrivateState = accountPrivateStateFrom(options.secrets);
   const [providers, compiledContract, { findDeployedContract }] = await Promise.all([
-    createAccountProviders(wallet, options.privateStateId, initialPrivateState),
-    compiledAccountContract(accountWitnesses()),
+    createAccountProviders(wallet, options.module, options.privateStateId, initialPrivateState),
+    compiledAccountContract(options.module, accountWitnesses()),
     import('@midnight-ntwrk/midnight-js-contracts'),
   ]);
 
@@ -1098,6 +1198,16 @@ async function openAccountContract(
 export interface PreparedAccountCall {
   /** The raw contract address this connection is for. */
   readonly contractAddress: string;
+  /**
+   * Which build of the account contract this connection was opened with.
+   *
+   * Carried so a reuse can be refused when it does not match what the call
+   * needs — see {@link accountModuleFor}. In practice a prepared connection to
+   * one address is always the same module, because the answer is cached per
+   * address; the field is what makes that a checked fact rather than a
+   * assumption held somewhere else.
+   */
+  readonly module: PassportContractName;
   readonly privateStateId: string;
   readonly providers: unknown;
   readonly callTx: AccountCallTx;
@@ -1119,6 +1229,17 @@ async function connectAccountContract(
   },
 ): Promise<PreparedAccountCall> {
   const address = rawContractAddress(options.contractAddress);
+  /* WHICH BUILD IS AT THAT ADDRESS, asked before anything is compiled.
+     A connection is exactly where the twelve-circuit module is refused against
+     a pre-upgrade account, so this is where the question belongs.
+
+     A DEVICE SECRET MEANS THIS IS THE OWNER'S OWN ACCOUNT — no other Passport's
+     account will accept one — so an unreadable answer there keeps the current
+     module rather than refusing. Without one the account may be a stranger's,
+     and a guess would be a connection refused after the user had waited. */
+  const module = await accountModuleFor(wallet.network, address, {
+    whenUnreadable: options.secrets.deviceSecret === undefined ? 'refuse' : 'current',
+  });
   const nonce = new Uint8Array(8);
   globalThis.crypto.getRandomValues(nonce);
   const privateStateId = `passport-account-${address.slice(0, 8)}-${bytesToHex(nonce)}`;
@@ -1126,8 +1247,9 @@ async function connectAccountContract(
     address,
     privateStateId,
     secrets: options.secrets,
+    module,
   });
-  return { contractAddress: address, privateStateId, providers, callTx };
+  return { contractAddress: address, module, privateStateId, providers, callTx };
 }
 
 /**
@@ -1138,6 +1260,12 @@ async function connectAccountContract(
  * connection made without one may not be reused for a circuit that needs one.
  * A failure is the caller's to absorb — the unprepared path still works, and a
  * prewarm that could break a send would be worse than the wait it saves.
+ *
+ * THE RECIPIENT'S OWN BUILD DECIDES WHICH MODULE OPENS IT (2026/09/14). This is
+ * the call that stopped a NIGHT send to a pre-upgrade Passport after leg one:
+ * the twelve-circuit module is refused against an account that carries no
+ * `transfer_shielded_to_account`, and both two-leg paths reach the recipient
+ * through here. {@link accountModuleFor} asks the account itself.
  */
 export async function prepareAccountDeposit(
   handle: LocalMidnightWallet,
@@ -1178,8 +1306,16 @@ async function callAccountCircuit(
   onPhase?.({ phase: 'connecting' });
   const hasSecret =
     options.secrets.deviceSecret !== undefined || options.secrets.grantSecret !== undefined;
+  /* THE MODULE HAS TO MATCH TOO (2026/09/14). A prepared connection was opened
+     with whichever build is deployed at its address, and since the answer is
+     cached per address a reuse for the same address always agrees — this says
+     so out loud rather than leaving it as a fact held in another module. */
   const reusable =
-    options.prepared && !hasSecret && options.prepared.contractAddress === address
+    options.prepared &&
+    !hasSecret &&
+    options.prepared.contractAddress === address &&
+    options.prepared.module ===
+      (await accountModuleFor(wallet.network, address, { whenUnreadable: 'refuse' }))
       ? options.prepared
       : null;
   const { providers, callTx } =

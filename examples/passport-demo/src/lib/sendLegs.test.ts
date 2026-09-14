@@ -43,8 +43,14 @@ import {
   planOfRecord,
   planShieldedSend,
   sendStepLine,
+  nameLegStepCount,
+  nameSendKind,
   SEND_BLOCKED_BY_CHANGE_RETURN,
   sendBlockedByChangeReturn,
+  sendBlockedByUnfinishedSend,
+  unfinishedSend,
+  unfinishedSendLine,
+  unfinishedSendTo,
   sendLegTotalMs,
   SEND_REFUSED_TEXT,
   sendRefusalText,
@@ -1353,5 +1359,159 @@ describe('readPendingSends, on a one-transaction record', () => {
   it('never blocks the next send on a transfer, which has no change to return', () => {
     expect(sendBlockedByChangeReturn([transferSend()])).toBeNull();
     expect(awaitsChangeReturn(transferSend())).toBe(false);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Which route a name send takes, and how many steps it is called             */
+/* -------------------------------------------------------------------------- */
+
+describe('nameSendKind', () => {
+  it('sends NIGHT in two legs whatever the sender’s build is', () => {
+    /* The one-transaction circuit is `transfer_shielded_to_account`: it moves a
+       SHIELDED coin, and there is no NIGHT counterpart — `withdraw_night`'s
+       recipient is a user address by type, and a contract's unshielded holdings
+       are not part of contract ledger state at all. */
+    expect(nameSendKind({ asset: 'night', senderSupportsOneTransaction: true })).toBe('night');
+    expect(nameSendKind({ asset: 'night', senderSupportsOneTransaction: false })).toBe('night');
+  });
+
+  it('sends a shielded colour in one transaction where the sender’s contract carries it', () => {
+    expect(nameSendKind({ asset: 'shielded', senderSupportsOneTransaction: true })).toBe(
+      'transfer',
+    );
+  });
+
+  it('falls back to the two-leg shielded send on the older build', () => {
+    expect(nameSendKind({ asset: 'shielded', senderSupportsOneTransaction: false })).toBe(
+      'shielded',
+    );
+  });
+});
+
+describe('nameLegStepCount', () => {
+  it('never counts a NIGHT send as one transaction, whatever the host says', () => {
+    /* THE 2026/09/14 DEFECT. The host reads the sender's deployed contract once
+       per session — a true fact — and handed its `1` to the sheet without the
+       asset beside it, so the review sheet promised "Transferring — one network
+       transaction" over a NIGHT payment that is two transactions on every build
+       there is. Somebody confirmed one and waited through two. */
+    expect(nameLegStepCount({ asset: 'night', hostSteps: 1 })).toBe(2);
+    expect(nameLegStepCount({ asset: 'night', hostSteps: 3 })).toBe(2);
+    expect(nameLegStepCount({ asset: 'night', hostSteps: null })).toBe(2);
+    /* And a NIGHT payment has no change to put back, so a plan's three never
+       reaches it either. */
+    expect(nameLegStepCount({ asset: 'night', held: 5_000_000n, amount: 1_000_000n })).toBe(2);
+  });
+
+  it('honours the host’s one-transaction answer on the shielded route', () => {
+    expect(nameLegStepCount({ asset: 'shielded', hostSteps: 1 })).toBe(1);
+  });
+
+  it('counts the shielded plan for itself when the host has said nothing', () => {
+    /* Part of a coin is three transactions — the whole coin comes out and the
+       change goes back — and the whole coin is two. */
+    expect(nameLegStepCount({ asset: 'shielded', held: 100n, amount: 40n })).toBe(3);
+    expect(nameLegStepCount({ asset: 'shielded', held: 100n, amount: 100n })).toBe(2);
+  });
+
+  it('answers two where the picker knows nothing yet', () => {
+    expect(nameLegStepCount({ asset: 'shielded' })).toBe(2);
+    expect(nameLegStepCount({ asset: 'shielded', held: null, amount: 40n })).toBe(2);
+    expect(nameLegStepCount({ asset: 'shielded', held: 100n, amount: null })).toBe(2);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* One payment at a time                                                       */
+/* -------------------------------------------------------------------------- */
+
+describe('sendBlockedByUnfinishedSend', () => {
+  const stopped = (overrides: Partial<PendingSend> = {}): PendingSend =>
+    nightSend({
+      leg: 'deposit',
+      lastError: { message: 'The account contract could not be opened.', retryable: true },
+      ...overrides,
+    });
+
+  it('lets a send through when every payment before it finished', () => {
+    expect(sendBlockedByUnfinishedSend([])).toBeNull();
+    expect(sendBlockedByUnfinishedSend([nightSend({ leg: 'done' })])).toBeNull();
+  });
+
+  it('blocks a second payment over one that stopped, and names who is owed', () => {
+    /* THE 2026/09/14 DEFECT. A name send stopped at step two, the money sat at
+       the sender's own receiving address with a card on Home offering to carry
+       it on, and opening Send again for the same recipient ran a NEW step one —
+       so a second amount left the account and Home carried two "Payment not
+       finished" cards for one intended payment. */
+    const notice = sendBlockedByUnfinishedSend([stopped()]);
+    expect(notice?.reason).toBe(
+      'You have a payment to alice.night that has not finished.',
+    );
+    expect(notice?.continuable).toBe(true);
+    expect(notice?.record.id).toBe('send-1');
+  });
+
+  it('keeps the change-return sentence for the one state that clears itself', () => {
+    /* The recipient has been paid and the sender's own change is on its way
+       back. There is nothing to press, so nothing is offered. */
+    const changing = shieldedSend({
+      leg: 'change',
+      depositTxHash: 'ff'.repeat(32),
+      withdrawAmount: '3000000',
+      lastError: undefined,
+    });
+    const notice = sendBlockedByUnfinishedSend([changing]);
+    expect(notice?.reason).toBe(SEND_BLOCKED_BY_CHANGE_RETURN);
+    expect(notice?.continuable).toBe(false);
+  });
+
+  it('offers a Continue for a change return that has STOPPED', () => {
+    const stuck = shieldedSend({
+      leg: 'change',
+      depositTxHash: 'ff'.repeat(32),
+      withdrawAmount: '3000000',
+      lastError: { message: 'The network turned this step down.', retryable: true },
+    });
+    expect(sendBlockedByUnfinishedSend([stuck])?.continuable).toBe(true);
+  });
+
+  it('blocks on a run that has not spent yet, too', () => {
+    /* A record at `withdraw` has moved nothing, but it is still a payment
+       somebody started and a second one over it is still two payments. */
+    expect(
+      sendBlockedByUnfinishedSend([nightSend({ leg: 'withdraw', withdrawTxHash: undefined })]),
+    ).not.toBeNull();
+  });
+
+  it('names the newest unfinished payment, which is the one just watched stop', () => {
+    const notice = sendBlockedByUnfinishedSend([
+      stopped({ id: 'send-9', recipient: { label: 'hector.night', accountAddress: 'ab'.repeat(32) } }),
+      stopped(),
+    ]);
+    expect(notice?.record.id).toBe('send-9');
+    expect(notice?.reason).toContain('hector.night');
+  });
+});
+
+describe('unfinishedSend, unfinishedSendTo, and the sentence', () => {
+  it('finds nothing among finished records', () => {
+    expect(unfinishedSend([nightSend({ leg: 'done' })])).toBeNull();
+    expect(unfinishedSendTo([nightSend({ leg: 'done' })], 'alice.night')).toBeNull();
+  });
+
+  it('finds the payment owed to one recipient and not another’s', () => {
+    const records = [
+      nightSend({ id: 'to-hector', recipient: { label: 'hector.night', accountAddress: 'ab'.repeat(32) } }),
+    ];
+    expect(unfinishedSendTo(records, 'hector.night')?.id).toBe('to-hector');
+    expect(unfinishedSendTo(records, 'alice.night')).toBeNull();
+  });
+
+  it('says who the payment is owed to, because a bare refusal reads as broken', () => {
+    expect(unfinishedSendLine(nightSend())).toBe(
+      'You have a payment to alice.night that has not finished.',
+    );
   });
 });

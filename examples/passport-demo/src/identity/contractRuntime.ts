@@ -175,8 +175,53 @@ export function transactionId(result: unknown): string {
 /* The compiled contract modules                                              */
 /* -------------------------------------------------------------------------- */
 
-/** The Passport contracts this app proves circuits for. */
-export type PassportContractName = 'account' | 'midnames';
+/**
+ * The Passport contract MODULES this app can open a deployed contract with.
+ *
+ * `account-v1` is not a third contract. It is the ELEVEN-circuit build of the
+ * same account contract — the one every Passport deployed before
+ * `transfer_shielded_to_account` existed is running — and it is here because
+ * `findDeployedContract` re-reads a deployed contract's verifier keys and
+ * refuses a build that declares an operation the chain does not carry:
+ *
+ *     Following operations: transfer_shielded_to_account, are undefined or
+ *     have mismatched verifier keys for contract state ContractState (…)
+ *
+ * A new-build client therefore cannot open a pre-upgrade account AT ALL, which
+ * is what stopped a NIGHT send to `hector.night` after its first leg on
+ * 2026/09/14 (`docs/demo/one-tx-transfer-drill.md`, §4). The two-leg paths
+ * reach the recipient as a CONNECTION, so they need a module that matches the
+ * build they are connecting to; the one-transaction path reaches them as an
+ * argument and needs none of this.
+ *
+ * ONE COPY OF THE KEYS, TWO MODULES. Every verifier key, prover key, and ZKIR
+ * file 0.34.0 produces for the eleven circuits is byte-identical to the
+ * twelve-circuit build's (`cmp` clean on all 44 files, 2026/09/14), and the
+ * account's own artefact manifest lists a superset of them — so the v1 module
+ * is served from `/zk/account` and the PWA ships no second copy. See
+ * {@link contractAssetBase}.
+ */
+export type PassportContractName = 'account' | 'account-v1' | 'midnames';
+
+/**
+ * Whose ZK artefacts a module fetches: the contract whose `/zk/<name>` tree
+ * carries the keys, the ZKIR, and the integrity manifest that cover it.
+ *
+ * `account-v1` borrows the account's, and that is the whole reason it is safe
+ * to ship a second module: the files are the same files. A build that staged
+ * its own would double ~20 MB of artefacts to serve the identical bytes, and
+ * would give the integrity manifest two places to drift from.
+ */
+const ASSET_CONTRACT: Record<PassportContractName, 'account' | 'midnames'> = {
+  account: 'account',
+  'account-v1': 'account',
+  midnames: 'midnames',
+};
+
+/** The contract whose artefact tree serves `name`. */
+export function contractAssetContract(name: PassportContractName): 'account' | 'midnames' {
+  return ASSET_CONTRACT[name];
+}
 
 /**
  * The generated contract modules, staged into this workspace by
@@ -204,7 +249,9 @@ export function loadContractModule(name: PassportContractName): Promise<Record<s
        build output. */
     loaded = (name === 'account'
       ? import('../../contracts/stagenet/account/contract/index.js')
-      : import('../../contracts/stagenet/midnames/contract/index.js')) as unknown as Promise<
+      : name === 'account-v1'
+        ? import('../../contracts/stagenet/account-v1/contract/index.js')
+        : import('../../contracts/stagenet/midnames/contract/index.js')) as unknown as Promise<
       Record<string, unknown>
     >;
     contractModules.set(name, loaded);
@@ -223,7 +270,12 @@ export function loadContractModule(name: PassportContractName): Promise<Record<s
  * server with PASSPORT_ZK_ORIGIN instead.
  */
 export function contractAssetBase(name: PassportContractName): string {
-  if (typeof window !== 'undefined') return `${window.location.origin}/zk/${name}`;
+  /* The ASSET contract's name, which is not always the module's — `account-v1`
+     is served from `/zk/account`, because the eleven circuits it declares are
+     the same eleven files, byte for byte, that the twelve-circuit build
+     staged. See {@link PassportContractName}. */
+  const assets = contractAssetContract(name);
+  if (typeof window !== 'undefined') return `${window.location.origin}/zk/${assets}`;
   const harnessOrigin =
     typeof process !== 'undefined' ? process.env.PASSPORT_ZK_ORIGIN : undefined;
   if (!harnessOrigin) {
@@ -231,7 +283,7 @@ export function contractAssetBase(name: PassportContractName): string {
       `No origin to load ${name} contract artefacts from: neither window nor PASSPORT_ZK_ORIGIN.`,
     );
   }
-  return `${harnessOrigin}/zk/${name}`;
+  return `${harnessOrigin}/zk/${assets}`;
 }
 
 /**
@@ -999,9 +1051,13 @@ export interface ContractProvidersOptions {
  * fetched by a provider that had never heard of the first leg's.
  *
  * The base URL is a pure function of the contract name (see
- * {@link contractAssetBase}), so the name is the whole of the key.
+ * {@link contractAssetBase}), so the name is the whole of the key — and the
+ * key is the ASSET contract's name rather than the module's, so the eleven-
+ * circuit `account-v1` module and the twelve-circuit `account` one share one
+ * provider and one memoised set of artefacts. They are fetching the same files
+ * from the same tree; two providers would fetch each of them twice.
  */
-const zkConfigProviders = new Map<PassportContractName, unknown>();
+const zkConfigProviders = new Map<'account' | 'midnames', unknown>();
 
 /**
  * The indexer's public-data provider for a query URL, built once for the tab.
@@ -1061,7 +1117,8 @@ export async function createContractProviders(
   wallet: LocalMidnightWallet,
   options: ContractProvidersOptions,
 ) {
-  let zkConfigProvider = zkConfigProviders.get(options.contract);
+  const assetContract = contractAssetContract(options.contract);
+  let zkConfigProvider = zkConfigProviders.get(assetContract);
   if (zkConfigProvider === undefined) {
     const { FetchZkConfigProvider } = await import(
       '@midnight-ntwrk/midnight-js-fetch-zk-config-provider'
@@ -1085,7 +1142,7 @@ export async function createContractProviders(
         fetchFunc: buildIdFetch(globalThis.fetch.bind(globalThis)) as never,
       }) as unknown as ZkArtefactSource,
     );
-    zkConfigProviders.set(options.contract, zkConfigProvider);
+    zkConfigProviders.set(assetContract, zkConfigProvider);
   }
 
   const proofProvider = await createContractProofProvider(wallet, zkConfigProvider);

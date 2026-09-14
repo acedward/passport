@@ -319,6 +319,9 @@ export interface HomeScreenProps {
      * nothing when it does not. See {@link SendSheetProps.blockedReason}.
      */
     blockedReason?: SendSheetProps['blockedReason']
+    /* The button under that sentence, where the reader can clear the block
+       themselves. See {@link SendSheetProps.continueUnfinishedSend}. */
+    continueUnfinishedSend?: SendSheetProps['continueUnfinishedSend']
   } | null
   /**
    * The sender's own change coming back from the last transfer, as one quiet
@@ -1075,6 +1078,7 @@ export default function HomeScreen(props: HomeScreenProps) {
             nameLegAttempt={send.nameLegAttempt ?? null}
             {...(send.nameLegSteps ? { nameLegSteps: send.nameLegSteps } : {})}
             blockedReason={send.blockedReason ?? null}
+            continueUnfinishedSend={send.continueUnfinishedSend ?? null}
             /* The sheet's approval is a passkey assertion, so it can hit the
                same mid-session dead end the name step reported on 2026/08/31.
                Home already holds the sign-out; the sheet offers it only beside

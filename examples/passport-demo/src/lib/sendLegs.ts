@@ -443,6 +443,75 @@ export function planOfRecord(record: PendingSend): ShieldedSendPlan {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Which route a name send takes, and how many steps it is                     */
+/* -------------------------------------------------------------------------- */
+
+/** Which asset a name send is moving, as the Send sheet's two modes name it. */
+export type NameSendAsset = 'night' | 'shielded';
+
+/**
+ * WHICH RUN A NAME SEND IS — and the answer is the ASSET first, the sender's
+ * build second.
+ *
+ * The one-transaction path is `transfer_shielded_to_account`, and the clue is
+ * in the name: it moves a SHIELDED coin, through `sendShielded`, into the
+ * recipient's own `deposit_shielded`. There is no NIGHT counterpart and there
+ * cannot be one — `withdraw_night` sends through
+ * `right<ContractAddress, UserAddress>(recipient)`, so its recipient is a user
+ * address by type, and a contract's unshielded holdings are not part of
+ * contract ledger state at all (see `runNameSend` in `App.tsx`). A NIGHT
+ * payment to a name is two transactions on every build there is.
+ *
+ * WHY THIS IS A FUNCTION AND NOT AN `if` AT THE CALL SITE. On 2026/09/14 the
+ * review sheet promised "Transferring — one network transaction" over a NIGHT
+ * send, because the host's one-transaction answer — a fact about the sender's
+ * deployed contract, and true — was handed to the sheet without the asset
+ * beside it. The path was right and the copy was wrong, which is the worse of
+ * the two: somebody confirmed one transaction and waited through two.
+ */
+export function nameSendKind(input: {
+  asset: NameSendAsset;
+  /** Whether the SENDER's deployed account carries `transfer_shielded_to_account`. */
+  senderSupportsOneTransaction: boolean;
+}): PendingSendKind {
+  if (input.asset === 'night') return 'night';
+  return input.senderSupportsOneTransaction ? 'transfer' : 'shielded';
+}
+
+/**
+ * HOW MANY STEPS THE REVIEW SHEET AND THE PROGRESS LINE COUNT.
+ *
+ * `1` is not a count at all — it is the one-transaction transfer, which the
+ * sheet says "Transferring" over rather than numbering. It is available only on
+ * the shielded route, for the reason {@link nameSendKind} gives, so a host
+ * answer of `1` against a NIGHT send is DISCARDED here rather than obeyed: the
+ * host reads the sender's contract once per session and cannot see which asset
+ * the picker has landed on.
+ *
+ * Everything else is unchanged. A shielded payment out of a coin bigger than
+ * the amount is three transactions and says so; every other send is two.
+ */
+export function nameLegStepCount(input: {
+  asset: NameSendAsset;
+  /** What the host said, when it said anything. */
+  hostSteps?: 1 | 2 | 3 | null;
+  /** What the account holds of the chosen colour, when the picker knows. */
+  held?: bigint | null;
+  amount?: bigint | null;
+}): 1 | 2 | 3 {
+  if (input.asset === 'night') {
+    /* NIGHT is two, always. Not the host's `1`, and not a shielded plan's `3`:
+       a NIGHT payment moves the amount and nothing else, so there is no whole
+       coin to take out and no change to put back. */
+    return 2;
+  }
+  if (input.hostSteps !== undefined && input.hostSteps !== null) return input.hostSteps;
+  if (input.held === undefined || input.held === null) return 2;
+  if (input.amount === undefined || input.amount === null) return 2;
+  return planShieldedSend({ held: input.held, amount: input.amount })?.steps ?? 2;
+}
+
+/* -------------------------------------------------------------------------- */
 /* What the sheet says while it runs                                           */
 /* -------------------------------------------------------------------------- */
 
@@ -1134,6 +1203,86 @@ export const SEND_BLOCKED_BY_CHANGE_RETURN = 'Finishing your last transfer…';
  */
 export function sendBlockedByChangeReturn(records: readonly PendingSend[]): string | null {
   return records.some(awaitsChangeReturn) ? SEND_BLOCKED_BY_CHANGE_RETURN : null;
+}
+
+/* -------------------------------------------------------------------------- */
+/* One payment at a time                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * THE UNFINISHED PAYMENT A NEW SEND HAS TO WAIT FOR, or `null`.
+ *
+ * Records are held newest first, and the newest unfinished one is the one to
+ * name: it is the payment somebody just watched stop.
+ */
+export function unfinishedSend(records: readonly PendingSend[]): PendingSend | null {
+  return records.find((record) => record.leg !== 'done') ?? null;
+}
+
+/**
+ * The same question, about one recipient. Used where the sheet already knows
+ * who is being paid, so the sentence can name them.
+ */
+export function unfinishedSendTo(
+  records: readonly PendingSend[],
+  recipientLabel: string,
+): PendingSend | null {
+  return (
+    records.find((record) => record.leg !== 'done' && record.recipient.label === recipientLabel) ??
+    null
+  );
+}
+
+/** What the sheet says over an unfinished payment, naming who it is owed to. */
+export function unfinishedSendLine(record: PendingSend): string {
+  return `You have a payment to ${record.recipient.label} that has not finished.`;
+}
+
+/** Why a new send cannot start, what to say, and whether there is a button. */
+export interface UnfinishedSendNotice {
+  /** The record in the way. */
+  record: PendingSend;
+  /** The sentence the control carries instead of merely refusing. */
+  reason: string;
+  /**
+   * Whether the reader has something to press.
+   *
+   * A change return that is RUNNING carries itself and clears in a block, so it
+   * offers nothing — the same exclusion Home makes for its cards. Everything
+   * else has stopped and has a Continue.
+   */
+  continuable: boolean;
+}
+
+/**
+ * WHY THE NEXT SEND HAS TO WAIT, AND WHAT THE READER CAN DO ABOUT IT.
+ *
+ * WHAT THIS IS FOR (2026/09/14). A name send stopped at step two — the
+ * recipient's account could not be opened — and the money was sitting at the
+ * sender's own receiving address with a card on Home offering to carry it on.
+ * The reader opened Send again for the same recipient instead, and the app ran
+ * a NEW step one: a second 0.001 NIGHT left the account, and Home then carried
+ * TWO "Payment not finished" cards for one intended payment. Nothing was lost,
+ * and that is not the point — the app had turned one stuck payment into two.
+ *
+ * So an unfinished payment now blocks a new one, and says so with the
+ * recipient's name in it. This is the same seam the change-return block already
+ * used ({@link sendBlockedByChangeReturn}, whose sentence is kept verbatim for
+ * the case it owns): a state the sheet cannot act in, that says WHAT it is
+ * waiting for rather than merely refusing.
+ *
+ * IT DOES NOT BLOCK THE RESUME. Carrying the unfinished payment on is the thing
+ * that clears this, so the orchestrator applies it to new sends only.
+ */
+export function sendBlockedByUnfinishedSend(
+  records: readonly PendingSend[],
+): UnfinishedSendNotice | null {
+  const record = unfinishedSend(records);
+  if (record === null) return null;
+  if (awaitsChangeReturn(record) && record.lastError === undefined) {
+    return { record, reason: SEND_BLOCKED_BY_CHANGE_RETURN, continuable: false };
+  }
+  return { record, reason: unfinishedSendLine(record), continuable: true };
 }
 
 /* -------------------------------------------------------------------------- */

@@ -620,6 +620,76 @@ branch must be chosen from the **sender's** on-chain state — whether its
 contract carries a `transfer_shielded_to_account` operation — because that is
 the only fact a client can read that says which build it is talking to.
 
+### 4a. The two-leg paths needed a version-matched module (2026/09/14)
+
+§4's advice — *"the recipient must be reached as an argument, never as a
+connection"* — was written for the one-transaction path, and it is right there.
+It was read as covering the whole send, and it does not: **both two-leg paths
+reach the recipient as a connection, and both were broken by the upgrade.**
+
+Reported against production v14. Sending 0.001 NIGHT to `hector.night` — a
+Passport deployed before the account contract gained
+`transfer_shielded_to_account` — finished leg one and failed leg two with
+
+```
+Step 2 did not finish: The account contract at c52eba63d7… could not be
+opened, so nothing was submitted.
+```
+
+which is §1's last finding, met by a user: `findDeployedContract` refuses a
+build carrying a circuit the chain does not. The NIGHT path (`withdraw_night`
+to the sender's own wallet, then `deposit_night` into the recipient's account)
+and the shielded two-leg fallback both open the recipient with
+`compiledContractFor('account', …)`. The one-transaction path is unaffected —
+the recipient is an argument there — and that is exactly the asymmetry §4
+named without following through: **the argument rule removes the problem for
+one path out of three, and the other two need a module that matches the
+build they are connecting to.**
+
+**The fix is a second module, not a second contract.** The pre-transfer source
+is `git show 8ee65fe:…/contracts-stagenet/src/account.compact` — eleven
+circuits, no peer declaration, and therefore no `--compact-path` seeding:
+
+```
+git show 8ee65fe:examples/passport-balancer/contracts-stagenet/src/account.compact \
+  | sed '1s/0.25/0.26/' > /tmp/account_v1.compact
+compact compile +0.34.0 /tmp/account_v1.compact managed/account-v1
+```
+
+34 s, one pass. The pragma bump is the only edit, and it changes nothing: **all
+eleven verifier keys, all eleven prover keys, and all twenty-two ZKIR files are
+`cmp` identical to the twelve-circuit build's**, which is the same fixed point
+§3b measured for `deposit_shielded` across the two-pass build. Stated from
+inside the modules rather than over the files, the eleven entries of
+`expectedVk` — the SHA-256 compactc writes per circuit, and the value
+`findDeployedContract` compares — agree name for name, and each equals the hash
+the account's own `contract-manifest.json` records for
+`keys/<circuit>.verifier`.
+
+**So the PWA ships one copy of the artefacts and two modules.** `account-v1`'s
+asset base is the account's `/zk/account`: every file it asks for is there,
+under the name it asks for, already covered by the manifest midnight-js 5
+verifies against and fails closed without. Only `managed/account-v1/contract/`
+and `compiler/` are tracked; `keys/` and `zkir/` are gitignored by the existing
+glob, as the account's are. Drilled in
+`examples/passport-demo/src/identity/accountModule.test.ts`.
+
+**Which module opens which account is the account's own state**, read through
+the same `accountHasOneTxTransfer` the upgrade flow and the sender-path choice
+already use: the operation present is `account`, absent is `account-v1`. There
+is no safe guess when the read fails — the current module is refused against a
+pre-upgrade account, and the v1 module lacks the circuit an upgraded sender is
+about to call — so a foreign account refuses with the reason attached, while
+the owner's own account (a device-authorised call, by definition) keeps the
+current module. A pre-upgrade SENDER is covered by the same rule and can still
+send at all, which the old code could not have done either.
+
+**What is superseded.** §4's "Not proven, and not to be claimed" list already
+had both items struck by §3d and §3e. Its closing paragraph stands for the
+one-transaction path and should be read as scoped to it: the argument rule is
+what makes that path reach a pre-upgrade recipient, and the version-matched
+module is what makes the other two.
+
 ## 5. The runs, in full
 
 Three runs: two complete ones on independent pairs of accounts, and a third

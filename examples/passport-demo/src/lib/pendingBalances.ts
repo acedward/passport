@@ -97,6 +97,13 @@ export interface PendingBalancesInput {
    * balances cannot disagree about whether a Passport is still waiting.
    */
   openingBalanceOnTheWay: boolean;
+  /*
+   * AND IT IS AN ANSWER ABOUT WHETHER THE GRANT LANDED, NOT ABOUT THE FIGURE
+   * BEING ZERO (2026/09/14). That distinction is `openingBalanceOnTheWay`'s own
+   * and is made from the activity trail, because a grant that arrived and was
+   * then spent reads `0` exactly like one that never came. This module trusts
+   * the flag and paints nothing over a zero the account has genuinely reached.
+   */
   /** Every unfinished send this Passport has written down. */
   pendingSends?: readonly PendingSend[];
 }

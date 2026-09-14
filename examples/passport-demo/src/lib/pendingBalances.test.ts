@@ -329,3 +329,43 @@ describe('pendingBalances — a one-transaction transfer', () => {
     expect(notes.get(MUSD)).toEqual({ value: '90', state: 'transferring' });
   });
 });
+
+describe('pendingBalances — a grant that landed and was then spent', () => {
+  it('shows the zero, because a spent grant is not an arriving one', () => {
+    /* THE 2026/09/14 DEFECT, from this module's side. A reviewer's opening
+       grant had landed long before; two sends had since moved the NIGHT out,
+       one of which had stopped with 0.002 NIGHT waiting at their own receiving
+       address — correctly shown by the "Money outside your account" card. Home
+       nevertheless read `NIGHT — Arriving`, because the only evidence anything
+       had was a balance of zero, and a spent account and a new one look
+       identical from the figure.
+    
+       The fix is `openingBalanceOnTheWay`'s: it now reads the activity trail,
+       where a landed row never stops existing. This module's job is to trust
+       that answer and paint nothing over a real zero, which is what the
+       account genuinely holds. */
+    const notes = pendingBalances({
+      account: account({ nightBalance: '0', stablecoin: { colourHex: MUSD, amount: 100n } }),
+      openingBalanceOnTheWay: false,
+      pendingSends: [],
+    });
+    expect(notes.size).toBe(0);
+    expect(notes.get(NIGHT_COLOUR_HEX)).toBeUndefined();
+  });
+
+  it('still paints the grant for a Passport that is genuinely waiting for it', () => {
+    /* The behaviour that must not regress: a brand-new Passport reads zero for
+       the right reason, and a zero there is "it is coming". */
+    const notes = pendingBalances({
+      account: account(),
+      openingBalanceOnTheWay: true,
+      pendingSends: [],
+    });
+    expect(notes.get(NIGHT_COLOUR_HEX)).toEqual({
+      value: OPENING_NIGHT,
+      state: 'arriving',
+    });
+    expect(notes.get(MUSD)).toEqual({ value: String(OPENING_MUSD), state: 'arriving' });
+    expect(PENDING_BALANCE_WORD.arriving).toBe('Arriving');
+  });
+});

@@ -76,8 +76,32 @@ const managedRoot =
   process.env.PASSPORT_STAGENET_CONTRACTS?.trim() ||
   resolve(workspaceRoot, 'examples', 'passport-balancer', 'contracts-stagenet', 'managed');
 
-/** The contracts the PWA proves circuits for. The mUSD faucet has no caller here. */
-const CONTRACTS = ['account', 'midnames'];
+/**
+ * The contract MODULES the PWA opens deployed contracts with, and whether each
+ * one brings its own ZK artefacts.
+ *
+ * `account-v1` is the ELEVEN-circuit build of the account contract — what every
+ * Passport deployed before `transfer_shielded_to_account` is running — and it
+ * exists because `findDeployedContract` refuses a build that declares an
+ * operation the chain does not carry, so a new-build client cannot open a
+ * pre-upgrade account at all. Its MODULE is staged; its ARTEFACTS are not.
+ *
+ * `assets: false` is the whole of that rule, and it is not an economy. The
+ * eleven circuits' verifier keys, prover keys, and ZKIR files are byte-
+ * identical to the twelve-circuit build's — `cmp` clean on all 44 files,
+ * 2026/09/14 — and the account's own `contract-manifest.json` lists a superset
+ * of them, so the v1 module is pointed at `/zk/account` and finds every file it
+ * asks for, already integrity-checked against the manifest that is there. A
+ * second staged tree would be ~20 MB of identical bytes and a second manifest
+ * to drift from. See `contractAssetBase` in `src/identity/contractRuntime.ts`.
+ *
+ * The mUSD faucet has no caller here.
+ */
+const CONTRACTS = [
+  { name: 'account', assets: true },
+  { name: 'account-v1', assets: false },
+  { name: 'midnames', assets: true },
+];
 const STAGED_SUBDIRECTORIES = ['compiler', 'keys', 'zkir'];
 
 function fail(message) {
@@ -111,7 +135,7 @@ function replaceDirectory(next, destination) {
   rmSync(previous, { recursive: true, force: true });
 }
 
-function stage(name) {
+function stage({ name, assets }) {
   const source = resolve(managedRoot, name);
   const destination = resolve(appDirectory, 'public', 'zk', name);
   const moduleDestination = resolve(appDirectory, 'contracts', 'stagenet', name, 'contract');
@@ -129,6 +153,11 @@ function stage(name) {
     if (!existsSync(resolve(source, subdirectory))) {
       fail(`the ${name} build is incomplete — ${subdirectory}/ is missing.`);
     }
+  }
+  if (!assets) {
+    /* MODULE ONLY. Its artefacts are another contract's, already staged. */
+    stageModule(name, source, moduleDestination);
+    return;
   }
   if (!existsSync(resolve(source, 'compiler', 'contract-manifest.json'))) {
     fail(
@@ -156,6 +185,12 @@ function stage(name) {
   }
   replaceDirectory(next, destination);
 
+  stageModule(name, source, moduleDestination);
+  console.log(`Staged ${name} ZK assets into ${destination}`);
+}
+
+/** Copies one build's generated module into this workspace, atomically. */
+function stageModule(name, source, moduleDestination) {
   const moduleNext = `${moduleDestination}.next-${process.pid}`;
   rmSync(moduleNext, { recursive: true, force: true });
   mkdirSync(moduleNext, { recursive: true });
@@ -163,12 +198,10 @@ function stage(name) {
     cpSync(resolve(source, 'contract', file), resolve(moduleNext, file));
   }
   replaceDirectory(moduleNext, moduleDestination);
-
-  console.log(`Staged ${name} ZK assets into ${destination}`);
   console.log(`Staged the ${name} contract module into ${moduleDestination}`);
 }
 
-for (const name of CONTRACTS) stage(name);
+for (const contract of CONTRACTS) stage(contract);
 
 /**
  * The in-tab prover's own key material is a SEPARATE, much larger tree, and

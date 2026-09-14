@@ -74,7 +74,7 @@ import {
    are decisions rather than renderings, so both are drilled directly — see
    `lib/sendLegs.ts`. */
 import {
-  planShieldedSend,
+  nameLegStepCount,
   SEND_LEG_ATTEMPTS,
   sendFailureNotice,
   sendStepLine,
@@ -396,6 +396,13 @@ export interface SendSheetProps {
    * sender's deployed contract, read from the chain.
    */
   nameLegSteps?: 1 | 2 | 3
+  /*
+   * AND IT IS THE SHIELDED ROUTE'S COUNT (2026/09/14). The host reads the
+   * sender's deployed contract once per session and cannot see which asset the
+   * picker is on, so a `1` from it is honoured on the shielded route and
+   * discarded on the NIGHT one — see `nameLegStepCount` in `lib/sendLegs.ts`,
+   * which is where the rule lives and where it is drilled.
+   */
   /**
    * Which attempt at the running leg this is, 1-based, or `null`.
    *
@@ -421,6 +428,19 @@ export interface SendSheetProps {
    * that says WHAT it is waiting for rather than merely refusing.
    */
   blockedReason?: string | null
+  /**
+   * AN UNFINISHED PAYMENT THIS PASSPORT ALREADY HAS, and the way to carry it on.
+   *
+   * Supplied beside {@link SendSheetProps.blockedReason} whenever the block is
+   * one the reader can clear themselves — a payment that stopped between its
+   * legs. The sentence is the `blockedReason`; this is the button under it, and
+   * it runs the SAME Continue the card on Home runs, so a payment carried on
+   * from here and one carried on from there are one payment.
+   *
+   * `null` for a block that carries itself (the change coming back), which is
+   * the one state there is nothing to press.
+   */
+  continueUnfinishedSend?: (() => void) | null
   /**
    * Leaves the session for the landing screen — offered ONLY beside a failure
    * the host marked as a passkey ceremony that could not be completed.
@@ -645,6 +665,7 @@ export default function SendSheet(props: SendSheetProps) {
     nameLegAttempt,
     nameLegSteps: hostNameLegSteps,
     blockedReason,
+    continueUnfinishedSend,
     onSignOut,
     onClose,
   } = props
@@ -1135,11 +1156,18 @@ export default function SendSheet(props: SendSheetProps) {
      already knows what the account holds of the chosen colour, which is the
      whole of the input; the host may still say so itself once leg one has read
      the figure again, and that answer wins. */
-  const nameLegSteps: 1 | 2 | 3 =
-    hostNameLegSteps ??
-    (mode === 'shielded' && amount !== null && asset.available !== null
-      ? (planShieldedSend({ held: asset.available, amount })?.steps ?? 2)
-      : 2)
+  /* THE ASSET DECIDES FIRST (2026/09/14). The host's answer is a fact about the
+     SENDER's deployed contract and says nothing about which asset the picker
+     has landed on, so a `1` handed down against a NIGHT send used to promise
+     "Transferring — one network transaction" over a payment that is two
+     transactions on every build there is. `nameLegStepCount` in
+     `lib/sendLegs.ts` owns the rule and is drilled there. */
+  const nameLegSteps: 1 | 2 | 3 = nameLegStepCount({
+    asset: mode === 'shielded' ? 'shielded' : 'night',
+    hostSteps: hostNameLegSteps ?? null,
+    held: mode === 'shielded' ? asset.available : null,
+    amount,
+  })
   const nameLegLine =
     resolvedName === null || nameLeg == null || nameLeg === undefined
       ? null
@@ -1680,10 +1708,32 @@ export default function SendSheet(props: SendSheetProps) {
               )}
             </button>
             {waitingOnLastTransfer !== null ? (
-              <p className="mnhome-send-hint" role="status">
-                Your change from the last transfer is on its way back into your account. This
-                will be ready as soon as it lands.
-              </p>
+              typeof continueUnfinishedSend === 'function' ? (
+                /* A PAYMENT THAT STOPPED, AND THE WAY TO FINISH IT (2026/09/14).
+                   The sentence above names who it is owed to; this is the
+                   button, and it is the same Continue the card on Home offers.
+                   Starting a second payment to the same person is the one thing
+                   this sheet must not let happen — see
+                   `sendBlockedByUnfinishedSend` in `lib/sendLegs.ts`. */
+                <>
+                  <button
+                    type="button"
+                    className="mnhome-send-secondary"
+                    onClick={continueUnfinishedSend}
+                  >
+                    Continue it
+                  </button>
+                  <p className="mnhome-send-hint" role="status">
+                    Finish that one first — your money is safe where it is, and carrying it
+                    on costs nothing extra.
+                  </p>
+                </>
+              ) : (
+                <p className="mnhome-send-hint" role="status">
+                  Your change from the last transfer is on its way back into your account.
+                  This will be ready as soon as it lands.
+                </p>
+              )
             ) : null}
             {feeWaitRow}
           </div>

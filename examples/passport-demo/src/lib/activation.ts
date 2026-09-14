@@ -401,6 +401,14 @@ export function classifyFundAccountAnswer(
  *                    still saying "on the way" beside it would be the screen
  *                    telling two stories at once.
  *
+ * AND A LEG THAT LANDED STAYS LANDED (2026/09/14). `holdsOpeningNight` and
+ * `holdsOpeningStablecoin` are read off the account's CURRENT balance, and a
+ * balance that has since been spent back down to zero looks exactly like one
+ * that never arrived — so this announced an opening grant as still coming over
+ * a Passport that had received it and spent it. The trail knows better, and
+ * {@link activationLegsLanded} is what asks it: a landed row is proof, a
+ * positive balance is proof, and only a Passport with neither is still waiting.
+ *
  * Pure over the trail the screens already hold, so Home and Assets cannot
  * disagree about whether a Passport is still waiting for its first money. What
  * counts as each leg being HELD is `openingBalanceLegsHeld` in
@@ -414,6 +422,49 @@ export function openingBalanceOnTheWay(input: {
   entries: readonly { label: string }[];
 }): boolean {
   if (!input.hasAccount) return false;
-  if (input.holdsOpeningNight && input.holdsOpeningStablecoin) return false;
+  /* LANDED, OR HELD. Either is proof the leg arrived, and the trail is the
+     better of the two — see {@link activationLegsLanded}. */
+  const landed = activationLegsLanded(input.entries);
+  const night = input.holdsOpeningNight || landed.night;
+  const stablecoin = input.holdsOpeningStablecoin || landed.stablecoin;
+  if (night && stablecoin) return false;
   return !input.entries.some((entry) => ACTIVATION_FAILURE_LABELS.has(entry.label));
+}
+
+/**
+ * WHICH LEGS OF THE OPENING GRANT THE TRAIL SAYS HAVE LANDED.
+ *
+ * A BALANCE IS NOT AN ARRIVAL, and on 2026/09/14 that cost a reviewer their
+ * balances. Their opening grant had landed long before; two sends had since
+ * moved the NIGHT out of the account, one of which had stopped with 0.002 NIGHT
+ * waiting at their own receiving address — correctly shown by the "Money
+ * outside your account" card. The account's NIGHT therefore read `0`, this
+ * function's only evidence at the time was that zero, and Home went back to
+ * announcing `NIGHT — Arriving` and "100 mUSD and 0.002 NIGHT are being added
+ * to your account" over a grant that had arrived weeks of activity earlier and
+ * been spent. The screen was promising money that was never coming.
+ *
+ * A zero balance is the state an account is in BEFORE its grant and AFTER it
+ * has been spent, and those two cannot be told apart from the figure. They can
+ * be told apart from the trail: the activation writes a row per leg the moment
+ * the sponsor's deposit is confirmed, and a row that exists never stops
+ * existing. So the row is what says "landed", and the balance is only a
+ * fall-back for a Passport whose trail this device has not got — a restore, or
+ * a browser whose activity was cleared — where a positive balance is still
+ * proof the leg arrived and a zero is genuinely ambiguous.
+ *
+ * A LANDED GRANT FOLLOWED BY A ZERO BALANCE SHOWS `0`, honestly. That is what
+ * the account holds, it is what "Money outside your account" is there to
+ * explain, and it is not something to paper over with a figure from onboarding.
+ *
+ * Pure over the same entries {@link openingBalanceOnTheWay} reads, newest
+ * first or not — presence is the whole of the question.
+ */
+export function activationLegsLanded(
+  entries: readonly { label: string }[],
+): { night: boolean; stablecoin: boolean } {
+  return {
+    night: entries.some((entry) => entry.label === ACTIVATION_DEPOSITED_LABEL),
+    stablecoin: entries.some((entry) => entry.label === ACTIVATION_STABLECOIN_LABEL),
+  };
 }

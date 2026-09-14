@@ -90,6 +90,7 @@ import {
   grantCommitmentField,
   nightColourBytes,
   nightColourHex,
+  accountModuleFor,
   resetOneTransactionSendSupport,
   senderSupportsOneTransactionSend,
   shieldedCoinFromWalletCoin,
@@ -635,6 +636,91 @@ describe('senderSupportsOneTransactionSend', () => {
     await senderSupportsOneTransactionSend(NETWORK, SENDER);
     expect(accountHasOneTxTransfer).toHaveBeenCalledTimes(1);
     expect(accountHasOneTxTransfer).toHaveBeenCalledWith(NETWORK.indexerHttpUrl, SENDER);
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* Which MODULE opens an account, which is not the same question              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * WHAT THIS IS FOR. `findDeployedContract` re-reads a deployed contract's
+ * verifier keys and refuses a build that declares an operation the chain does
+ * not carry, so the twelve-circuit module cannot open any Passport deployed
+ * before `transfer_shielded_to_account` existed — which on 2026/09/14 stopped a
+ * NIGHT send to `hector.night` after its first leg had landed. The eleven-
+ * circuit `account-v1` module opens those, and this is the choice between them.
+ *
+ * The same mocked read backs both this and `senderSupportsOneTransactionSend`,
+ * and deliberately: two spellings of "which build is this" is exactly how a
+ * Passport comes to be opened with one module and sent from as though it were
+ * the other.
+ */
+describe('accountModuleFor', () => {
+  beforeEach(() => {
+    resetOneTransactionSendSupport();
+    accountHasOneTxTransfer.mockReset();
+  });
+
+  it('opens an upgraded account with the current twelve-circuit module', async () => {
+    accountHasOneTxTransfer.mockResolvedValue(true);
+    await expect(accountModuleFor(NETWORK, SENDER)).resolves.toBe('account');
+  });
+
+  it('opens a pre-upgrade account with the eleven-circuit module', async () => {
+    /* The defect itself: this recipient is a Passport deployed before the
+       account contract gained the circuit, and the current module is refused
+       against it by name. */
+    accountHasOneTxTransfer.mockResolvedValue(false);
+    await expect(accountModuleFor(NETWORK, PEER)).resolves.toBe('account-v1');
+  });
+
+  it('refuses when the read itself failed, rather than guessing a module', async () => {
+    /* `null` is "we could not ask", and there is no safe guess: the current
+       module is refused against a pre-upgrade account, and the v1 module lacks
+       the circuit an upgraded sender is about to call. Both guesses cost the
+       user a wait and then a refusal, so this one says so first. */
+    accountHasOneTxTransfer.mockResolvedValue(null);
+    const error = await accountModuleFor(NETWORK, PEER).catch((cause) => cause);
+    expect(error).toBeInstanceOf(AccountCustodyError);
+    expect((error as AccountCustodyError).code).toBe('network-unreachable');
+    expect((error as AccountCustodyError).message).toContain('nothing was submitted');
+  });
+
+  it('keeps the current module for the owner’s own account when the read failed', async () => {
+    /* A device-authorised call is against the Passport this device holds; its
+       module has always been the current one, and refusing to open it over an
+       indexer blink would stop somebody sending at all. */
+    accountHasOneTxTransfer.mockResolvedValue(null);
+    await expect(
+      accountModuleFor(NETWORK, SENDER, { whenUnreadable: 'current' }),
+    ).resolves.toBe('account');
+  });
+
+  it('asks the chain ONCE per address, and never caches a failed read', async () => {
+    accountHasOneTxTransfer.mockResolvedValue(false);
+    await accountModuleFor(NETWORK, PEER);
+    await accountModuleFor(NETWORK, PEER);
+    expect(accountHasOneTxTransfer).toHaveBeenCalledTimes(1);
+
+    accountHasOneTxTransfer.mockResolvedValue(null);
+    await expect(
+      accountModuleFor(NETWORK, SENDER, { whenUnreadable: 'current' }),
+    ).resolves.toBe('account');
+    accountHasOneTxTransfer.mockResolvedValue(true);
+    await expect(accountModuleFor(NETWORK, SENDER)).resolves.toBe('account');
+    expect(accountHasOneTxTransfer).toHaveBeenCalledTimes(3);
+    /* And the pre-upgrade address's answer is still its own. */
+    await expect(accountModuleFor(NETWORK, PEER)).resolves.toBe('account-v1');
+    expect(accountHasOneTxTransfer).toHaveBeenCalledTimes(3);
+  });
+
+  it('normalises the address before it caches or asks', async () => {
+    accountHasOneTxTransfer.mockResolvedValue(false);
+    await accountModuleFor(NETWORK, `0x${PEER.toUpperCase()}`);
+    await accountModuleFor(NETWORK, PEER);
+    expect(accountHasOneTxTransfer).toHaveBeenCalledTimes(1);
+    expect(accountHasOneTxTransfer).toHaveBeenCalledWith(NETWORK.indexerHttpUrl, PEER);
   });
 });
 

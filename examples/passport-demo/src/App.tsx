@@ -109,7 +109,9 @@ import {
   retryDelayMs,
   SEND_LEG_ATTEMPTS,
   sendBlockedByChangeReturn,
+  sendBlockedByUnfinishedSend,
   sendRefusalText,
+  nameSendKind,
   serialisePendingSends,
   watchForSettlement,
   type PendingSend,
@@ -6621,15 +6623,35 @@ export default function PassportDemo() {
 
          THE RUN BEING CARRIED ON IS NOT ITS OWN BLOCKER: continuing a record
          that is AT the change leg is the thing that clears this. */
-      const blocked = sendBlockedByChangeReturn(
-        pendingSendsRef.current.filter((entry) => entry.id !== initial.id),
-      );
+      const others = pendingSendsRef.current.filter((entry) => entry.id !== initial.id);
+      const blocked = sendBlockedByChangeReturn(others);
       if (blocked !== null) {
         throw Object.assign(new Error(blocked), {
           code: 'name-send-failed' as const,
           legLanded: false,
           recipientPaid: false,
         });
+      }
+      /* AND NO SECOND PAYMENT OVER A FIRST THAT STOPPED (2026/09/14). A name
+         send that failed between its legs left the money at the sender's own
+         receiving address and a card on Home offering to carry it on; opening
+         Send again for the same recipient ran a NEW first leg, so a second
+         amount left the account and Home carried two "Payment not finished"
+         cards for one intended payment. The sheet says so and offers the
+         Continue; this is the backstop, for the paths that do not go through it.
+
+         A RESUME IS EXEMPT, and it has to be: carrying the unfinished payment
+         on is the thing that clears this, and with two records outstanding each
+         would otherwise be blocked by the other with no way out of either. */
+      if (options.resumed !== true) {
+        const unfinished = sendBlockedByUnfinishedSend(others);
+        if (unfinished !== null) {
+          throw Object.assign(new Error(unfinished.reason), {
+            code: 'name-send-failed' as const,
+            legLanded: false,
+            recipientPaid: false,
+          });
+        }
       }
       const account = requireAccount();
       const {
@@ -7758,7 +7780,11 @@ export default function PassportDemo() {
       const { nightColourHex } = await import('./identity/accountCustody.js');
       await runNameSend(
         newPendingSend({
-          kind: 'night',
+          /* ALWAYS TWO LEGS, WHATEVER THIS PASSPORT'S BUILD IS. The
+             one-transaction circuit moves a shielded coin and has no NIGHT
+             counterpart — `nameSendKind` in `lib/sendLegs.ts` carries the
+             reason, and this route never asks the sender's contract at all. */
+          kind: nameSendKind({ asset: 'night', senderSupportsOneTransaction: false }),
           recipient: { label: params.domain, accountAddress: params.accountAddress },
           amount: params.amount,
           colourHex: nightColourHex(),
@@ -8079,8 +8105,14 @@ export default function PassportDemo() {
           /* ONE TRANSACTION WHERE THE SENDER'S CONTRACT CARRIES THE CIRCUIT,
              and the two-leg send otherwise — see
              `docs/demo/one-tx-transfer-drill.md` §4 for why it is the SENDER's
-             state that decides and not the recipient's. */
-          kind: oneTransaction ? 'transfer' : 'shielded',
+             state that decides and not the recipient's. The ASSET decides
+             first, and `nameSendKind` in `lib/sendLegs.ts` is where both halves
+             of that are written down: this is the shielded route, so the
+             sender's build is allowed to matter here. */
+          kind: nameSendKind({
+            asset: 'shielded',
+            senderSupportsOneTransaction: oneTransaction,
+          }),
           recipient: { label: params.domain, accountAddress: params.accountAddress },
           amount: params.amount,
           tokenType: params.tokenType,
@@ -8172,6 +8204,16 @@ export default function PassportDemo() {
    * from. Home renders no Send control at all in that case, rather than a
    * disabled one implying the account nearly could.
    */
+  /**
+   * THE UNFINISHED PAYMENT A NEW SEND WOULD SIT ON TOP OF, if there is one.
+   *
+   * Read here rather than in the sheet because the records are this component's
+   * — the sheet is handed a sentence and, where there is something to press, the
+   * Continue that clears it. The rule itself is pure and drilled in
+   * `lib/sendLegs.ts`.
+   */
+  const unfinishedSendNotice = sendBlockedByUnfinishedSend(pendingSends);
+
   const homeSend =
     localSessionActive && localWalletNetworkId && localWalletProvingMode && accountContractAddress
       ? {
@@ -8201,15 +8243,36 @@ export default function PassportDemo() {
              transaction, because that is a fact about the deployed contract,
              read from the chain once per session. So that is the only count the
              host supplies, and every other one on that surface is left exactly
-             where it was. */
+             where it was.
+
+             IT IS THE SHIELDED ROUTE'S ANSWER, and only the sheet knows which
+             route the picker is on. On 2026/09/14 this `1` reached a NIGHT send
+             and the review sheet promised "Transferring — one network
+             transaction" for a payment that is two transactions on every build
+             there is. The sheet now discards it on the NIGHT route —
+             `nameLegStepCount` in `lib/sendLegs.ts` — and this stays what it
+             was: what the host knows and the sheet does not. */
           ...(oneTransactionSend || nameSendSteps === 1
             ? { nameLegSteps: 1 as const }
             : {}),
-          /* ONE AT A TIME WHILE CHANGE IS COMING BACK. The next transfer would
-             have to spend the coin that is still on its way into the account,
-             so the sheet holds it and says what it is waiting for. The runner
-             refuses the same case as a backstop — see `runNameSend`. */
-          blockedReason: sendBlockedByChangeReturn(pendingSends),
+          /* ONE PAYMENT AT A TIME. Two cases behind one seam, and the sentence
+             says which: the change from the last transfer still coming back
+             (it clears by itself, so there is nothing to press), or a payment
+             that STOPPED between its legs — which until 2026/09/14 let somebody
+             open Send again for the same recipient and start a second step one.
+             See `sendBlockedByUnfinishedSend` in `lib/sendLegs.ts`. The runner
+             refuses the same cases as a backstop — see `runNameSend`. */
+          ...(unfinishedSendNotice === null
+            ? {}
+            : {
+                blockedReason: unfinishedSendNotice.reason,
+                ...(unfinishedSendNotice.continuable
+                  ? {
+                      continueUnfinishedSend: () =>
+                        void continuePendingSend(unfinishedSendNotice.record.id),
+                    }
+                  : {}),
+              }),
         }
       : null;
 

@@ -613,4 +613,24 @@ test('a sender whose account can pay in one transaction is reviewed as one trans
   expect(review).not.toMatch(/\b[0-9a-f]{16,}\b/);
   expect(review).not.toContain(PASSPORT_ACCOUNT_ADDRESS);
   expect(review).not.toMatch(/wallet|registry|indexer|resolver|contract|circuit|DUST/i);
+
+  /* AND THE SAME SENDER, PAYING THE SAME NAME IN NIGHT, IS STILL TWO STEPS.
+     THE 2026/09/14 DEFECT. The one-transaction answer is a fact about the
+     sender's deployed build — true, and read once per session — and it was
+     handed to the sheet without the asset beside it, so this very Passport's
+     review sheet promised "Transferring — one network transaction" over a
+     NIGHT payment. There is no NIGHT counterpart to the transfer circuit and
+     there cannot be one, so what the reader confirmed was one transaction and
+     what they waited through was two. */
+  await page.getByRole('button', { name: /^Back$/ }).click();
+  await picker().selectOption('night');
+  await expect(page.locator('.mnhome-send-resolved')).toBeVisible({ timeout: 30_000 });
+  await page.getByPlaceholder('0.0').fill('0.001');
+  await page.getByRole('button', { name: /^Review$/ }).click();
+
+  const nightReview = await page.locator('.mnhome-send-rows').innerText();
+  expect(nightReview).toContain(`${RESOLVABLE_NAME}.night`);
+  expect(nightReview).toContain('Two steps');
+  expect(nightReview).not.toContain('Transferring');
+  expect(nightReview).not.toContain('in one network transaction');
 });

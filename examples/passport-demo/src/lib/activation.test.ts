@@ -28,6 +28,7 @@ import {
   OPENING_BALANCE_ON_THE_WAY_LABEL,
   OPENING_MUSD,
   OPENING_NIGHT,
+  activationLegsLanded,
   activationRetryRowId,
   classifyFundAccountAnswer,
   openingBalanceOnTheWay,
@@ -540,6 +541,87 @@ describe('openingBalanceOnTheWay', () => {
         entries: [entry('Passport created'), entry('Your name is registered')],
       }),
     ).toBe(true);
+  });
+
+  it('goes for good once the trail says both legs landed, however the balance reads', () => {
+    /* THE 2026/09/14 DEFECT. A reviewer's opening grant had landed long before;
+       two sends had since moved the NIGHT out of the account, one of which had
+       stopped with 0.002 NIGHT waiting at their own receiving address. The
+       account's NIGHT therefore read `0` — the only evidence this function had
+       — and Home went back to announcing `NIGHT — Arriving` and "100 mUSD and
+       0.002 NIGHT are being added to your account" over money that had arrived
+       weeks of activity earlier and been spent. The screen was promising money
+       that was never coming. A landed row never stops existing, so it is the
+       row that answers this and not the figure. */
+    expect(
+      openingBalanceOnTheWay({
+        hasAccount: true,
+        ...waiting,
+        entries: [
+          entry('Sending to hector.night'),
+          entry(ACTIVATION_STABLECOIN_LABEL),
+          entry(ACTIVATION_DEPOSITED_LABEL),
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it('still waits where only one leg has a row and the other is not held', () => {
+    /* The NIGHT landed and the stablecoin half did not — which is a real state:
+       `classifyFundAccountAnswer` writes the stablecoin row only when the
+       sponsor's asset transaction came back. The row still names both figures,
+       so it stays. */
+    expect(
+      openingBalanceOnTheWay({
+        hasAccount: true,
+        ...waiting,
+        entries: [entry(ACTIVATION_DEPOSITED_LABEL)],
+      }),
+    ).toBe(true);
+  });
+
+  it('takes a positive balance as proof too, for a Passport whose trail is gone', () => {
+    /* A restore, or a browser whose activity was cleared. A zero is ambiguous
+       there and a positive figure is not, so the balance keeps its old job as
+       the fall-back. */
+    expect(
+      openingBalanceOnTheWay({
+        hasAccount: true,
+        holdsOpeningNight: true,
+        holdsOpeningStablecoin: true,
+        entries: [],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('activationLegsLanded', () => {
+  const entry = (label: string) => ({ label });
+
+  it('reads each leg off the row the activation wrote when it landed', () => {
+    expect(activationLegsLanded([])).toEqual({ night: false, stablecoin: false });
+    expect(activationLegsLanded([entry(ACTIVATION_DEPOSITED_LABEL)])).toEqual({
+      night: true,
+      stablecoin: false,
+    });
+    expect(activationLegsLanded([entry(ACTIVATION_STABLECOIN_LABEL)])).toEqual({
+      night: false,
+      stablecoin: true,
+    });
+    expect(
+      activationLegsLanded([
+        entry(ACTIVATION_DEPOSITED_LABEL),
+        entry(ACTIVATION_STABLECOIN_LABEL),
+      ]),
+    ).toEqual({ night: true, stablecoin: true });
+  });
+
+  it('does not mistake a FAILURE row for a landing', () => {
+    /* `Opening balance deposited` and `Opening balance not deposited` differ by
+       one word, which is exactly the pair a substring match gets wrong. */
+    expect(
+      activationLegsLanded([entry(ACTIVATION_REFUSED_LABEL), entry(ACTIVATION_EXHAUSTED_LABEL)]),
+    ).toEqual({ night: false, stablecoin: false });
   });
 });
 
