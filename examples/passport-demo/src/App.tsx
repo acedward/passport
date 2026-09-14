@@ -6143,7 +6143,7 @@ export default function PassportDemo() {
       amount: bigint;
       purpose: string;
       origin: string;
-    }): Promise<{ txId: string }> => {
+    }): Promise<{ txId: string; sponsored: boolean }> => {
       const account = requireAccount();
       try {
         const { nightColourHex, withdrawNight } = await import('./identity/accountCustody.js');
@@ -6186,7 +6186,9 @@ export default function PassportDemo() {
             // The account's balance has moved; the session row already carries
             // the transaction meanwhile.
             void refreshLocalBalances();
-            return { txId: result.txId };
+            /* Decided by what the sponsor did, as the custody result records
+               it — the one fact an app may render "network fee covered" on. */
+            return { txId: result.txId, sponsored: result.feePaidBy === 'sponsored' };
           } catch (cause) {
             updateActivity(entry.id, {
               status: 'error',
