@@ -51,6 +51,7 @@ import type { FeeReadiness, LocalWalletProvingMode } from '../lib/localWallet.js
 import { encodeReceivePayload } from '../lib/qrPayload.js'
 import { FeaturedApps, type AppsScreenProps, type FeaturedAppsProps } from './Apps.js'
 import CompanionLink from './Companion.js'
+import DynamicIdentity from './DynamicIdentity.js'
 import { EcosystemIdentity } from './Ecosystem.js'
 /* "Install Passport", in the bar where a person looks for it. Renders nothing
    at all when Passport is already installed, or in a browser that cannot
@@ -1229,6 +1230,12 @@ export default function HomeScreen(props: HomeScreenProps) {
         {/* Renders nothing where the browser has no Notification API, which is
             why it needs no condition here. */}
         <NotificationToggle />
+
+        {/* And nothing at all unless this build was given a Dynamic
+            environment id AND somebody signed in with a provider — so in every
+            build shipped today this footer is unchanged. Same reason as
+            above: the condition belongs inside the component that knows it. */}
+        <DynamicIdentity />
 
       </div>
     </section>
