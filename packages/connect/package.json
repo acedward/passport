@@ -3,6 +3,11 @@
   "version": "0.1.1",
   "description": "The Midnight Passport wire protocols and the client that speaks them: profile consent, transaction requests, and the signed redirect channel.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/midnightntwrk/passport-demo.git",
+    "directory": "packages/connect"
+  },
   "type": "module",
   "sideEffects": false,
   "keywords": [
@@ -29,7 +34,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENCE"
   ],
   "scripts": {
     "prepare": "tsc -p tsconfig.json",

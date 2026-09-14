@@ -31,8 +31,9 @@
  * what `passportContract.address` carries. Money belongs at the ACCOUNT; the
  * engine addresses are where the wallet happens to sign from, and an app that
  * pays one of them has paid somewhere the account cannot spend from. Shipping
- * a public SDK whose starter template asks for engine addresses would teach
- * exactly the wrong thing, so the field does not exist to be asked for.
+ * a package published to strangers whose starter template asks for engine
+ * addresses would teach exactly the wrong thing, so the field does not exist
+ * to be asked for.
  *
  * A request naming it is now a request whose field list did not survive
  * filtering, which was already a rejection — and is now a rejection that gets

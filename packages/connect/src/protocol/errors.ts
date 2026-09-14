@@ -65,7 +65,7 @@ export const PASSPORT_ERROR_CODES: readonly PassportErrorCode[] = [
 ];
 
 /**
- * Failures that never travel: this SDK produced them, on this side of the
+ * Failures that never travel: this package produced them, on this side of the
  * boundary, and no Passport was involved.
  *
  * They are a SEPARATE union on purpose. A refusal carries `source: 'local'`
@@ -85,7 +85,9 @@ export type PassportLocalErrorCode =
   | 'not-present'
   /** Asked for something this transport cannot carry (an incentive by popup). */
   | 'unsupported-transport'
-  /** The request this SDK was asked to send is not a valid one. Never sent. */
+  /** The page called `destroy()` while this exchange was still in flight. */
+  | 'destroyed'
+  /** The request this client was asked to send is not a valid one. Never sent. */
   | 'invalid-request';
 
 export const PASSPORT_LOCAL_ERROR_CODES: readonly PassportLocalErrorCode[] = [
@@ -94,6 +96,7 @@ export const PASSPORT_LOCAL_ERROR_CODES: readonly PassportLocalErrorCode[] = [
   'passport-closed',
   'not-present',
   'unsupported-transport',
+  'destroyed',
   'invalid-request',
 ];
 
@@ -162,10 +165,35 @@ const MESSAGES: Record<PassportErrorCode | PassportLocalErrorCode, string> = {
     'No Passport answered. This page is framed by something that does not speak the Passport protocol.',
   'unsupported-transport':
     'This exchange only exists inside Passport’s own app browser. Nothing was sent.',
+  destroyed:
+    'This page stopped waiting for Passport. Nothing is known about the outcome.',
 };
 
-/** The sentence for a code. Total — an unknown code still gets a sentence. */
-export function passportErrorMessage(code: string): string {
+/**
+ * The sentences that belong to a LOCAL refusal whose code is also a wire code.
+ *
+ * `invalid-request` is the one string in both vocabularies, and the two mean
+ * opposite things to a user: on the wire it is Passport declining something it
+ * read, locally it is this page never sending anything at all. Rendering the
+ * wire sentence for a local refusal told the user Passport had refused a
+ * request that Passport never saw. `source` is what tells them apart, so the
+ * sentence is chosen by `source` too.
+ */
+const LOCAL_MESSAGES: Partial<Record<PassportLocalErrorCode, string>> = {
+  'invalid-request': 'This app built a request Passport cannot read. Nothing was sent.',
+};
+
+/**
+ * The sentence for a code. Total — an unknown code still gets a sentence.
+ *
+ * Pass `source: 'local'` for a refusal this side produced, so that a code
+ * living in both vocabularies gets the sentence that is true of this side.
+ */
+export function passportErrorMessage(code: string, source?: 'local' | 'passport'): string {
+  if (source === 'local') {
+    const local = LOCAL_MESSAGES[code as PassportLocalErrorCode];
+    if (local !== undefined) return local;
+  }
   return (
     MESSAGES[code as PassportErrorCode | PassportLocalErrorCode] ??
     'Passport did not complete the request, and did not say why.'

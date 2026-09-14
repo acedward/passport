@@ -9,8 +9,9 @@ import { defineConfig } from 'vite';
  *
  * The package is resolved through the workspace link in the root
  * `node_modules/@midnight-passport/connect`, which points at
- * `packages/connect`. That package publishes `dist/`, which nothing builds in
- * this tree, so both Vite and TypeScript are pointed at the sources instead.
+ * `packages/connect`. That package's own `prepare` script builds its `dist/`,
+ * but Doorman does not depend on that build being current: both Vite and
+ * TypeScript are pointed at the sources instead.
  */
 const connect = (path: string) =>
   fileURLToPath(new URL(`../../node_modules/@midnight-passport/connect/src/${path}`, import.meta.url));

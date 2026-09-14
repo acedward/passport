@@ -30,12 +30,14 @@ interface ImportMetaEnv {
   readonly VITE_DEMO_PAYMENT_AMOUNT?: string;
 
   /**
-   * Explorer base URL used to link a submitted transaction. Defaults to the
-   * preview explorer. The transaction route is `/transactions/{hash}` — set
-   * this to your network's explorer, or to an empty string to render the bare
-   * identifier instead of a link that goes nowhere.
+   * Explorer link template for a submitted transaction, with a `{hash}`
+   * placeholder that takes the 32-byte ledger transaction hash Passport
+   * reports. Defaults to the 1AM explorer on stagenet,
+   * `https://explorer.1am.xyz/tx/{hash}?network=stagenet` — set this to your
+   * network's explorer, or to an empty string to render the bare hash instead
+   * of a link that goes nowhere.
    */
-  readonly VITE_EXPLORER_URL?: string;
+  readonly VITE_EXPLORER_TX_URL?: string;
 }
 
 interface ImportMeta {

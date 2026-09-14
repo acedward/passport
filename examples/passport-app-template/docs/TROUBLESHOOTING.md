@@ -30,8 +30,10 @@ request must echo the pair Passport minted.
 **Cause:** your frame never answered `ready`. Any message from the frame
 counts as "the app is alive" and clears the hint — this template posts a
 one-line `passport.profile.hello` acknowledgement the moment `ready` arrives
-(`src/main.tsx`, Act 1 embedded). If you removed that ack, put it back;
-Passport's parsers drop unknown message types harmlessly, so it costs nothing.
+(`src/main.tsx`, Act 1 embedded). If you removed that ack, put it back. It is
+a typed message of the profile protocol, not an unknown one Passport tolerates
+— both halves of its pair are optional, and Passport owes it no reply, so it
+costs nothing to send.
 
 ## The frame is blank, or the browser says the page refused to connect
 
@@ -161,9 +163,10 @@ the reply simply omits `sponsored`. Never label something free on that basis.
 
 **Cause:** the recipient your app configured is on a different network from
 the wallet in the Passport you connected to — e.g. a `mn_addr_preprod…`
-recipient against a preview wallet. Passport decodes the recipient against
+recipient against a stagenet wallet. Passport decodes the recipient against
 its own live wallet network before showing an approval sheet; that is the
-only place the check can be made honestly (`src/bridge/txProtocol.ts:30–34`).
+only place the check can be made honestly (`PassportTxIntent` and the module
+header, `src/bridge/txProtocol.ts`).
 
 **Fix:** check your `VITE_DEMO_PAYMENT_ADDRESS` (the network name is readable
 in the address prefix, before the `1`), and check which network the wallet is
@@ -176,12 +179,47 @@ a clean shell.
 The copy: "Passport refused the request — it was already showing an approval
 sheet, or the recipient is not a valid unshielded address."
 
-Note the boundary: a request that does not parse at all gets **no reply** —
-Passport's strict parsers drop it before there is a valid `requestId`/`nonce`
-pair to bind a reply to, and what you observe is your own timeout. The
-parsers are strict — see [PROTOCOL.md](./PROTOCOL.md) for the exact rules;
-the usual culprits are an `amount` sent as a number rather than a base-10
-string, a zero amount, or a `purpose` over 140 characters.
+This is also what a request that does not parse gets. Passport does **not**
+drop a malformed request in silence: it reads the `requestId` and `nonce` off
+the rejected message and answers `invalid-request` bound to them, so you see a
+refusal rather than a three-minute hang. The usual culprits are an `amount`
+sent as a number rather than a base-10 string, a zero amount, or a `purpose`
+over 140 characters — see [PROTOCOL.md](./PROTOCOL.md) for the exact rules.
+
+Silence still happens in two cases, neither of them about parsing: the message
+carried no usable `requestId`/`nonce` pair to address a reply at, or — in the
+standalone popup — its pair was not that window's launch pair. Then what you
+observe is your own 180 s timeout.
+
+## `version_mismatch` / `version-mismatch`
+
+Two spellings, one meaning: the message *was* a Passport message, and its
+`version` names a wire revision the other side does not implement. The profile
+protocol spells it `version_mismatch` with an underscore and the transaction
+protocol `version-mismatch` with a hyphen, because both strings are already
+deployed (`PASSPORT_PROFILE_ERROR_CODES` and `PASSPORT_TX_ERROR_CODES` in
+`src/bridge/errors.ts`).
+
+The copy: "This app and this Passport are speaking different revisions of the
+profile protocol. Nothing was shared." — and, on the transaction side,
+"…different revisions of the transaction protocol. Nothing was signed and
+nothing was paid."
+
+**Cause:** one side is a build from before or after a wire revision the other
+does not have. The revision this template mints is
+`PASSPORT_PROTOCOL_VERSION` (`src/bridge/version.ts`, currently `1`), and
+everything it can read is `PASSPORT_SUPPORTED_VERSIONS`. A message with **no**
+`version` field is read as revision 1 rather than rejected, so an older
+counterparty is not a mismatch by itself.
+
+**Fix:** update whichever side is behind. In practice that means re-copying
+`src/bridge/` from the Passport repository, or updating the Passport you are
+pointing at. Do not paper over it by loosening a parser.
+
+**Note what this is not:** a silence. This code exists precisely so that an
+unreadable revision produces a sentence instead of a three-minute hang. If you
+are seeing a hang rather than this code, look at
+[`invalid-request`](#invalid-request) and at the launch parameters instead.
 
 ## `submit-failed`
 
@@ -194,8 +232,9 @@ can retry.
 The link needs the 32-byte ledger transaction **hash** — the 33-byte
 transaction *identifier* some APIs answer with resolves nowhere. Passport
 reports the hash, and `explorerTxHref` in `src/main.tsx` substitutes it into
-`VITE_EXPLORER_TX_URL` at its `{hash}` placeholder (default: the 1AM explorer,
-`https://explorer.1am.xyz/tx/{hash}?network=preview`). If your network has no
+`VITE_EXPLORER_TX_URL` at its `{hash}` placeholder (default: the 1AM explorer
+on stagenet, `https://explorer.1am.xyz/tx/{hash}?network=stagenet`, which is
+the network Passport transacts on). If your network has no
 public explorer, set `VITE_EXPLORER_TX_URL` to an empty value and the template
 renders the bare hash instead of a link that goes nowhere.
 

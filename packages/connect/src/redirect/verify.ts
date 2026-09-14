@@ -168,8 +168,22 @@ function walk<T extends PassportCallbackProfilePayload | PassportCallbackTxPaylo
      so the binding is between the signing key and the address this receiver
      already associated with this Passport, when it has one. That is the check
      that says "the same Passport as last time", and when there is no earlier
-     visit the trail says so rather than implying a check happened. */
-  if (signed && options.expectedSignerAddress) {
+     visit the trail says so rather than implying a check happened.
+
+     An UNSIGNED reply asked to bind is a failure, not a skip. There is no key
+     in it, so there is nothing that could be the Passport this app already
+     knows; recording the step as passed would have told a page that had
+     configured `requireSignature: false` that the same Passport as last time
+     had answered, on the strength of a reply anybody could have written. */
+  if (options.expectedSignerAddress) {
+    if (!signed) {
+      record(
+        'Signing key is the Passport this app already knows',
+        false,
+        'the reply carries no signature, so there is no key to bind',
+      );
+      return fail('an unsigned reply cannot be bound to a known Passport');
+    }
     if (
       !record(
         'Signing key is the Passport this app already knows',

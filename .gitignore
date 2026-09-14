@@ -43,6 +43,10 @@ examples/passport-demo/contracts/stagenet/
 # Node
 node_modules/
 dist/
+# TypeScript's incremental cache. It names absolute paths on the machine that
+# built it, so it belongs to nobody but that machine.
+*.tsbuildinfo
+.tsbuildinfo
 npm-debug.log
 yarn-error.log
 .npm/

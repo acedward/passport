@@ -6,9 +6,10 @@
  * literal — `org.midnight.passport.profile/v1` — and compared with `!==`. On a
  * mismatch the parser returned `null`, the message was dropped, and NO REPLY
  * WAS SENT. The consequence for an integrator is not a security property, it
- * is a three-minute hang: there was no way to tell "Passport is older than my
- * SDK" from "Passport is not there at all" from "the message I sent was
- * malformed". All three looked identical, and all three looked like nothing.
+ * is a three-minute hang: there was no way to tell "Passport is older than
+ * the client I am using" from "Passport is not there at all" from "the message
+ * I sent was malformed". All three looked identical, and all three looked like
+ * nothing.
  *
  * WHAT IS TRUE NOW. Every message carries an explicit numeric `version`, and
  * every parser returns a RESULT rather than `T | null`:
@@ -34,8 +35,9 @@
  *
  * ABSENCE MEANS 1. Every message minted before this field existed is a version
  * 1 message, so a message with no `version` is read as version 1 rather than
- * rejected. That is what lets an SDK-based app and a not-yet-updated Passport
- * (or the reverse) keep working through the change that introduced the field.
+ * rejected. That is what lets an app built on this package and a
+ * not-yet-updated Passport (or the reverse) keep working through the change
+ * that introduced the field.
  * ========================================================================= */
 
 /** The wire revision this build mints. */

@@ -35,9 +35,12 @@ You need two dev servers on two different origins.
    > `http://localhost:5175` for the same reason — `src/main.tsx`.)
 3. **Point Passport's app grid at this app.** Passport's in-app browser reads
    a public registry and prepends a local development entry whose URL comes
-   from an environment variable. Start Passport with:
+   from an environment variable. Run this **from the root of the Passport
+   repository**, not from this template directory — `npm run demo` is
+   Passport's script, and it does not exist here:
 
    ```bash
+   # in the Passport repository root
    VITE_LOCAL_APP_URL=http://localhost:5178 npm run demo
    ```
 
@@ -71,9 +74,15 @@ at:
 3. Allow popups for `localhost` if the browser blocks the window — the app
    tells you when that happens.
 
-Note the limits of this mode: consent is all-or-nothing rather than
-per-field, and **the transaction bridge does not exist here** — Act 3 says so
-rather than offering a button that cannot work.
+Note the limits of this mode: consent is all-or-nothing rather than per-field,
+and `passport.incentive.report` has nowhere to go — there is no parent frame,
+and the popup surface does not record it.
+
+**Payment is not one of the limits.** Act 3 works here too: the app opens (or
+reuses) the Passport window on the payment launch parameters and posts the
+same `passport.tx.request` a framed app would. Whether it is available at all
+is decided by `PAYMENT_ARMED` — three configuration conditions, none of them
+the mounting mode. See section E.
 
 ## D. Testing against the deployed Passport
 
@@ -92,20 +101,43 @@ The same template talks to a deployed Passport; only the origin changes.
 
 ## E. Arming the optional payment (Act 3)
 
-Off by default, and deliberately hard to arm by accident. All of the
-following must hold (`src/main.tsx`, `PAYMENT_ARMED`):
+Off by default, and deliberately hard to arm by accident.
 
-1. `VITE_DEMO_PAYMENT=1` — exactly `1`.
-2. `VITE_DEMO_PAYMENT_ADDRESS` — an unshielded `mn_addr…` recipient on the
-   same network as the connected Passport wallet.
-3. `VITE_DEMO_PAYMENT_AMOUNT` — atomic NIGHT as a base-10 string
-   (default `100000` = 0.1 NIGHT).
-4. The app is **embedded** — the transaction bridge is embedded-only.
-5. The profile is connected — the payment act needs an approved profile
-   first.
+### What arms it
 
-And the half that is not on your side: the Passport you point at must have a
-wallet that can actually pay — NIGHT for the amount, **and something covering
+`PAYMENT_ARMED` (`src/main.tsx`) is the conjunction of exactly three
+conditions, and all three are configuration:
+
+1. `VITE_DEMO_PAYMENT=1` — exactly the string `1` (`PAYMENT_ENABLED`).
+2. `VITE_DEMO_PAYMENT_ADDRESS` — a non-empty unshielded `mn_addr…` recipient,
+   on the same network as the connected Passport account.
+3. `VITE_DEMO_PAYMENT_AMOUNT` — atomic NIGHT matching `/^[0-9]{1,20}$/` and
+   not zero in any padded form (`AMOUNT_IS_VALID`; default `100000` =
+   0.1 NIGHT).
+
+The mounting mode is deliberately **not** one of them. The comment above
+`PAYMENT_ARMED` says why in the code: an armed flag with no recipient is a
+button that lies, and payment itself works framed and standalone alike, over
+the channel each mode has.
+
+### What only gates the rendering
+
+Two further conditions decide what the Act 3 panel *shows*. Neither changes
+whether the payment is armed:
+
+- **An approved profile.** While `phase !== 'connected'` the panel reads
+  "Connect first — the payment act needs an approved profile". `PAYMENT_ARMED`
+  is already true at that point; there is simply nothing to pay from yet.
+- **The explanatory copy when it is off.** If `VITE_DEMO_PAYMENT` is not `1`,
+  the panel explains how to arm it; if it is `1` but a condition above fails,
+  the panel names the failing one — no recipient, or an amount that is not a
+  positive base-10 integer of atomic units — rather than offering a button
+  that cannot work.
+
+### The half that is not on your side
+
+The Passport you point at must have a wallet that can actually pay — NIGHT for
+the amount, **and something covering
 the network fee**, which is paid in DUST rather than NIGHT. On the public
 networks the fee sponsor covers it by default; a Passport with no sponsor
 reachable and no DUST of its own cannot pay. Short of either, the reply is a

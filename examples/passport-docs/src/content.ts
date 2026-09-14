@@ -64,8 +64,9 @@ fingerprint, or device PIN.
 | **App template** | A starter kit for building your own Passport-connected app — the bridge modules, a reference client, and full protocol docs. | [template.midnightpassport.com](https://template.midnightpassport.com) |
 | **App registry** | The \`registry.json\` file that both Passport's app grid and the App Hub fetch. One schema-checked JSON entry per listed app. | Public repository URL to be published — the Hub's "Raise a PR" button lights up when it is. |
 
-These deployments will move to \`midnightpassport.com\` subdomains; the Vercel
-URLs above remain the live ones today.
+Passport transacts on Midnight's **stagenet** network: that is where the
+wallet signs, where \`.night\` names register, and where every explorer link
+points. See [Reference → Networks](#reference).
 
 ## Where to go next
 
@@ -87,8 +88,10 @@ URLs above remain the live ones today.
 /* examples/passport-demo/src/App.tsx lines 428–470 (session persistence);    */
 /* examples/passport-demo/src/screens/Home.tsx (sync strip and ring states);  */
 /* examples/passport-demo/src/lib/localWallet.ts (saveSnapshot,               */
-/* resumedFromSnapshot); examples/passport-demo/.env.example (first-sync      */
-/* measurements, 2026/08/06).                                                 */
+/* resumedFromSnapshot, DEEP_CHAIN_BLOCK_THRESHOLD);                          */
+/* examples/passport-demo/src/lib/networks.ts (stagenet default, ledger-9);   */
+/* examples/passport-demo/.env.example (first-sync measurements — Preview and */
+/* Pre-production in-tab 2026/08/06, stagenet under Node 2026/08/24).         */
 /* -------------------------------------------------------------------------- */
 
 const ONBOARDING: DocSection = {
@@ -169,14 +172,24 @@ Sync state is also **snapshotted**: the wallet persists its progress on first
 sync, once a minute while synced, and on close, so the next session resumes
 mid-chain instead of starting over.
 
-## Why a brand-new wallet syncs fast on Preview
+## How long the first walk takes
 
-A cold wallet walks the chain from genesis. On the Preview network that is
-short: measured on 2026/08/06, a fresh wallet went from 4% to fully synced in
-about **75 seconds**, with the browser tab's memory steady at roughly 90 MB —
-Preview's chain was about 296,000 blocks deep at the time. The same walk on
-Pre-production (about 1.98 million blocks) is not survivable in a browser tab
-today, which is why Passport defaults to Preview — the measured detail is in
+A cold wallet walks the chain from genesis, so the cost of a first sync is a
+property of the chain being walked rather than of Passport. This build walks
+**stagenet**, and no in-tab figure has been measured there, so none is quoted
+here. The one stagenet measurement on record is from outside the browser:
+under Node on 2026/08/24, with the chain about 158,000 blocks deep, a fresh
+wallet synced in 13–52 seconds.
+
+The in-tab figures that exist are history, and they were taken on networks
+this build no longer runs on. Measured on 2026/08/06 on **Preview**, a fresh
+wallet went from 4% to fully synced in about **75 seconds** with the browser
+tab's memory steady at roughly 90 MB — Preview's chain was about 296,000
+blocks deep that day. The same walk on **Pre-production** (about 1.98 million
+blocks) was not survivable in a browser tab, which is why the demo defaulted
+to Preview until the ledger-9 move on 2026/08/24. Passport now refuses a
+from-genesis walk past a configured depth rather than starting one and killing
+the tab — the numbers and the ceiling are in
 [Reference → Networks](#reference).
 `,
 };
@@ -210,10 +223,10 @@ on its own does not generate it — a wallet's NIGHT holdings must be
 *registered* for DUST generation first, which is itself one on-chain
 transaction.
 
-In Passport that registration is **not something you do**. Fees on the public
-networks are sponsored, so a Passport wallet never needs DUST of its own to
-transact. Registration is how the *services* pay their own way — see *Who
-registers NIGHT, and why* below.
+In Passport that registration is **not something you do**. Fees on stagenet,
+the network this build transacts on, are sponsored, so a Passport wallet never
+needs DUST of its own to transact. Registration is how the *services* pay
+their own way — see *Who registers NIGHT, and why* below.
 
 ## Getting test NIGHT from the faucet
 
@@ -223,8 +236,8 @@ The flow is deliberately manual, and honest about why:
    sheet, with a copy button per address and the faucet link beside them.
 2. Copy your **unshielded** address.
 3. Tap **Get test NIGHT** — it opens the network's public faucet
-   (\`faucet.preview.midnight.network\` or
-   \`faucet.preprod.midnight.network\`) in a new tab.
+   (\`faucet.stagenet.shielded.tools\` on the network this build runs on) in a
+   new tab.
 4. Complete the captcha there and request funds.
 5. Come back to Passport. **The balance arrives live, without a refresh** —
    the wallet streams its balances, so incoming funds appear on their own.
@@ -271,9 +284,14 @@ a transaction on something that bought them nothing.
 
 A fresh passkey wallet holds no DUST, so without help its first transaction
 would be impossible. Passport therefore ships with **sponsored fees on by
-default** (decided 2026/08/07): each public network has a default ProofStation
-gateway — \`api-preview.1am.xyz\` for Preview, \`api-preprod.1am.xyz\` for
-Pre-production — and \`VITE_SPONSOR_URL=off\` disables sponsorship outright.
+default** (decided 2026/08/07): the network the build runs on has a default
+sponsor gateway, and \`VITE_SPONSOR_URL=off\` disables sponsorship outright.
+On stagenet that gateway is **our own fee balancer** — there is no 1AM gateway
+on stagenet — speaking the same \`/wallet-status\` and \`/balance-only\` wire
+contract the 1AM gateways spoke for Preview (\`api-preview.1am.xyz\`) and
+Pre-production (\`api-preprod.1am.xyz\`) while those networks were in use.
+\`VITE_SPONSOR_URL\` takes a comma-separated, ordered list, so a build can name
+more than one sponsor and fall through to the next when one refuses.
 
 How it works, and what it never touches:
 
@@ -357,9 +375,10 @@ screen is a statement about the real registry:
   **"awaiting the registry"** means both transactions are submitted and
   Passport is waiting for the registry to reflect the registration before
   calling the name yours.
-- When the registry cannot be reached, the wallet cannot pay, or the selected
-  network does not support registration, the screen says exactly that and
-  offers to **queue** the name. A queued name is never shown as registered.
+- When the registry cannot be reached, the wallet cannot pay, or the name was
+  chosen for a network this build cannot register on — anything other than
+  stagenet — the screen says exactly that and offers to **queue** the name. A
+  queued name is never shown as registered.
 
 ## The Apps page and the in-app browser
 
@@ -385,8 +404,9 @@ Two consent surfaces protect you:
 ## Explorer links
 
 Transaction links point at the **1AM explorer**
-(\`explorer.1am.xyz/tx/{hash}?network=preview\`), which serves every network
-from one origin. The link needs the 32-byte ledger transaction **hash** — the
+(\`explorer.1am.xyz/tx/{hash}?network=stagenet\` from this build), which serves
+every network it knows from one origin, selected by that \`network\` query
+parameter. The link needs the 32-byte ledger transaction **hash** — the
 33-byte transaction *identifier* some APIs answer with resolves nowhere, so
 Passport reports the hash. Where a network has no explorer entry, Passport
 renders no link rather than a link that goes nowhere.
@@ -546,8 +566,10 @@ Required fields: \`id\` (unique, \`^[a-z0-9-]{1,32}$\`), \`name\` (≤ 40
 chars), \`description\` (≤ 120 chars, honest), \`icon\` (absolute \`https\`
 URL, 128×128 PNG or SVG, ≤ 50KB), \`url\` (absolute \`https\`, live),
 \`category\` (one of \`defi\`, \`gaming\`, \`tools\`, \`identity\`,
-\`other\`), and \`networks\` (non-empty subset of \`preview\`, \`preprod\`,
-\`mainnet\`). Optional: \`new\` and \`immersive\`; **never set \`featured\`**
+\`other\`), and \`networks\` (non-empty subset of \`stagenet\`, \`preview\`,
+\`preprod\`, \`mainnet\` — Passport's grid filters on the network its wallet is
+on, so an entry that omits \`stagenet\` does not appear in this build).
+Optional: \`new\` and \`immersive\`; **never set \`featured\`**
 — it is maintainers-only. The registry refuses \`http:\` entries outright — a
 listing is not an audit, and listed applications remain their authors'
 property.
@@ -557,11 +579,15 @@ property.
 /* -------------------------------------------------------------------------- */
 /* 6. Reference                                                               */
 /*                                                                            */
-/* Sources: examples/passport-demo/src/lib/networks.ts (networks, faucets,    */
-/* explorer, CLAIMABLE_NETWORKS); examples/passport-demo/.env.example         */
-/* (endpoints, preprod first-sync measurements 2026/08/06, depth guard);      */
+/* Sources: examples/passport-demo/src/lib/networks.ts (DEFAULT_NETWORK_ID,   */
+/* TRANSACTABLE_NETWORKS, CLAIMABLE_NETWORKS, faucets, explorer,              */
+/* networkUnavailableReason); examples/passport-demo/src/screens/             */
+/* NetworkSwitcher.tsx (switcher removed 2026/09/03);                         */
+/* examples/passport-demo/src/lib/localWallet.ts (stagenet endpoint defaults, */
+/* empty proof-server default, DEEP_CHAIN_BLOCK_THRESHOLD,                    */
+/* SendNightErrorCode); examples/passport-demo/.env.example (endpoints,       */
+/* first-sync measurements 2026/08/06 and 2026/08/24, depth guard);           */
 /* examples/passport-demo/src/lib/sponsor.ts (gateways);                      */
-/* examples/passport-demo/src/lib/localWallet.ts (SendNightErrorCode);       */
 /* examples/passport-app-template/docs/PROTOCOL.md                            */
 /* (bridge error codes); examples/passport-demo/src/lib/passkeyPresence.ts    */
 /* (approval failure codes); examples/passport-app-template/docs/             */
@@ -575,27 +601,52 @@ const REFERENCE: DocSection = {
   markdown: `
 ## Networks
 
+This build transacts on **stagenet, and only stagenet**. That is a fact about
+the binary rather than a preference: since 2026/08/24 the app is built on
+\`@midnightntwrk/ledger-v9\` 1.0.0-rc.3 and midnight-js 5.0.0-beta.6, because
+the ledger-8 stack cannot sync stagenet at all — its indexer client fails
+parsing the stagenet schema before the first block is applied. Preview and
+Pre-production run the ledger-8 protocol, and a ledger-9 wallet can neither
+decode their transactions nor produce ones they will accept. One build cannot
+serve both, because the ledger is a WASM module compiled against one protocol.
+
+**There is no network switcher.** It was removed on 2026/09/03, after the
+2026/09/02 review: with one transactable network left, a control offering a
+choice the build cannot honour is a lie in the shape of a dropdown.
+
 | Network | Status in Passport |
 | --- | --- |
-| **Preview** | The default. Wallet signs here, names register here, faucet and explorer both live. A fresh wallet's first sync completes in about 75 s (measured 2026/08/06, chain ~296k blocks). |
-| **Pre-production** | Exists and is selectable, and every endpoint is healthy — but a fresh browser wallet **cannot complete a first sync** there. A cold wallet walks the chain from genesis, and preprod is ~1.98M blocks deep: measured 2026/08/06, the walk reached 3% after 150 s with the tab's memory climbing ~25 MB/s until the tab crashed at ~4.2 GB. Starting a new wallet at the chain tip was ruled out the same day — the ledger's commitment trees must be filled from genesis in index order, and the public indexer serves nothing that can fast-forward them. Passport now refuses a from-genesis walk above 500,000 blocks with an honest error instead of starting one and killing the tab. |
+| **Stagenet** | The default, and the only network this build can transact on. The wallet signs here, names register here, and the faucet and explorer are both live. No in-tab first-sync figure has been measured; under Node on 2026/08/24, with the chain about 158,000 blocks deep, a fresh wallet synced in 13–52 s. |
+| **Preview** | A **known** network, not a usable one. Records already stored against it still render and its explorer links still resolve, but this build's wallet cannot open an account on it, sync it, sign on it, or register a name there. It was the default until 2026/08/24. Historical measurement, on Preview, 2026/08/06: a fresh wallet went from 4% to fully synced in about 75 s with the tab's heap steady at ~90 MB, the chain then ~296k blocks deep. |
+| **Pre-production** | Known on the same terms as Preview, and unusable for the same ledger-8 reason. It was never shippable on its own account either: a cold wallet walks the chain from genesis, and preprod is ~1.98M blocks deep — measured 2026/08/06, the walk reached 3% after 150 s with the tab's memory climbing ~25 MB/s until the tab crashed at ~4.2 GB. Starting a new wallet at the chain tip was ruled out the same day: the ledger's commitment trees must be filled from genesis in index order, and the public indexer serves nothing that can fast-forward them. |
 | **Mainnet** | Name registration is deliberately not supported: a registration is a paid transaction, and a demo wallet whose seed comes from a browser passkey has no business spending real NIGHT. A name chosen for mainnet is queued, with that reason shown. Mainnet has no faucet, and no explorer link is emitted for it. |
+
+Passport refuses a from-genesis walk deeper than
+\`VITE_DEEP_CHAIN_BLOCK_THRESHOLD\` blocks — default **1,000,000** — with an
+honest error instead of starting one and killing the tab. Stagenet sits far
+below that ceiling.
 
 ## Endpoints
 
-| Service | Preview | Pre-production |
-| --- | --- | --- |
-| Indexer (GraphQL) | \`https://indexer.preview.midnight.network/api/v4/graphql\` | \`https://indexer.preprod.midnight.network/api/v4/graphql\` |
-| Node RPC | \`https://rpc.preview.midnight.network\` | \`https://rpc.preprod.midnight.network\` |
-| Proof server | \`https://proof-server.preview.midnight.network\` | \`https://proof-server.preprod.midnight.network\` |
-| Faucet | \`https://faucet.preview.midnight.network\` | \`https://faucet.preprod.midnight.network\` |
-| Explorer | \`https://explorer.1am.xyz\` (\`/tx/{hash}?network=preview\`) | \`https://explorer.1am.xyz\` (\`/tx/{hash}?network=preprod\`) |
-| Fee sponsor gateway | \`https://api-preview.1am.xyz\` | \`https://api-preprod.1am.xyz\` |
+The stagenet column is what this build uses. The Preview and Pre-production
+columns are kept as history — they were this demo's endpoints until
+2026/08/24, and records and explorer links made before that date still point
+at them.
+
+| Service | Stagenet (this build) | Preview (until 2026/08/24) | Pre-production (until 2026/08/24) |
+| --- | --- | --- | --- |
+| Indexer (GraphQL) | \`https://indexer.stagenet.shielded.tools/api/v4/graphql\` | \`https://indexer.preview.midnight.network/api/v4/graphql\` | \`https://indexer.preprod.midnight.network/api/v4/graphql\` |
+| Node RPC | \`wss://rpc.stagenet.shielded.tools\` | \`https://rpc.preview.midnight.network\` | \`https://rpc.preprod.midnight.network\` |
+| Proof server | **None published.** The default is empty on purpose and the wallet proves in this tab. \`VITE_MIDNIGHT_PROVING_URL\` takes a comma-separated, ordered list of external provers for builds that would rather not. | \`https://proof-server.preview.midnight.network\` | \`https://proof-server.preprod.midnight.network\` |
+| Faucet | \`https://faucet.stagenet.shielded.tools\` | \`https://faucet.preview.midnight.network\` | \`https://faucet.preprod.midnight.network\` |
+| Explorer | \`https://explorer.1am.xyz\` (\`/tx/{hash}?network=stagenet\`) | \`https://explorer.1am.xyz\` (\`/tx/{hash}?network=preview\`) | \`https://explorer.1am.xyz\` (\`/tx/{hash}?network=preprod\`) |
+| Fee sponsor gateway | Our own fee balancer — there is no 1AM gateway on stagenet — speaking the same \`/wallet-status\` and \`/balance-only\` contract. | \`https://api-preview.1am.xyz\` | \`https://api-preprod.1am.xyz\` |
 
 Mainnet has no faucet; its explorer entry is omitted until a link to it has
-been seen to resolve. The explorer's \`/tx/{hash}\` route takes the 32-byte
-ledger transaction **hash**, never the 33-byte identifier the node's submit
-call answers with.
+been seen to resolve. Stagenet was added to the 1AM explorer on 2026/08/25 and
+verified the same day against a real stagenet transaction. The explorer's
+\`/tx/{hash}\` route takes the 32-byte ledger transaction **hash**, never the
+33-byte identifier the node's submit call answers with.
 
 ## Error vocabularies
 
@@ -648,11 +699,13 @@ It should not, from Passport — Passport links the 32-byte ledger transaction
 hash. If you are building a link yourself, note that the 33-byte transaction
 *identifier* some APIs answer with resolves nowhere on the explorer.
 
-**Why can I not switch my wallet to Pre-production?**
-The network switcher changes the network *context* (which apps are shown,
-which faucet is linked); the wallet itself signs on the network the build was
-configured for. A fresh browser wallet also cannot complete a first sync on
-preprod today — see [Networks](#reference) above for the measurements.
+**Can I switch my wallet to Preview or Pre-production?**
+No — and since 2026/09/03 there is no longer a control that suggests you can.
+The network switcher was removed that day. This build transacts on stagenet
+only, because it runs the ledger-9 protocol and Preview and Pre-production run
+ledger-8; one build cannot serve both. Names already registered on those
+networks still resolve, and their transactions still link to the explorer. See
+[Networks](#reference) above.
 
 **I have NIGHT but my transaction says it cannot pay the fee. Why?**
 Fees are paid in DUST, not NIGHT, and they are normally covered by the fee

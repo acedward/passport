@@ -5,8 +5,8 @@ profile handshake with per-field consent, and an optional payment request,
 over Passport's public `postMessage` bridge.
 
 Clone it, delete the parts you do not need, and you have a working app. It is
-deliberately small — one commented `src/main.tsx` and two vendored protocol
-modules — and **self-contained**: copy the folder anywhere and it builds.
+deliberately small — one commented `src/main.tsx` and a vendored `src/bridge/`
+folder — and **self-contained**: copy the folder anywhere and it builds.
 Nothing in it links back to a monorepo, and `npm install` here is the same
 command you would run after copying it out.
 
@@ -33,7 +33,7 @@ things**:
 
 | You want | You ask for | Passport does |
 | --- | --- | --- |
-| Who is this user? | a **profile** — display name, addresses, the Passport contract | shows its own consent sheet; returns only the fields the user ticked |
+| Who is this user? | a **profile** — display name and the Passport contract | shows its own consent sheet; returns only the fields the user ticked |
 | A payment | a **transaction intent** — recipient, amount, purpose | shows its own approval sheet; signs, submits, and returns the node's transaction id |
 
 Your app **asks**. Passport **decides, with the user, on its own surface**.
@@ -44,10 +44,17 @@ same-origin policy keeps it there.
 Two mounting modes, one build, detected by `window.parent !== window`:
 
 - **Embedded** — Passport frames your app in its in-app browser. The normal
-  case, with per-field consent, and the only mode with the transaction
-  bridge.
-- **Standalone** — your app opens Passport in a popup for the profile
-  handshake. Consent is all-or-nothing; no transactions.
+  case, and the only one with per-field consent.
+- **Standalone** — your app opens Passport in a popup, for the profile
+  handshake and for the payment alike. Consent is all-or-nothing.
+
+**Payment is not a mode difference.** The transaction bridge works in both:
+framed, the intent goes to `window.parent`; standalone, to a Passport popup
+opened on the payment launch parameters. Same messages, same replies. Whether
+Act 3 is on at all is decided by `PAYMENT_ARMED` in `src/main.tsx` — three
+configuration conditions, and the mounting mode is deliberately not one of
+them. The one genuinely embedded-only message is `passport.incentive.report`,
+which the popup surface does not listen for.
 
 ## Documentation
 
@@ -64,9 +71,12 @@ Two mounting modes, one build, detected by `window.parent !== window`:
 src/
   main.tsx            ← the whole integration, in three labelled acts:
                         1 Connect, 2 Profile, 3 Payment (optional, off by default)
-  bridge/
-    profileProtocol.ts  vendored copy of Passport's definition — do not edit
-    txProtocol.ts       vendored copy of Passport's definition — do not edit
+  bridge/             ← the protocol layer. Never edit anything in this folder.
+    errors.ts           the error vocabulary, both protocols
+    limits.ts           every length cap on the wire
+    profileProtocol.ts  org.midnight.passport.profile/v1
+    txProtocol.ts       org.midnight.passport.tx/v1
+    version.ts          the wire revision, and the parse-result type
     index.ts            the barrel — the app-side half of both protocols
   BridgeLog.tsx       ← live transcript of every bridge message. A teaching
                         device; delete it when you are done learning.
@@ -101,7 +111,7 @@ Copy `.env.example` to `.env.local`. Every variable is optional.
 | `VITE_DEMO_PAYMENT` | unset | Exactly `1` arms Act 3. Anything else leaves it off. |
 | `VITE_DEMO_PAYMENT_ADDRESS` | unset | The unshielded recipient (`mn_addr…`). Act 3 stays off without it. |
 | `VITE_DEMO_PAYMENT_AMOUNT` | `100000` | Atomic NIGHT (`100000` = 0.1 NIGHT). |
-| `VITE_EXPLORER_TX_URL` | `https://explorer.1am.xyz/tx/{hash}?network=preview` | Link template; `{hash}` is replaced with the transaction hash. Empty renders the bare hash. |
+| `VITE_EXPLORER_TX_URL` | `https://explorer.1am.xyz/tx/{hash}?network=stagenet` | Link template; `{hash}` is replaced with the transaction hash. Empty renders the bare hash. |
 
 Vite inlines `VITE_*` variables into the public bundle. Never put a secret in
 one.
@@ -121,8 +131,10 @@ grid filters it out.
 
 - **A template, not a product.** Not audited, no tests. It exists to show the
   shape of the integration.
-- **The transaction bridge is embedded-only**, and `unshielded-transfer` is
-  the only intent kind. No contract calls, shielded transfers, or batching.
+- **`unshielded-transfer` is the only intent kind.** No contract calls,
+  shielded transfers, or batching. (The transaction bridge itself is not
+  embedded-only — it works over either channel; `passport.incentive.report` is
+  the one message that is.)
 - **`submitted` means *at the node*, not *final*.** No confirmation depth is
   reported; if you need finality, watch the chain yourself.
 - **Payments are paid in NIGHT by the user's Passport wallet.** The network
@@ -135,11 +147,19 @@ grid filters it out.
 
 ## Vendored code
 
-`src/bridge/` and `src/tokens.css` are copies from the Passport repository,
-each with a provenance header naming its source. Vendored rather than linked
-so this folder builds after a plain copy — you get a project that runs, not
-one that needs a monorepo you do not have. **Do not edit the protocol
-modules**; a protocol that has quietly drifted on one side is worse than none.
+`src/bridge/` and `src/tokens.css` come from the Passport repository. Five of
+the six files under `src/bridge/` — `errors.ts`, `limits.ts`,
+`profileProtocol.ts`, `txProtocol.ts`, and `version.ts` — are unmodified copies
+of Passport's own protocol definitions apart from a provenance header naming
+the upstream module and the date it was taken (the two protocol modules also
+have a trimmed paragraph about their place in the upstream tree). The sixth,
+`index.ts`, is this template's barrel over them. Vendored rather than linked so
+this folder builds after a plain copy — you get a project that runs, not one
+that needs a monorepo you do not have.
+
+**Do not edit anything under `src/bridge/`.** A protocol that has quietly
+drifted on one side is worse than none; fixes land upstream first and come
+back here as a fresh copy.
 
 ## Licence
 

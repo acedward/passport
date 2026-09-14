@@ -62,12 +62,12 @@ export interface PassportTransport {
 /**
  * What a presence check can honestly conclude.
  *
- * `unknown` is a real answer and the SDK refuses to launder it into a boolean.
- * There is no injected provider — a dApp on another origin cannot receive
- * `window.midnight.*`, the same-origin policy forbids it, and Passport
+ * `unknown` is a real answer and this package refuses to launder it into a
+ * boolean. There is no injected provider — a dApp on another origin cannot
+ * receive `window.midnight.*`, the same-origin policy forbids it, and Passport
  * deliberately does not weaken it — so outside a frame the only way to find
  * out whether Passport is there is to open a window, which costs a user
- * gesture. An SDK that returned `false` for "I did not check" would be lying
+ * gesture. A client that returned `false` for "I did not check" would be lying
  * to every integrator who guards a button on it.
  */
 export type PassportPresence =

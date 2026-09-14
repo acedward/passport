@@ -8,7 +8,7 @@
  * three-minute budget, and the plain-English sentence for every refusal code.
  * None of it was importable. All of it is here, once.
  *
- * WHAT AN INTEGRATOR STILL HAS TO KNOW, because the SDK cannot hide it:
+ * WHAT AN INTEGRATOR STILL HAS TO KNOW, because this package cannot hide it:
  *
  *   - Passport decides, not the app. You ask; the user answers on Passport's
  *     own surface. Your app never sees a key, a seed, or a signature.
@@ -43,7 +43,6 @@ import {
   createPassportTxRequest,
   readPassportTxResponse,
 } from '../protocol/tx.js';
-import { randomExchangePair } from './random.js';
 import { createIframeTransport } from './transport/iframe.js';
 import { createPopupTransport } from './transport/popup.js';
 import {
@@ -225,9 +224,28 @@ function sponsoredMessage(feeNote: string | undefined): string {
 
 export function createPassport(options: CreatePassportOptions): Passport {
   const host = options.window ?? window;
-  const origin = options.origin.replace(/\/+$/, '');
-  if (!origin) {
+  const given = options.origin.replace(/\/+$/, '');
+  if (!given) {
     throw new Error('createPassport requires the exact origin Passport is served from.');
+  }
+  /* `'midnightpassport.com'` is not an origin, and pinning to it pins to a
+     string that `event.origin` can never equal — every inbound message is
+     dropped in silence and the page waits out the whole budget. Parse it here,
+     at the call site, where the stack trace names the line that wrote it. */
+  let origin: string;
+  try {
+    origin = new URL(given).origin;
+  } catch {
+    throw new PassportProtocolError(
+      'invalid_request',
+      `origin is not a URL: ${given}. Pass a full origin, scheme included, such as https://midnightpassport.com.`,
+    );
+  }
+  if (origin === 'null') {
+    throw new PassportProtocolError(
+      'invalid_request',
+      `origin has no origin to pin to: ${given}. Pass an http(s) origin such as https://midnightpassport.com.`,
+    );
   }
 
   const timeoutMs = options.timeoutMs ?? PASSPORT_DEFAULT_TIMEOUT_MS;
@@ -270,6 +288,14 @@ export function createPassport(options: CreatePassportOptions): Passport {
   let destroyed = false;
 
   /**
+   * Every exchange that has posted and is still waiting, keyed by its own
+   * local-failure hook. `destroy()` settles each one rather than walking away
+   * from it: a promise whose only remaining escape was the three-minute budget
+   * is a spinner that outlives the component that started it.
+   */
+  const inFlight = new Set<(code: PassportLocalErrorCode) => void>();
+
+  /**
    * One exchange, start to finish: open a channel, post, and settle on the
    * first reply bound to this exchange's own pair — or on the budget, or on
    * the far side going away.
@@ -308,14 +334,22 @@ export function createPassport(options: CreatePassportOptions): Passport {
       const code =
         cause instanceof PassportTransportError ? cause.code : ('timed-out' as const);
       const failure = onLocalFailure(code);
-      emit('error', { code, message: passportErrorMessage(code) });
+      emit('error', { code, message: passportErrorMessage(code, 'local') });
       return failure;
+    }
+
+    /* Destroyed while the channel was still opening. There is nothing to post
+       to and nobody left to answer, so say so now rather than posting into a
+       transport that has been torn down. */
+    if (destroyed) {
+      cleanup();
+      return onLocalFailure('destroyed');
     }
 
     const open = channel;
     let message: object;
     try {
-      /* The local `invalid-request`, and the reason this SDK builds the
+      /* The local `invalid-request`, and the reason this client builds the
          message through a factory rather than posting a literal. A malformed
          request used to go out, get dropped by Passport's parser, and produce
          no reply at all — three minutes of spinner for a typo. It never
@@ -330,13 +364,15 @@ export function createPassport(options: CreatePassportOptions): Passport {
 
     return new Promise<T>((resolve) => {
       const settle = (value: T): void => {
+        inFlight.delete(fail);
         cleanup();
         resolve(value);
       };
       const fail = (code: PassportLocalErrorCode): void => {
-        emit('error', { code, message: passportErrorMessage(code) });
+        emit('error', { code, message: passportErrorMessage(code, 'local') });
         settle(onLocalFailure(code));
       };
+      inFlight.add(fail);
 
       stopListening = transport.listen((data) => {
         const settled = match(data, open);
@@ -428,7 +464,12 @@ export function createPassport(options: CreatePassportOptions): Passport {
                 : `Passport shared what you approved. Not shared: ${withheld.join(', ')}.`,
           };
         },
-        (code) => ({ approved: false, source: 'local', error: code, message: passportErrorMessage(code) }),
+        (code) => ({
+          approved: false,
+          source: 'local',
+          error: code,
+          message: passportErrorMessage(code, 'local'),
+        }),
       );
     },
 
@@ -483,7 +524,12 @@ export function createPassport(options: CreatePassportOptions): Passport {
             message: [passportErrorMessage(error), response.detail].filter(Boolean).join(' '),
           };
         },
-        (code) => ({ status: 'failed', source: 'local', error: code, message: passportErrorMessage(code) }),
+        (code) => ({
+          status: 'failed',
+          source: 'local',
+          error: code,
+          message: passportErrorMessage(code, 'local'),
+        }),
       );
     },
 
@@ -495,17 +541,19 @@ export function createPassport(options: CreatePassportOptions): Passport {
         return {
           sent: false,
           error: 'unsupported-transport',
-          message: passportErrorMessage('unsupported-transport'),
+          message: passportErrorMessage('unsupported-transport', 'local'),
         };
       }
       const controller = new AbortController();
       try {
-        const pair = randomExchangePair();
         const channel = await transport.open('incentive', controller.signal);
+        /* The channel already minted a pair, and it is the pair the transport
+           will answer on. Minting a second one here labelled the report with
+           an identifier that belonged to no channel. */
         channel.post(
           createPassportIncentiveReport({
-            requestId: pair.requestId,
-            nonce: pair.nonce,
+            requestId: channel.pair.requestId,
+            nonce: channel.pair.nonce,
             id: incentive.id,
             label: incentive.label,
             ...(incentive.txId === undefined ? {} : { txId: incentive.txId }),
@@ -522,7 +570,7 @@ export function createPassport(options: CreatePassportOptions): Passport {
         controller.abort();
         const code: PassportLocalErrorCode =
           cause instanceof PassportProtocolError ? 'invalid-request' : 'unsupported-transport';
-        return { sent: false, error: code, message: passportErrorMessage(code) };
+        return { sent: false, error: code, message: passportErrorMessage(code, 'local') };
       }
     },
 
@@ -535,6 +583,11 @@ export function createPassport(options: CreatePassportOptions): Passport {
 
     destroy() {
       destroyed = true;
+      /* Settle first, and while the listeners are still there to hear it: a
+         caller that unmounts mid-exchange gets an answer now rather than a
+         promise that resolves three minutes after the component is gone. */
+      for (const fail of [...inFlight]) fail('destroyed');
+      inFlight.clear();
       transport.destroy();
       listeners.message.clear();
       listeners.ready.clear();

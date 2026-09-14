@@ -5,11 +5,46 @@ published GitHub release.** `main` is the planning branch and does not contain
 the PWA. Deploying by hand is possible and is documented below, but it is not
 the normal path and it runs none of the gates.
 
+## Staging first, always (2026/09/14, non-negotiable)
+
+**Nothing is deployed to production directly, ever, for any reason, including
+"it is a one-line fix".** There are two environments and one direction of
+travel:
+
+| | |
+|---|---|
+| **Staging** | <https://staging.midnightpassport.com> — Vercel project `midnight-passport-staging`, team Webisoft. **Every** build lands here first, experiments included. |
+| **Production** | <https://midnightpassport.com> — the link stakeholders hold. It runs only a build that passed every gate on staging. |
+
+A build is promoted from staging to production only when **all** of the
+following are true on staging, at the exact commit:
+
+1. `tsc`, the unit suites, `check-pwa`, and the mocked Playwright tier are green
+   on that commit.
+2. The live walk passes against staging:
+   `RUN_LIVE=1 LIVE_URL=https://staging.midnightpassport.com npx playwright test e2e/stagenet.live.spec.ts --project=chromium`.
+3. A **returning-browser** check passes: a browser or installed PWA that already
+   held the previous build opens the new one and completes onboarding and a
+   send. The automated walk is fresh-browser only and cannot see cache defects —
+   on 2026/09/14 a year-long immutable cache on the contract manifest broke
+   new-account setup for every returning reviewer while the walk stayed green.
+4. A real-device walk on Android and on iPhone of the three scoped flows:
+   passkey onboarding, a `.night` name, and shielded balance with send and
+   receive.
+
+Sponsor-side changes are deployed to the droplet **before** the build that needs
+them is promoted. Lockfiles are never regenerated from scratch: rebuild from the
+previous lock and diff the resolutions.
+
+The authoritative statement of this rule is the "Deployment rule" section of
+[`.claude/CLAUDE.md`](../../.claude/CLAUDE.md); this section records it where a
+deployer will look for it.
+
 ## What deploys, and from where
 
 | | |
 |---|---|
-| Site | <https://midnightpassport.com> |
+| Site | <https://midnightpassport.com> (promoted from staging — see above) |
 | App | [`examples/passport-demo/`](../../examples/passport-demo/) |
 | Vercel project | `midnight-passport-app` |
 | Workflow | [`.github/workflows/deploy-demo.yml`](../../.github/workflows/deploy-demo.yml) |

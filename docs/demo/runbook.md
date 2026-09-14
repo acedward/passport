@@ -14,7 +14,8 @@ runbook no longer contains, because earlier versions of it did:
 - **No user-paid name claim.** When a funder is configured and sponsoring, the
   `.night` name is registered *for* the user and their wallet spends nothing.
 - **No `?demoMode=local`.** The query parameter is gone from the client. The
-  demo runs against a public network — Preview by default.
+  demo runs against a public network — **stagenet**, which is the only network
+  this build can transact on.
 
 ## Start Passport
 
@@ -28,8 +29,8 @@ Open `http://localhost:5175`. The port is pinned in the source with
 frames apps by URL, and a handshake against a moving origin fails silently. Do
 not substitute `127.0.0.1`.
 
-Every setting is optional — the defaults run against Preview, with fees
-sponsored through the preview gateway. Copy
+Every setting is optional — the defaults run against stagenet, with fees
+sponsored through the stagenet balancer. Copy
 `examples/passport-demo/.env.example` to `.env.local` to change any of them;
 that file documents each variable and why it exists.
 
@@ -58,7 +59,7 @@ correct behaviour, but not the flow you want to show.
 ```sh
 cd examples/passport-funder
 npm run generate-seed              # prints a seed and its address
-# fund that address ONCE from https://faucet.preview.midnight.network
+# fund that address ONCE from https://faucet.stagenet.shielded.tools
 FUNDER_SEED=<the seed> npm start   # port 8799
 ```
 
@@ -79,8 +80,11 @@ within about a minute. The full API, refusal codes, and cost maths are in
    signed in to rather than replaced. Record the platform and authenticator.
 2. **The wallet opens in this tab.** The WebAuthn PRF output becomes a 32-byte
    Midnight seed and the wallet is built in the browser. The first sync walks
-   the chain: measured on Preview (~296k blocks), about 75 seconds. Record how
-   long it took and on what hardware.
+   the chain, and how long that takes is a function of the chain's depth on the
+   day. (The often-quoted "about 75 seconds" was measured on **Preview** on
+   2026/08/06, at a chain depth of ~296k blocks; this build does not run on
+   Preview and that figure is history, not an expectation.) Record how long it
+   took, on what hardware, and at what chain height.
 3. **The name screen.** Availability is a live `domains.member()` read against
    the deployed `.night` TLD as you type, and the price shown is the deployed
    contract's own constant for that label length. A registry that cannot be
@@ -120,14 +124,21 @@ within about a minute. The full API, refusal codes, and cost maths are in
    See [`examples/clubcoin-mock/README.md`](../../examples/clubcoin-mock/README.md).
 10. **Backup.** Back the private state up behind a password and restore it.
 
-### Not yet built: the Otrix totem
+### Not yet built: the Otrix **totem QR flow**
 
-The next partner flow is **Otrix**: a totem displays a QR code carrying a
-shielded deposit address, and the user pays it from Passport. It does not
-exist yet — no code, no route, no fixture. Do not demonstrate it, and do not
-describe it as available. ClubCoin, which used to be named here as the partner
-dApp, is out of the demo entirely; the `clubcoin-mock` directory survives only
-as the generic URL-callback example.
+The Otrix flow that does not exist is the **totem**: a totem displaying a QR
+code carrying a shielded deposit address, which the user pays from Passport.
+There is no code, no route, and no fixture for it. Do not demonstrate it, and
+do not describe it as available.
+
+The rest of the Otrix integration is built and live. The **partner gift
+endpoint** credits a Passport by account, `.night` name, or shielded address,
+and is documented in [`partner-api.md`](partner-api.md). Demonstrate that; do
+not let "Otrix is not built" stand as a statement about the whole partnership.
+
+ClubCoin, which used to be named here as the partner dApp, is out of the demo
+entirely; the `clubcoin-mock` directory survives only as the generic
+URL-callback example.
 
 ## Upgrading a Passport
 
@@ -152,7 +163,7 @@ transaction today, with nothing done to it. Only sending is at stake.
 So an older Passport is migrated, once: drain it, deploy a new account with the
 same commitments derived from the same passkey, move the name across, put the
 value back. About four to six sponsored transactions, nothing the holder pays
-for, no new passkey and no new name. Hector accepted this shape on 2026/09/08.
+for, no new passkey and no new name. This shape was accepted on 2026/09/08.
 
 The screen is `src/screens/Upgrade.tsx` — the claim's three-step view, titled
 "Your Passport is being upgraded". Nothing spendable is on it: for the minutes
@@ -260,13 +271,16 @@ transaction hash where one exists and the error text where it fails.
 
 - **Mainnet is hard-blocked in code.** Do not remove that check to record
   something.
-- **Preview only.** Every preprod endpoint is healthy and the sponsor is funded
-  there, but a cold wallet cannot walk ~1.98M blocks in a browser tab — it
-  crashes at around 4.2 GB of heap. A depth guard in `src/lib/localWallet.ts`
-  refuses a from-genesis walk above 500k blocks with an honest error rather
-  than starting one. The measurements and the ruled-out tip-start experiment
-  are written up in `examples/passport-demo/.env.example` and in
-  `src/lib/walletSnapshot.ts`.
+- **Stagenet only.** `TRANSACTABLE_NETWORKS` in
+  `examples/passport-demo/src/lib/networks.ts` has one entry, and it is a
+  statement about the WASM ledger module linked into this bundle rather than
+  about which hosts are up: this build speaks ledger-9, and Preview and
+  Pre-production speak ledger-8. There is also a depth guard in
+  `src/lib/localWallet.ts` that refuses a from-genesis walk above 500k blocks
+  with an honest error rather than starting one — a cold wallet cannot walk
+  preprod's ~1.98M blocks in a browser tab without crashing at around 4.2 GB of
+  heap. The measurements and the ruled-out tip-start experiment are written up
+  in `examples/passport-demo/.env.example` and in `src/lib/walletSnapshot.ts`.
 - **Sponsored fees are gated on the sponsor's own answer.** The client checks
   `available > 0` from the gateway's `/wallet-status`, never on a hopeful
   assumption. `VITE_SPONSOR_URL=off` disables sponsorship, at which point a

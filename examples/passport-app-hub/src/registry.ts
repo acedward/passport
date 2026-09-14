@@ -27,7 +27,7 @@ import snapshot from './registry.snapshot.json';
 const FETCH_TIMEOUT_MS = 8_000;
 
 export type RegistryCategory = 'defi' | 'gaming' | 'tools' | 'identity' | 'other';
-export type RegistryNetwork = 'preview' | 'preprod' | 'mainnet';
+export type RegistryNetwork = 'stagenet' | 'preview' | 'preprod' | 'mainnet';
 export type RegistrySection = 'standard' | 'hackathon';
 
 export interface RegistryApp {
@@ -58,7 +58,12 @@ export interface RegistryResult {
 }
 
 const CATEGORIES: readonly RegistryCategory[] = ['defi', 'gaming', 'tools', 'identity', 'other'];
-const NETWORKS: readonly RegistryNetwork[] = ['preview', 'preprod', 'mainnet'];
+/* Must match `NETWORKS` in examples/passport-demo/src/lib/registry.ts. A
+   network missing here is not an error the page reports — the entry's
+   `networks` array is filtered, so the network silently disappears from a
+   listing that is otherwise correct. `stagenet` was missing until 2026/09/14,
+   which is every network the demo actually transacts on. */
+const NETWORKS: readonly RegistryNetwork[] = ['stagenet', 'preview', 'preprod', 'mainnet'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;

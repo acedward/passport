@@ -594,6 +594,32 @@ describe('the verification walk', () => {
     const verdict = verifyPassportCallbackReply(envelope, OPTIONS);
     expect(verdict.checks.at(-1)!.detail).toMatch(/first visit/);
   });
+
+  it('refuses to bind an UNSIGNED reply to a Passport it already knows', () => {
+    /* The hole this closes: an app that had accepted `scheme: 'none'` and ALSO
+       named the Passport it expected used to get `ok: true` with the binding
+       step ticked — a reply anybody could have typed into the address bar,
+       reported as "the same Passport as last time". There is no key in an
+       unsigned reply, so there is nothing that could be that Passport. */
+    const known = passportUnshieldedAddressFromKey(PUBLIC_KEY);
+    const { envelope } = seal(profilePayload(), { unsigned: true });
+    const verdict = verifyPassportCallbackReply(envelope, {
+      ...OPTIONS,
+      requireSignature: false,
+      expectedSignerAddress: known,
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.ok === false && verdict.reason).toMatch(
+      /unsigned reply cannot be bound to a known Passport/,
+    );
+    /* And the trail says the step FAILED rather than omitting it — a page that
+       shows its work must not show a gap where a refusal happened. */
+    expect(verdict.checks.at(-1)).toMatchObject({
+      label: 'Signing key is the Passport this app already knows',
+      ok: false,
+    });
+    expect(verdict.checks.at(-1)!.detail).toMatch(/no signature/);
+  });
 });
 
 describe('the receiver’s bookkeeping', () => {
@@ -714,7 +740,7 @@ describe('the receiver’s bookkeeping', () => {
     expect(readPassportCallback({ hash: signedFragment() })).toMatchObject({ kind: 'response' });
   });
 
-  it('reuses the SDK’s own sentences for an unauthenticated refusal', () => {
+  it('reuses this package’s own sentences for an unauthenticated refusal', () => {
     expect(passportCallbackErrorMessage('denied')).toMatch(/declined/);
     expect(passportCallbackErrorMessage('profile_unavailable')).toMatch(/no profile/);
   });

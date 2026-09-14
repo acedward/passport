@@ -23,8 +23,10 @@
  *     fields and not others, so render what actually arrived and say plainly
  *     what did not.
  *
- * Everything under `src/bridge/` is a verbatim copy of Passport's own protocol
- * definitions. Do not edit those; edit this file.
+ * Everything under `src/bridge/` is Passport's own protocol layer — five
+ * vendored modules, unmodified apart from a provenance header, plus the barrel
+ * that re-exports the app-side half of them. Do not edit that folder; edit
+ * this file.
  * ========================================================================= */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -134,15 +136,16 @@ const PASSPORT_WINDOW = 'midnight-passport';
 
 /**
  * The explorer link, as a URL template with a `{hash}` placeholder. The
- * default is the 1AM explorer, verified live 2026/08/07 with a real preview
- * transaction. The placeholder takes the 32-byte ledger transaction hash that
- * Passport reports — never a transaction identifier, which no explorer
- * resolves. A link that looks right and goes nowhere is worse than showing
- * the bare hash, so an empty value here renders the hash as plain text
- * instead.
+ * default is the 1AM explorer on **stagenet**, which is the network Passport
+ * itself transacts on. The placeholder takes the 32-byte ledger transaction
+ * hash that Passport reports — never a transaction identifier, which no
+ * explorer resolves. A link that looks right and goes nowhere is worse than
+ * showing the bare hash, so an empty value here renders the hash as plain
+ * text instead. Point `VITE_EXPLORER_TX_URL` at another `network=` if you are
+ * testing against a Passport on one.
  */
 const EXPLORER_TX_URL = (
-  import.meta.env.VITE_EXPLORER_TX_URL ?? 'https://explorer.1am.xyz/tx/{hash}?network=preview'
+  import.meta.env.VITE_EXPLORER_TX_URL ?? 'https://explorer.1am.xyz/tx/{hash}?network=stagenet'
 ).trim();
 
 function explorerTxHref(txId: string): string | null {

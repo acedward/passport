@@ -191,7 +191,7 @@ export function createPopupTransport(options: PopupTransportOptions): PassportTr
     },
 
     async presence(): Promise<PassportPresence> {
-      /* The honest answer, and the SDK will not launder it into a boolean.
+      /* The honest answer, and this package will not launder it into a boolean.
          There is no injected provider to look for — a page on another origin
          cannot receive `window.midnight.*`, and Passport deliberately does not
          weaken the same-origin policy to provide one. Finding out costs a

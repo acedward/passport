@@ -8,11 +8,23 @@
  */
 
 export const PASSPORT_ORIGIN: string =
-  import.meta.env.VITE_PASSPORT_ORIGIN ?? 'http://localhost:5173';
+  import.meta.env.VITE_PASSPORT_ORIGIN ?? 'http://localhost:5175';
 
-/** Where the door fee is paid to. Never shown on screen — it is not copy. */
-export const DOORMAN_ACCOUNT: string =
-  import.meta.env.VITE_DOORMAN_ACCOUNT ?? 'doorman-demo-account';
+/**
+ * Where the door fee is paid to. Never shown on screen — it is not copy.
+ *
+ * `null` when this build was given no account, and there is deliberately no
+ * placeholder to fall back on: a made-up address turns a missing setting into
+ * a payment Passport refuses for reasons that have nothing to do with the
+ * door. Doorman says so on screen and does not offer the payment at all.
+ */
+export const DOORMAN_ACCOUNT: string | null =
+  import.meta.env.VITE_DOORMAN_ACCOUNT ?? null;
 
-/** The price of entry, in the smallest unit, as a decimal string. */
-export const DOOR_FEE = '5';
+/**
+ * The price of entry, in atomic NIGHT, as a base-10 string — which is what the
+ * wire protocol carries. One NIGHT is 1,000,000 atomic units (`NIGHT_DECIMALS`
+ * is 6 in `@midnight-passport/connect`), so this is 0.1 NIGHT. Render it with
+ * the package's `formatNight`; never divide it.
+ */
+export const DOOR_FEE = '100000';

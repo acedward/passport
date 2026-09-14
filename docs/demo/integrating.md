@@ -1,13 +1,16 @@
 # Integrating with Passport
 
-*Last revised 2026/09/02.*
+*Last revised 2026/09/14.*
 
 This is what a partner app has to do to work with Passport, and — just as
 importantly — what it must not assume. The reference implementation is
 [`examples/doorman`](../../examples/doorman): a small app served on its own
 origin that detects Passport, asks who is at the door, and asks for one
-payment. Everything below is in that app, and nothing in that app is outside
-this document.
+payment. Sections 1 to 4 and 6 are all in that app. Section 5 — the signed
+redirect channel — is not: Doorman uses the pop-up transport only, and the
+redirect channel's worked example is in
+[`packages/connect/README.md`](../../packages/connect/README.md) and its own
+test suite.
 
 The shape of the relationship is short: **your app asks, Passport decides, the
 user is the one who decides inside Passport.** Your app never receives an
@@ -16,11 +19,37 @@ user did not agree to hand over. If you find yourself wanting a call that
 skips the user, the answer is no — nothing that spends or that signs is ever
 promptless.
 
-## 1. Install
+## 1. Getting the package
 
+**`@midnight-passport/connect` is not on npm.** There is no published version
+and no private registry standing in for one, so an `npm install` by name will
+fail. Both working routes start by cloning this repository:
+
+```sh
+git clone https://github.com/midnightntwrk/passport-demo.git
+cd passport-demo
+npm install            # the root install; it links the workspaces
 ```
-npm install @midnight-passport/connect
+
+**Route 1 — build your app inside this repository.** Point your
+`tsconfig.json` `paths` and your bundler alias at `packages/connect/src`.
+[`examples/doorman`](../../examples/doorman) does exactly this; its
+`vite.config.ts` and `tsconfig.json` are the two files to copy. There is no
+build step — the sources are TypeScript and your bundler compiles them with the
+rest of your app.
+
+**Route 2 — take a tarball out.** For an app that lives elsewhere:
+
+```sh
+cd packages/connect
+npm run build          # tsc -p tsconfig.json → dist/
+npm pack               # → midnight-passport-connect-0.1.1.tgz
+cd /path/to/your/app
+npm install /path/to/passport-demo/packages/connect/midnight-passport-connect-0.1.1.tgz
 ```
+
+Re-pack after every change to the package: nothing about an installed tarball
+updates itself.
 
 React is an optional peer dependency, and only the React entry point needs it.
 
@@ -115,18 +144,55 @@ window with a round trip through the address bar.
   amount that is not positive atomic units, or a purpose longer than the
   consent sheet can show, is your bug and you hear about it immediately rather
   than three redirects later.
-- `newPassportState()` and `rememberPassportState()` / `takePassportState()`
-  mint and hold the state token that ties the reply to the launch.
-- `readPassportCallback()` and `readPassportTxCallback()` read the signed reply
-  out of the fragment on your callback page, verify it, and scrub it from the
-  address bar. The scrub matters: the reply lives in the user's history, and
-  without it a reload or the back button re-presents the same reply to the same
-  app. `createPassportNonceLedger()` catches the case where somebody pastes the
-  URL back in by hand.
+- `newPassportState()` mints the state token that ties the reply to the launch,
+  and `rememberPassportState(key, state)` / `takePassportState(key)` hold and
+  consume it. **Both take a key**, and neither has a default: the key namespaces
+  the token so that two flows in one app cannot consume each other's. The
+  examples below pass `'doorman'`; pick one name per flow and use it on both
+  sides.
+- `readPassportCallback()` and `readPassportTxCallback()` **read and scrub. They
+  do not verify.** They lift the envelope out of the fragment and remove it from
+  the address bar, and that is all. The scrub matters on its own — the reply
+  lives in the user's history, and without it a reload or the back button
+  re-presents the same reply to the same app — but a scrubbed reply is still an
+  unverified reply, and nothing in it is a fact yet.
+- **`verifyPassportCallbackReply(envelope, options)` is what verifies a profile
+  reply, and `verifyPassportTxCallbackReply(envelope, options)` a payment
+  reply.** The payment one additionally takes `expectedIntent`, and compares the
+  recipient, the amount, the purpose, and the kind against what your app asked
+  for — without it a signed `submitted` proves that a Passport said something,
+  not that it paid what you asked it to pay. Both return a verdict: `ok: true`
+  with the payload, or `ok: false` with a `reason`, and either way a `checks`
+  trail of every step that ran.
+- `createPassportNonceLedger()` catches the case where somebody pastes the URL
+  back in by hand. Pass its `seen` as the `seenNonce` option, and `record` the
+  nonce **after** an ok verdict — recording before you have a verdict burns a
+  nonce on a reply you then reject, and a replay of it would be indistinguishable
+  from the first attempt.
+
+```ts
+const ledger = createPassportNonceLedger();
+const returned = readPassportCallback();           // reads and scrubs, only
+if (returned.kind === 'response') {
+  const verdict = verifyPassportCallbackReply(returned.envelope, {
+    expectedAudience: location.origin,
+    expectedState: takePassportState('doorman'),
+    seenNonce: ledger.seen,
+  });
+  if (verdict.ok) {
+    ledger.record(verdict.payload.nonce);          // only after an ok verdict
+    greet(verdict.payload.profile.displayName);
+  } else {
+    show(verdict.reason);                          // verdict.checks shows the walk
+  }
+}
+```
 
 The reply is signed, so your callback page can check that it came from the
 Passport it launched — which is the only reason a redirect channel is safe to
-offer at all.
+offer at all. Pass `expectedSignerAddress` on a return visit and the verdict
+also says whether it was the *same* Passport as last time; an unsigned reply
+handed that option is refused, because there is no key in it to bind.
 
 ## 6. What Passport will refuse
 

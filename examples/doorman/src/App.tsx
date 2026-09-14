@@ -5,6 +5,7 @@ import type {
   PassportProfileResult,
   PassportTxErrorCode,
 } from '@midnight-passport/connect';
+import { formatNight } from '@midnight-passport/connect';
 import {
   usePassport,
   usePassportPayment,
@@ -12,6 +13,10 @@ import {
 } from '@midnight-passport/connect/react';
 
 import { DOORMAN_ACCOUNT, DOOR_FEE, PASSPORT_ORIGIN } from './config.js';
+
+/* The fee travels in atomic NIGHT and is read in NIGHT. The package does the
+   conversion by string arithmetic, so the two never drift apart. */
+const DOOR_FEE_NIGHT = formatNight(DOOR_FEE);
 
 /* ---------------------------------------------------------------------------
  * Copy
@@ -92,6 +97,8 @@ export function App() {
   };
 
   const payTheFee = async () => {
+    /* Nothing to pay to. The button is disabled for the same reason. */
+    if (DOORMAN_ACCOUNT === null) return;
     setOutcome(null);
     /*
      * The request is built by the package, sent to the Passport origin, and
@@ -145,15 +152,20 @@ export function App() {
 
       <section className="step">
         <h2>3. Pay the entry fee</h2>
-        <p className="detail">Entry is {DOOR_FEE}. Passport asks you before anything is sent.</p>
+        <p className="detail">
+          Entry is {DOOR_FEE_NIGHT} NIGHT. Passport asks you before anything is sent.
+        </p>
         <button
           type="button"
           className="primary"
           onClick={() => void payTheFee()}
-          disabled={payment.pending}
+          disabled={payment.pending || DOORMAN_ACCOUNT === null}
         >
-          {payment.pending ? 'Waiting for Passport…' : `Pay ${DOOR_FEE} and go in`}
+          {payment.pending ? 'Waiting for Passport…' : `Pay ${DOOR_FEE_NIGHT} NIGHT and go in`}
         </button>
+        {DOORMAN_ACCOUNT === null ? (
+          <p className="detail">No door account is configured for this build.</p>
+        ) : null}
         {outcome ? <p className={admitted ? 'detail good' : 'detail'}>{outcome}</p> : null}
       </section>
 

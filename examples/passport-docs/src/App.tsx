@@ -13,10 +13,15 @@ import { getResolvedTheme, subscribeToTheme, toggleTheme, type ResolvedTheme } f
  * additionally scrolls to that heading (the ids `markdown.tsx` assigns).
  */
 
+/* These must stay in step with the deployments table in `content.ts` — the
+   same three sites, named the same way. They were left on their old
+   `*.vercel.app` hostnames after the move to the `midnightpassport.com`
+   subdomains, so the navigation and the page body disagreed about where the
+   apps live. */
 const LIVE_APPS = [
-  { label: 'Passport', href: 'https://midnight-passport-app.vercel.app' },
-  { label: 'App Hub', href: 'https://passport-app-hub.vercel.app' },
-  { label: 'App template', href: 'https://midnight-passport-app-template.vercel.app' },
+  { label: 'Passport', href: 'https://midnightpassport.com' },
+  { label: 'App Hub', href: 'https://hub.midnightpassport.com' },
+  { label: 'App template', href: 'https://template.midnightpassport.com' },
 ];
 
 function sectionIdFromHash(hash: string): string {

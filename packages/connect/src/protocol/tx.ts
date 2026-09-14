@@ -374,12 +374,12 @@ export function createPassportTxErrorResponse(
 /**
  * An app's report that it granted the user something.
  *
- * UNAUTHENTICATED BY CONSTRUCTION, and the SDK says so rather than shipping it
- * as a feature: the app asserts it granted something and Passport records the
- * assertion verbatim. There is no proof, and nothing downstream should treat
- * one of these as evidence that anything was granted. It exists so a demo can
- * show the loop; a production incentive belongs on a chain or behind a signed
- * receipt.
+ * UNAUTHENTICATED BY CONSTRUCTION, and this package says so rather than
+ * shipping it as a feature: the app asserts it granted something and Passport
+ * records the assertion verbatim. There is no proof, and nothing downstream
+ * should treat one of these as evidence that anything was granted. It exists
+ * so a demo can show the loop; a production incentive belongs on a chain or
+ * behind a signed receipt.
  */
 export function readPassportIncentiveReport(
   value: unknown,

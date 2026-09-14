@@ -14,7 +14,8 @@ Two protocols, both plain `postMessage` over a pinned origin:
 | Transactions | `org.midnight.passport.tx/v1` | Ask Passport to make an unshielded NIGHT transfer. |
 
 The identifiers are exported as `PASSPORT_PROFILE_PROTOCOL`
-(`profileProtocol.ts:17`) and `PASSPORT_TX_PROTOCOL` (`txProtocol.ts:43`).
+(`src/bridge/profileProtocol.ts`) and `PASSPORT_TX_PROTOCOL`
+(`src/bridge/txProtocol.ts`).
 
 ---
 
@@ -33,31 +34,69 @@ The identifiers are exported as `PASSPORT_PROFILE_PROTOCOL`
    object, never a coerced one — for anything that is not exactly a
    well-formed message. Every string on the wire is length-capped so a hostile
    counterparty cannot push megabytes of text into the other side's interface.
-4. **Unknown message types are dropped harmlessly.** That is what makes the
-   embedded acknowledgement (`passport.profile.hello`) safe: it is not part of
-   either protocol, and Passport's parsers simply ignore it.
+4. **Messages that are not this protocol are dropped in silence** — a page
+   receives traffic from analytics scripts, extensions, and its own framework,
+   and answering any of it would be noise at best. A message that *is* this
+   protocol and still does not parse is a different case: it gets a reply. See
+   [Failures that are answered](#failures-that-are-answered) below.
+5. **Wire revision.** Every message carries a numeric `version`. It is
+   optional on the wire and **absent means 1**, so a message minted before the
+   field existed still parses (`readProtocolVersion`, `src/bridge/version.ts`).
+
+### Envelope fields (both protocols)
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `protocol` | yes | Exactly the protocol identifier above. A different string is *not this protocol* — dropped, never answered. |
+| `type` | yes | One of the message types below. |
+| `version` | **optional on the wire; absent means 1** | The wire revision. `PASSPORT_PROTOCOL_VERSION` (`src/bridge/version.ts`) is what this build mints — currently `1` — and `PASSPORT_SUPPORTED_VERSIONS` is everything it can read. Present must be a positive safe integer: `"1"`, `1.5`, `NaN`, and `-1` are *malformed*, not a mismatch. A well-formed revision nobody here supports is answered `version_mismatch` / `version-mismatch`. |
+| `requestId`, `nonce` | yes (both optional on `passport.profile.hello`) | The pair the reply is bound to. |
+
+The JSON examples below omit `version` for brevity; a message this build mints
+always carries `"version": 1`.
+
+### Failures that are answered
+
+A message that names one of these two protocols is never dropped in silence
+when it can be answered. The parsers return a *result* rather than `null`
+(`PassportParseResult`, `src/bridge/version.ts`), and Passport acts on which
+kind of failure it was:
+
+| Parse failure | What Passport does |
+| --- | --- |
+| `not-passport` | Nothing. It was never addressed to Passport. |
+| `version-mismatch` | Replies `version_mismatch` (profile) or `version-mismatch` (transaction). |
+| `malformed` | Replies `invalid_request` (profile) or `invalid-request` (transaction). |
+
+The one thing a reply needs is somewhere to go: Passport reads a `requestId`
+and `nonce` off the rejected message (`pairOfUnreadableMessage`,
+`src/bridge/profileProtocol.ts`) and binds the refusal to them. A message with
+no usable pair — and, in the standalone popup, one whose pair is not that
+window's launch pair — genuinely cannot be answered, and is dropped.
 
 ### Length caps
 
-| Cap | Value | Applies to | Source |
-| --- | --- | --- | --- |
-| Ids and short strings (profile) | 256 | `requestId`, `nonce`, `displayName`, `network` | `profileProtocol.ts:69` |
-| Addresses (profile) | 512 | contract and Midnight addresses | `profileProtocol.ts:71` |
-| Ids (tx) | 256 | `requestId`, `nonce`, `txId`, incentive `id` | `txProtocol.ts:46` |
-| `purpose` | 140 | tx intent | `txProtocol.ts:47` |
-| `recipientAddress` | 200 | tx intent | `txProtocol.ts:48` |
-| `detail` | 400 | tx response | `txProtocol.ts:49` |
-| Incentive `label` | 80 | incentive report | `txProtocol.ts:50` |
-| `feeNote` | 140 | tx response | `txProtocol.ts:51` |
+Every cap is a named constant in `src/bridge/limits.ts`.
 
-All bounded strings must also be non-empty (`isBoundedString` in both
-modules).
+| Cap | Value | Applies to | Constant |
+| --- | --- | --- | --- |
+| Ids and short strings (profile) | 256 | `requestId`, `nonce`, `displayName`, `network` | `MAX_STRING_LENGTH` |
+| Addresses (profile) | 512 | contract and Midnight addresses | `MAX_PROFILE_ADDRESS_LENGTH` |
+| Ids (tx) | 256 | `requestId`, `nonce`, `txId`, incentive `id` | `MAX_STRING_LENGTH` |
+| `purpose` | 140 | tx intent | `MAX_PURPOSE_LENGTH` |
+| `recipientAddress` | 200 | tx intent | `MAX_TX_RECIPIENT_ADDRESS_LENGTH` |
+| `detail` | 400 | tx response | `MAX_DETAIL_LENGTH` |
+| Incentive `label` | 80 | incentive report | `MAX_LABEL_LENGTH` |
+| `feeNote` | 140 | tx response | `MAX_FEE_NOTE_LENGTH` |
+
+All bounded strings must also be non-empty (`isBoundedString`,
+`src/bridge/version.ts`).
 
 ---
 
 ## Profile — `org.midnight.passport.profile/v1`
 
-Three message types. Who mints the `requestId`/`nonce` pair depends on the
+Four message types. Who mints the `requestId`/`nonce` pair depends on the
 mounting mode; the shapes do not.
 
 ### `passport.profile.ready` — Passport → app
@@ -71,9 +110,11 @@ mounting mode; the shapes do not.
 }
 ```
 
-Validation (`parsePassportProfileReady`, `profileProtocol.ts:114`): exact
-`protocol` and `type`, and `requestId` and `nonce` as non-empty strings of at
-most 256 characters. Anything else parses to `null`.
+Validation (`parsePassportProfileReady`, `src/bridge/profileProtocol.ts`):
+exact `protocol` and `type`, a readable `version`, and `requestId` and `nonce`
+as non-empty strings of at most 256 characters. Anything else parses to `null`
+(`readPassportProfileReady` is the same check returning a result rather than
+`null`).
 
 Mode difference:
 
@@ -93,6 +134,28 @@ here is your pair back*. The pair, never the message type, is what tells an app
 which exchange is being answered. Match on it — see
 [the popup launch contract](#the-popup-launch-contract) below.
 
+### `passport.profile.hello` — app → Passport
+
+The frame's acknowledgement, and a **typed message of this protocol** — not an
+unknown one that survives by being ignored. It has its own interface,
+factory, and parsers (`PassportProfileHello`, `createPassportProfileHello`,
+`parsePassportProfileHello`, all in `src/bridge/profileProtocol.ts`).
+
+```json
+{
+  "protocol": "org.midnight.passport.profile/v1",
+  "type": "passport.profile.hello",
+  "requestId": "9f4c2f6a-6f0e-4d0f-9b1e-2a7c8f0d3b41",
+  "nonce": "b1946ac92492d2347c6235b4d2611184c0e1a2b3"
+}
+```
+
+Both halves of the pair are **optional**: an app that has already received
+`ready` echoes the pair back, and an app that has not yet heard anything sends
+a bare `hello` to ask whether Passport is there. Passport owes it no reply —
+its only job is to prove the frame is alive, which stops the `ready`
+re-broadcast and clears Passport's "this app is not responding" hint.
+
 ### `passport.profile.request` — app → Passport
 
 ```json
@@ -105,7 +168,7 @@ which exchange is being answered. Match on it — see
 }
 ```
 
-Validation (`parsePassportProfileRequest`, `profileProtocol.ts:92`):
+Validation (`parsePassportProfileRequest`, `src/bridge/profileProtocol.ts`):
 
 - `requestId` and `nonce` — non-empty, ≤ 256 characters. In embedded mode,
   echo the exact pair from `ready`: Passport binds its reply to whatever pair
@@ -113,7 +176,7 @@ Validation (`parsePassportProfileRequest`, `profileProtocol.ts:92`):
   echoed pair is recognised as bound to the handshake it issued. This
   template always echoes.
 - `fields` — a non-empty array drawn from `PASSPORT_PROFILE_FIELDS`
-  (`profileProtocol.ts:19`): `displayName` and `passportContract`. Those two
+  (`src/bridge/profileProtocol.ts`): `displayName` and `passportContract`. Those two
   are the whole vocabulary — the engine's own unshielded, shielded, and dust
   addresses are not offerable, because a user's identity is their
   account-custody contract and money belongs at the account, not at whatever
@@ -135,8 +198,8 @@ Approved:
   "profile": {
     "displayName": "alice.midnight",
     "passportContract": {
-      "address": "mn_shield-addr_preview1…",
-      "network": "preview"
+      "address": "mn_shield-addr_stagenet1…",
+      "network": "stagenet"
     }
   }
 }
@@ -155,13 +218,13 @@ Refused:
 }
 ```
 
-Validation (`parsePassportProfileResponse`, `profileProtocol.ts:186`):
+Validation (`parsePassportProfileResponse`, `src/bridge/profileProtocol.ts`):
 
 - `approved` must be a real boolean.
 - `approved: true` requires a valid `profile` object. Only declared fields
   survive parsing, every string is capped, and a declared field that is
   present but malformed rejects the **whole profile**
-  (`parsePassportProfile`, `profileProtocol.ts:140`). The parsed object is
+  (`parsePassportProfile`, `src/bridge/profileProtocol.ts`). The parsed object is
   freshly constructed, so nothing undeclared can ride along.
 - `approved: false` requires `error` to be exactly one of the codes
   below; anything else parses to `null`.
@@ -173,13 +236,20 @@ Field shapes when approved:
 | `displayName` | `string` (≤ 256) |
 | `passportContract` | `{ address: string (≤ 512), network: string (≤ 256) }` |
 
-Profile error vocabulary (`profileProtocol.ts:60`):
+Profile error vocabulary (`PASSPORT_PROFILE_ERROR_CODES`,
+`src/bridge/errors.ts`):
 
 | Code | Meaning |
 | --- | --- |
 | `denied` | The user refused on Passport's consent sheet. |
 | `profile_unavailable` | Passport has no profile to share yet. |
-| `invalid_request` | A consent sheet was already open for this app — a second request must not replace the one the user is reading. (A request that does not parse gets **no reply at all**: Passport's strict parsers drop it before there is a valid pair to bind a reply to.) |
+| `invalid_request` | The request was this protocol and a revision Passport reads, and its shape was wrong — an unknown or duplicated field name, a missing pair, a cap exceeded. Also sent when a consent sheet is already open for this app: a second request must not replace the one the user is reading. |
+| `version_mismatch` | The request was this protocol and its `version` is a revision this Passport does not implement. Nothing was shared. Updating either side fixes it. |
+
+Note that `invalid_request` **is a reply**, not a silence. A profile request
+that does not parse is answered with it, bound to the `requestId`/`nonce` read
+off the rejected message — see
+[Failures that are answered](#failures-that-are-answered).
 
 **Consent is per-mode.** Embedded, Passport's sheet has a toggle per requested
 field, every one unticked by default — the user may approve one field of two,
@@ -332,21 +402,21 @@ sequenceDiagram
   "nonce": "4f6a2c81d9e07b3512aa90cdfe61b84427c05a9e",
   "intent": {
     "kind": "unshielded-transfer",
-    "recipientAddress": "mn_addr_preview1…",
+    "recipientAddress": "mn_addr_stagenet1…",
     "amount": "100000",
     "purpose": "Template demo payment"
   }
 }
 ```
 
-Validation (`parsePassportTxRequest`, `txProtocol.ts:151`):
+Validation (`parsePassportTxRequest`, `src/bridge/txProtocol.ts`):
 
 | Field | Rule |
 | --- | --- |
 | `requestId`, `nonce` | Non-empty, ≤ 256. A **fresh pair per payment**, never the handshake pair — a payment reply must not be mistakable for a profile answer (`main.tsx`, `txExchange`). |
 | `intent.kind` | Exactly `'unshielded-transfer'` — the only kind today. |
-| `intent.recipientAddress` | Non-empty, ≤ 200. Address *validity* is deliberately not checked here — the bridge carries no Midnight SDK. Passport decodes it against its own live wallet network before showing an approval sheet (`txProtocol.ts:30–34`). |
-| `intent.amount` | Atomic NIGHT as a base-10 string matching `/^[0-9]{1,20}$/` — no sign, no exponent, no decimal point — and not zero in any padded form (`txProtocol.ts:54, 169–172`). A string on purpose: a JSON number cannot carry atomic units without precision loss. 1 NIGHT = 1 000 000 atomic units (`NIGHT_DECIMALS` in `main.tsx`). |
+| `intent.recipientAddress` | Non-empty, ≤ 200. Address *validity* is deliberately not checked here — the bridge carries no Midnight SDK. Passport decodes it against its own live wallet network before showing an approval sheet (`PassportTxIntent` and the module header, `src/bridge/txProtocol.ts`). |
+| `intent.amount` | Atomic NIGHT as a base-10 string matching `/^[0-9]{1,20}$/` — no sign, no exponent, no decimal point — and not zero in any padded form (`AMOUNT_PATTERN`, checked in `readPassportTxRequest`, `src/bridge/txProtocol.ts`). A string on purpose: a JSON number cannot carry atomic units without precision loss. 1 NIGHT = 1 000 000 atomic units (`NIGHT_DECIMALS` in `main.tsx`). |
 | `intent.purpose` | Non-empty, ≤ 140. Shown to the user on Passport's approval sheet. |
 
 ### `passport.tx.response` — Passport → app
@@ -380,7 +450,7 @@ Failed:
 }
 ```
 
-Validation (`parsePassportTxResponse`, `txProtocol.ts:223`):
+Validation (`parsePassportTxResponse`, `src/bridge/txProtocol.ts`):
 
 | Status | Guarantee |
 | --- | --- |
@@ -388,26 +458,36 @@ Validation (`parsePassportTxResponse`, `txProtocol.ts:223`):
 | `declined` | The user said no. Nothing was signed. Carries an `error` code. |
 | `failed` | Carries an `error` code naming what stopped it. |
 
-Error vocabulary (`PASSPORT_TX_ERROR_CODES`, `txProtocol.ts:82`):
+Error vocabulary (`PASSPORT_TX_ERROR_CODES`, `src/bridge/errors.ts`):
 
 | Code | Meaning |
 | --- | --- |
 | `declined` | Refused on the approval sheet. |
 | `insufficient-funds` | The wallet cannot cover it — short of NIGHT, or of the DUST that pays the network fee. |
 | `wallet-unavailable` | No Passport wallet that can sign is open — no session at all, or a session signed in without the local passkey wallet (the `detail` sentence says which). |
-| `invalid-request` | A sheet was already open, or the recipient is not a valid unshielded address. (A request that does not parse gets **no reply at all** — the strict parsers drop it, and the app's own timeout is what fires.) |
+| `invalid-request` | The request was this protocol and a revision Passport reads, and its shape was wrong. Also sent when a sheet was already open, or when the recipient is not a valid unshielded address. |
 | `network-mismatch` | The recipient address belongs to a different network from the Passport wallet. |
 | `submit-failed` | Signed, but the node rejected it or was unreachable. |
+| `version-mismatch` | The request was this protocol and its `version` is a revision this Passport does not implement. Nothing was signed and nothing was paid. Updating either side fixes it. |
+
+As on the profile protocol, `invalid-request` **is a reply**: a transaction
+request that does not parse is answered with it, bound to the pair read off
+the rejected message — see
+[Failures that are answered](#failures-that-are-answered). What the standalone
+popup does drop without a reply is a request whose pair is not *that window's*
+launch pair (step 4 above); that is a different rule, and it is about
+addressing, not about parsing.
 
 Optional fields:
 
 - `detail` (≤ 400) — the wallet's own sentence about what happened. Worth
   showing to the user verbatim alongside your mapped copy.
 - `sponsored` — may appear **only** on a `submitted` reply, must be a real
-  boolean (a truthy string rejects the whole reply, `txProtocol.ts:247`), and
-  `true` only when the submitted transaction genuinely came back from a fee
-  sponsor with its fee input attached. **Absent means "not stated", which an
-  app must read as an ordinary, user-paid transaction** (`txProtocol.ts:100–110`).
+  boolean (a truthy string rejects the whole reply — `readPassportTxResponse`,
+  `src/bridge/txProtocol.ts`), and `true` only when the submitted transaction
+  genuinely came back from a fee sponsor with its fee input attached. **Absent
+  means "not stated", which an app must read as an ordinary, user-paid
+  transaction** (`PassportTxResponse.sponsored`, `src/bridge/txProtocol.ts`).
   Render "network fee covered" for `true` and for nothing else.
 - `feeNote` (≤ 140) — a human-readable note about the fee, e.g. who covered
   it.
@@ -420,7 +500,7 @@ approval surface does not listen for it. A standalone app has no parent to
 post it to and should not send it. It tells Passport what the app granted the
 user so Passport can show it; Passport records exactly what is reported and
 never invents one on an app's behalf (`parsePassportIncentiveReport`,
-`txProtocol.ts:275`).
+`src/bridge/txProtocol.ts`).
 
 ```json
 {

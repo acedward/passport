@@ -50,9 +50,8 @@ function ThemeToggle() {
  * been pushed to a public remote yet, so this stays `null` for now — while it
  * is null the hackathon panel renders its button disabled with a short note.
  *
- * TODO(orchestrator): once the registry is public, set this to its GitHub URL
- * (for example 'https://github.com/<owner>/midnight-passport-app-registry')
- * and set VITE_REGISTRY_JSON_URL to its raw registry.json URL at build time.
+ * When the registry becomes public, set this to its GitHub URL and set
+ * `VITE_REGISTRY_JSON_URL` to its raw `registry.json` URL at build time.
  */
 const REGISTRY_REPO_URL: string | null = null;
 

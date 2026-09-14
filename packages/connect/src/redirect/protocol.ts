@@ -15,7 +15,7 @@
  *
  * The fragment crosses an untrusted channel — the user's own address bar — so
  * the reply is SIGNED with the Passport wallet's unshielded key. Established
- * against the SDK in this repository (2026/08/19):
+ * against the Midnight wallet keystore used in this repository (2026/08/19):
  *
  *   - `unshieldedKeystore.signData(bytes)` is BIP-340 Schnorr over secp256k1
  *     applied to `sha256(bytes)`, returning 64 bytes as 128 hex characters.

@@ -11,15 +11,27 @@ not to reinvent, extend, or bypass that bridge.
 Every technical claim you make or code path you write must be checkable
 against these files, in this order of authority:
 
-1. `src/bridge/profileProtocol.ts` and `src/bridge/txProtocol.ts` — **vendored
-   byte-copies of Passport's own protocol definitions. Never edit them.** If a
-   change seems needed there, it is a protocol change and belongs upstream;
-   say so instead of editing.
-2. `src/bridge/index.ts` — the barrel exporting the app-side half of both
-   protocols. This is what application code imports.
-3. `src/main.tsx` — the reference client: origin pinning, both mounting
+1. `src/bridge/` — the protocol layer, and **the whole folder is off limits:
+   never edit anything in it.** Six files:
+
+   | File | What it is |
+   | --- | --- |
+   | `errors.ts` | The error vocabulary of both protocols, plus the plain-English sentence per code. |
+   | `limits.ts` | Every length cap on the wire. |
+   | `profileProtocol.ts` | `org.midnight.passport.profile/v1` — shapes, parsers, request factories. |
+   | `txProtocol.ts` | `org.midnight.passport.tx/v1` — the same, for transactions and incentive reports. |
+   | `version.ts` | The wire revision, and the parse-result type every parser returns. |
+   | `index.ts` | The barrel re-exporting the app-side half of both protocols. This is what application code imports. |
+
+   The first five are unmodified copies of Passport's own protocol definitions
+   apart from a provenance header naming the upstream module and the date it
+   was taken (the two protocol modules also have a trimmed paragraph about
+   their place in the upstream tree). `index.ts` is this template's barrel over
+   them. If a change seems needed anywhere in the folder, it is a protocol
+   change and belongs upstream; say so instead of editing.
+2. `src/main.tsx` — the reference client: origin pinning, both mounting
    modes, all three exchanges, timeouts, and honest failure copy.
-4. `docs/PROTOCOL.md` — the protocol reference, with per-message JSON examples
+3. `docs/PROTOCOL.md` — the protocol reference, with per-message JSON examples
    and validation rules, derived from the files above.
 
 There is **no other API**. No REST endpoints, no injected `window` provider,
@@ -61,24 +73,44 @@ commonest standalone-payment bug (`docs/TROUBLESHOOTING.md`).
 
 ## The bridge surface (complete)
 
-Protocols: `org.midnight.passport.profile/v1` (`profileProtocol.ts:17`) and
-`org.midnight.passport.tx/v1` (`txProtocol.ts:43`). Full shapes, JSON
+Protocols: `org.midnight.passport.profile/v1` (`PASSPORT_PROFILE_PROTOCOL` in
+`src/bridge/profileProtocol.ts`) and `org.midnight.passport.tx/v1`
+(`PASSPORT_TX_PROTOCOL` in `src/bridge/txProtocol.ts`). Full shapes, JSON
 examples, and validation rules: `docs/PROTOCOL.md`.
+
+Every message also carries a numeric `version`, the wire revision
+(`PASSPORT_PROTOCOL_VERSION` in `src/bridge/version.ts`, currently `1`). It is
+optional on the wire and **absent means 1**, so a message minted before the
+field existed still parses. A version this build does not implement is not
+dropped: it is answered `version_mismatch` / `version-mismatch`.
 
 | Message | Direction | Purpose |
 | --- | --- | --- |
 | `passport.profile.ready` | Passport → app | Handshake: carries/echoes `{requestId, nonce}`. |
+| `passport.profile.hello` | app → Passport | The frame's acknowledgement. A typed message of the protocol, not an unknown one; both halves of the pair are optional, so an app that has not yet heard `ready` may send a bare `hello` to ask whether Passport is there. No reply is owed. |
 | `passport.profile.request` | app → Passport | `fields`: non-empty, duplicate-free subset of `displayName` and `passportContract`. Anything else is answered `invalid_request`. |
-| `passport.profile.response` | Passport → app | `approved: true` + `profile` (only approved fields), or `approved: false` + `error`: `denied` \| `profile_unavailable` \| `invalid_request`. |
+| `passport.profile.response` | Passport → app | `approved: true` + `profile` (only approved fields), or `approved: false` + `error`: `denied` \| `profile_unavailable` \| `invalid_request` \| `version_mismatch`. |
 | `passport.tx.request` | app → Passport | `intent`: `{ kind: 'unshielded-transfer', recipientAddress (≤200), amount (base-10 string, 1–20 digits, > 0), purpose (≤140) }`. Both channels. |
 | `passport.tx.response` | Passport → app | `status`: `submitted` (always with `txId`) \| `declined` \| `failed` (with `error`); optional `detail` (≤400), `sponsored`, `feeNote` (≤140). |
 | `passport.incentive.report` | app → Passport | Fire-and-forget: `{ id (≤256), label (≤80), txId? }`. No reply. Embedded only. |
 
-Transaction error vocabulary (`txProtocol.ts:82`): `declined`,
-`insufficient-funds`, `wallet-unavailable`, `invalid-request`,
-`network-mismatch`, `submit-failed`. Map every one to a plain sentence — the
-template's `TX_REFUSALS` map in `src/main.tsx` is the model. Never show a
-bare code.
+Error vocabularies (`PASSPORT_PROFILE_ERROR_CODES` and
+`PASSPORT_TX_ERROR_CODES` in `src/bridge/errors.ts`):
+
+| Protocol | Codes |
+| --- | --- |
+| Profile | `denied`, `profile_unavailable`, `invalid_request`, `version_mismatch` |
+| Transaction | `declined`, `insufficient-funds`, `wallet-unavailable`, `invalid-request`, `network-mismatch`, `submit-failed`, `version-mismatch` |
+
+The two halves keep their own punctuation — underscores on the profile
+protocol, hyphens on the transaction one — because those strings are already
+deployed on the wire. `version_mismatch` / `version-mismatch` mean the same
+thing on each: the message was this protocol, and its `version` is a revision
+the other side does not implement. Nothing was shared, and nothing was signed
+or paid; updating either side fixes it.
+
+Map every code to a plain sentence — the template's `PROFILE_REFUSALS` and
+`TX_REFUSALS` maps in `src/main.tsx` are the model. Never show a bare code.
 
 Caps worth remembering while generating code: ids and nonces ≤ 256; profile
 strings ≤ 256, profile addresses ≤ 512; `amount` is a **string** of atomic
@@ -94,15 +126,16 @@ NIGHT (1 NIGHT = 1 000 000), never a JSON number.
   Passport's surface. Do not auto-retry a `declined`, pre-tick anything,
   fake a `submitted` response, or build UI implying approval already
   happened.
-- **Never invent bridge messages or endpoints.** The six message types above
+- **Never invent bridge messages or endpoints.** The seven message types above
   are the whole surface. No `passport.*` types beyond them, no HTTP calls to
   Passport, no reading Passport state by any side channel.
 - **Never post to `'*'`.** Every `postMessage` targets the one pinned origin
   (`PASSPORT_ORIGIN`), and every inbound message is checked for both
   `event.origin` and `event.source` before parsing. Keep every outbound
   message going through the single `send()` helper.
-- **Never edit `src/bridge/*Protocol.ts`**, and never loosen a parser. A
-  protocol that has quietly drifted on one side is worse than none.
+- **Never edit anything under `src/bridge/`** — all six files, the barrel
+  included — and never loosen a parser. A protocol that has quietly drifted on
+  one side is worse than none.
 - **Never reuse a request pair.** Each exchange gets a freshly minted
   `requestId` + `nonce` (except the embedded profile request, which must echo
   the pair Passport minted). Match every reply against the pair currently
@@ -133,9 +166,10 @@ Full numbered steps: `docs/QUICKSTART.md`. The short version:
 - Passport (from its own repository) runs on **http://localhost:5175** and
   will not run anywhere else in dev — its build redirects other local origins
   to 5175. Leave 5175 to it.
-- To appear in Passport's app grid locally, start Passport with
-  `VITE_LOCAL_APP_URL=http://localhost:5178 npm run demo` (optionally
-  `VITE_LOCAL_APP_NAME="My App"`).
+- To appear in Passport's app grid locally, start Passport **from the root of
+  the Passport repository** — not from this template directory, which has no
+  `demo` script — with `VITE_LOCAL_APP_URL=http://localhost:5178 npm run demo`
+  (optionally `VITE_LOCAL_APP_NAME="My App"`).
 - Against a **deployed** Passport: standalone works by setting
   `VITE_PASSPORT_ORIGIN` to its exact HTTPS origin; embedded requires the app
   itself deployed to public HTTPS and listed in the registry (`http:` is
@@ -173,7 +207,9 @@ Required fields, per the registry schema: `id` (unique, `^[a-z0-9-]{1,32}$`),
 `name` (≤ 40 chars), `description` (≤ 120 chars, honest), `icon` (absolute
 `https` URL, 128×128 PNG or SVG, ≤ 50KB), `url` (absolute `https`, live),
 `category` (one of `defi`, `gaming`, `tools`, `identity`, `other`), and
-`networks` (non-empty subset of `preview`, `preprod`, `mainnet`). Optional:
+`networks` (non-empty subset of `stagenet`, `preview`, `preprod`, `mainnet` —
+Passport itself transacts on `stagenet`, so an app that wants to appear in its
+grid needs that one). Optional:
 `new` and `immersive`; **never set `featured`** — it is maintainers-only. No
 other keys are permitted; the validator rejects them.
 

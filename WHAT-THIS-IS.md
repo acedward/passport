@@ -1,5 +1,5 @@
 **What this is.** The Midnight Passport demo is a working prototype running on
-preview/testnet. It is real — the flows execute against real infrastructure, nothing is
+Midnight **stagenet**. It is real — the flows execute against real infrastructure, nothing is
 mocked. It exists to show that this can be done, and to show the functionality we are
 building towards.
 
@@ -12,12 +12,12 @@ demo, not a phase that starts when the demo ends.
 with partner applications are *connectors*, built case by case. Nothing in this demo is an
 SDK.
 
-Status: draft, 2026/07/29 — wording pending ratification (proposal: Karmel).
+Status: draft, 2026/07/29 — wording pending ratification.
 
 ---
 
 The rest of this page is orientation rather than agreed wording, and is
-maintained against the tree: last checked 2026/08/22.
+maintained against the tree: last checked 2026/09/14.
 
 ## What runs where
 
@@ -35,14 +35,30 @@ silently.
 | `examples/clubcoin-mock/` | The URL-callback (redirect) connector example, for phones. Named after a partner that is no longer in the demo. | 5181 |
 | `examples/passport-profile-client/` | The original separate-origin consent client, "Atlas". Superseded in the grid by the raffle. | 5176 |
 | `examples/passport-app-hub/` | Public listing site for apps that integrate the bridge. | 5179 |
-| `examples/passport-docs/` | The documentation site. | 5180 |
+| `examples/passport-docs/` | The documentation site. | 5180 * |
+| `examples/doorman/` | The reference integration for `packages/connect/`: one page, the two calls a partner app makes, and a sentence for every refusal. | 5180 * |
+| `examples/passport-poll/` | Example dApp: a poll whose vote is a payment. | 5182 |
+| `examples/passport-swap/` | Example dApp: a token swap quoted by an external desk. | 5175 * |
+| `packages/connect/` | The Passport wire protocols and the client that speaks them. Not published to npm; consumed from this repository. | — |
 | `experiments/` | Cryptographic and feasibility experiments, including the account-custody contract source. Not production dependencies. | — |
 | `docs/`, `research/`, `site/` | The plan, the research behind it, and the published artefacts. | — |
 
-The demo runs against **Preview**. Mainnet is hard-blocked in code, and preprod
-is reachable but unusable in a browser: a cold wallet cannot walk its ~1.98M
-blocks without exhausting the tab's heap, so a depth guard refuses the attempt
-rather than starting it.
+\* Three of those ports are pinned with `strictPort`, and two of them are taken
+twice: `passport-docs` and `doorman` both pin **5180**, and `passport-swap`
+pins **5175**, which is Passport's own. The second server to start fails rather
+than sliding to the next free port. Run the colliding pair one at a time, or
+pass `--port` on the command line. Note too that `doorman`, `passport-poll`,
+`passport-swap`, `passport-app-template`, and `clubcoin-mock` are not in the
+root `workspaces` array — start them from their own directory.
+
+The demo runs against **stagenet**, and stagenet is the only network this build
+can transact on (`examples/passport-demo/src/lib/networks.ts`:
+`TRANSACTABLE_NETWORKS` has one entry). Mainnet is hard-blocked in code.
+Preview and Pre-production are still *known* — records already stored against
+them render, and their explorer links still resolve — but this build cannot
+open an account on either: it runs the ledger-9 protocol and they run ledger-8,
+which a single WASM ledger module cannot do both of. Until 2026/08/24 the demo
+ran against Preview, and the documents written before that date say so.
 
 ## Real, mocked, and untested
 
@@ -65,9 +81,11 @@ example are apps we wrote to exercise the connectors from the other side. They
 are real applications making real requests; they are not third-party
 integrations in production.
 
-**Not built.** The Otrix totem flow — a totem showing a QR code with a shielded
-deposit address, paid from Passport — has no code in this tree. ClubCoin is out
-of the demo; only the directory name survives.
+**Not built.** The Otrix **totem QR flow** — a totem showing a QR code with a
+shielded deposit address, paid from Passport — has no code in this tree. The
+rest of the Otrix integration *is* built: the partner gift endpoint is live and
+documented in [`docs/demo/partner-api.md`](docs/demo/partner-api.md). ClubCoin
+is out of the demo; only the directory name survives.
 
 **Untested rather than working.** Nothing in the current passkey-only flow has
 been recorded in [`docs/demo/validation-log.md`](docs/demo/validation-log.md)

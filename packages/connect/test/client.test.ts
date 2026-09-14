@@ -25,6 +25,7 @@ import {
   createPassportProfileResponse,
   type PassportProfileRequest,
 } from '../src/protocol/profile.js';
+import { PassportProtocolError, passportErrorMessage } from '../src/protocol/errors.js';
 import { createPassportTxResponse, type PassportTxRequest } from '../src/protocol/tx.js';
 import {
   asWindow,
@@ -384,6 +385,35 @@ describe('framed mode', () => {
     passport.destroy();
   });
 
+  it('does not tell the user Passport refused a request Passport never saw', () => {
+    /* `invalid-request` is the one code in both vocabularies, and the two mean
+       opposite things. The wire code is Passport declining something it read;
+       the local code is this page never sending anything. Rendering the wire
+       sentence for a local refusal told the user that Passport had refused —
+       and named an approval sheet and a recipient address that were never
+       involved. `source` picks the sentence now. */
+    expect(passportErrorMessage('invalid-request', 'local')).toBe(
+      'This app built a request Passport cannot read. Nothing was sent.',
+    );
+    expect(passportErrorMessage('invalid-request', 'local')).not.toMatch(/Passport refused/);
+    /* And the wire code keeps the sentence it has always had. */
+    expect(passportErrorMessage('invalid-request')).toMatch(/Passport refused the request/);
+    expect(passportErrorMessage('invalid-request', 'passport')).toMatch(
+      /Passport refused the request/,
+    );
+  });
+
+  it('renders the local sentence on a locally refused payment', async () => {
+    const { passport } = framed();
+    const result = await passport.requestPayment({
+      recipientAddress: 'mn_addr_stagenet1qq',
+      amount: '0',
+      purpose: 'Cover charge',
+    });
+    expect(result.message).toBe('This app built a request Passport cannot read. Nothing was sent.');
+    passport.destroy();
+  });
+
   it('survives a caller that hands it something that is not a field list at all', async () => {
     const { host, parent, passport } = framed();
     const errors: { code: string; message: string }[] = [];
@@ -422,6 +452,48 @@ describe('framed mode', () => {
       error: 'invalid-request',
     });
     passport.destroy();
+  });
+
+  it('settles an exchange that was still in flight when it was destroyed', async () => {
+    /* The defect this closes: `destroy()` tore the transport down and walked
+       away from the promise. The only escape left was the three-minute budget,
+       so a component that unmounted mid-exchange left a spinner running long
+       after the component was gone — and the app was told nothing at all in
+       the meantime. */
+    const { host, parent, passport } = framed({ timeoutMs: 120_000 });
+    const errors: { code: string; message: string }[] = [];
+    passport.on('error', (event) => errors.push(event));
+    const pending = passport.requestProfile(['displayName']);
+    await tick();
+    announce(host, parent);
+    await tick();
+
+    const before = Date.now();
+    passport.destroy();
+    const result = await pending;
+    /* Immediately, not on the budget — the budget here is two minutes. */
+    expect(Date.now() - before).toBeLessThan(1_000);
+    expect(result).toMatchObject({ approved: false, source: 'local', error: 'destroyed' });
+    expect(result.message).toMatch(/stopped waiting for Passport/);
+    expect(errors.at(-1)).toMatchObject({ code: 'destroyed' });
+  });
+
+  it('settles a payment that was still in flight when it was destroyed', async () => {
+    const { host, parent, passport } = framed({ timeoutMs: 120_000 });
+    const pending = passport.requestPayment({
+      recipientAddress: 'mn_addr_stagenet1qq',
+      amount: '100000',
+      purpose: 'Cover charge',
+    });
+    await tick();
+    announce(host, parent);
+    await tick();
+    passport.destroy();
+    expect(await pending).toMatchObject({
+      status: 'failed',
+      source: 'local',
+      error: 'destroyed',
+    });
   });
 
   it('stops answering once destroyed', async () => {
@@ -656,8 +728,8 @@ describe('an injected transport', () => {
 
   it('turns an unexpected transport failure into a timeout rather than a rejection', async () => {
     /* An exchange must always settle with a result. A transport that throws
-       something this SDK did not define is still not allowed to leave a caller
-       with a promise that never resolves. */
+       something this package did not define is still not allowed to leave a
+       caller with a promise that never resolves. */
     const passport = createPassport({
       origin: ORIGIN,
       timeoutMs: 50,
@@ -692,6 +764,72 @@ describe('an injected transport', () => {
     });
   });
 
+  it('does not post into a transport that was destroyed while it was opening', async () => {
+    /* The other half of the in-flight fix: `destroy()` can land in the window
+       between asking the transport for a channel and getting one. Posting into
+       a torn-down transport at that point would be a message nobody is left to
+       answer, and a promise waiting out the budget for the reply. */
+    let release: (() => void) | undefined;
+    const opened = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const posts: unknown[] = [];
+    const passport = createPassport({
+      origin: ORIGIN,
+      timeoutMs: 120_000,
+      transport: stub({
+        open: async () => {
+          await opened;
+          return {
+            pair: { requestId: 'r', nonce: 'n' },
+            post: (message: object) => posts.push(message),
+            closed: () => false,
+            release: () => {},
+          } satisfies PassportChannel;
+        },
+      }),
+      window: asWindow(createFakeWindow()),
+    });
+    const pending = passport.requestProfile(['displayName']);
+    await tick();
+    passport.destroy();
+    release!();
+    expect(await pending).toMatchObject({
+      approved: false,
+      source: 'local',
+      error: 'destroyed',
+    });
+    expect(posts).toEqual([]);
+  });
+
+  it('labels an incentive report with the channel’s own pair', async () => {
+    /* It used to mint a SECOND pair and post that, so the report carried an
+       identifier belonging to no channel — unmatchable against the exchange it
+       was reported on, and unmatchable against anything else either. */
+    const posts: unknown[] = [];
+    const passport = createPassport({
+      origin: ORIGIN,
+      transport: stub({
+        open: async () =>
+          ({
+            pair: { requestId: 'channel-req', nonce: 'channel-nonce' },
+            post: (message: object) => posts.push(message),
+            closed: () => false,
+            release: () => {},
+          }) satisfies PassportChannel,
+      }),
+      window: asWindow(createFakeWindow()),
+    });
+    expect(await passport.reportIncentive({ id: 'doorman:entry', label: 'Door entry' })).toMatchObject(
+      { sent: true },
+    );
+    expect(posts.at(-1)).toMatchObject({
+      requestId: 'channel-req',
+      nonce: 'channel-nonce',
+    });
+    passport.destroy();
+  });
+
   it('destroys the transport it was handed', () => {
     const destroy = vi.fn();
     const passport = createPassport({
@@ -712,6 +850,55 @@ describe('createPassport', () => {
     expect(() => createPassport({ origin: '///', window: asWindow(createFakeWindow()) })).toThrow(
       /exact origin/,
     );
+  });
+
+  it('refuses a host name that is not an origin, rather than pinning to a string', () => {
+    /* `'midnightpassport.com'` is a host name, not an origin. `event.origin`
+       is never equal to it, so every inbound message was dropped in silence
+       and the page waited out the whole budget with nothing to show for it.
+       The throw happens at the call site that wrote the value. */
+    let thrown: unknown;
+    try {
+      createPassport({
+        origin: 'midnightpassport.com',
+        window: asWindow(createFakeWindow()),
+      });
+    } catch (cause) {
+      thrown = cause;
+    }
+    expect(thrown).toBeInstanceOf(PassportProtocolError);
+    expect((thrown as PassportProtocolError).code).toBe('invalid_request');
+    expect((thrown as PassportProtocolError).reason).toMatch(/not a URL/);
+    expect((thrown as Error).message).toMatch(/midnightpassport\.com/);
+  });
+
+  it('refuses a URL that has no origin to pin to', () => {
+    /* A `file:` URL parses and has no origin, so pinning to it would pin to
+       the literal string "null" — which is also what a sandboxed frame reports
+       as its origin. Refusing is the only safe reading. */
+    let thrown: unknown;
+    try {
+      createPassport({
+        origin: 'file:///Users/someone/passport/index.html',
+        window: asWindow(createFakeWindow()),
+      });
+    } catch (cause) {
+      thrown = cause;
+    }
+    expect(thrown).toBeInstanceOf(PassportProtocolError);
+    expect((thrown as PassportProtocolError).reason).toMatch(/no origin to pin to/);
+  });
+
+  it('keeps only the origin of a URL that carries more than one', () => {
+    /* A path on the end is a common paste, and pinning to the whole string
+       would drop every message just as silently. */
+    const passport = createPassport({
+      origin: 'https://midnightpassport.example/passport?x=1',
+      transport: 'popup',
+      window: asWindow(createFakeWindow()),
+    });
+    expect(passport.origin).toBe('https://midnightpassport.example');
+    passport.destroy();
   });
 
   it('falls back to the global window when none is injected', async () => {
