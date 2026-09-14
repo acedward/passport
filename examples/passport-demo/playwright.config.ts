@@ -123,7 +123,7 @@ export default defineConfig({
   timeout: live ? 25 * 60 * 1000 : 90 * 1000,
   expect: { timeout: live ? 5 * 60 * 1000 : 15 * 1000 },
   use: {
-    baseURL: live ? 'https://midnightpassport.com' : 'http://localhost:4173',
+    baseURL: live ? (process.env.LIVE_URL ?? 'https://midnightpassport.com') : 'http://localhost:4173',
     /* No action may wait for ever. Without this a click on a control that has
        gone — inside a poll, say — blocks the worker rather than the test, and
        the run hangs past its own test timeout with nothing to show for it.

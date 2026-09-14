@@ -60,7 +60,7 @@ const live = process.env.RUN_LIVE === '1';
 const MUSD_SYMBOL = 'mUSD';
 
 test.describe('@live the account model on stagenet', () => {
-  test.skip(!live, 'Set RUN_LIVE=1 to run against https://midnightpassport.com and stagenet.');
+  test.skip(!live, 'Set RUN_LIVE=1 to run against https://midnightpassport.com (or LIVE_URL) and stagenet.');
   test.describe.configure({ mode: 'serial' });
 
   /**
@@ -247,7 +247,7 @@ test.describe('@live the account model on stagenet', () => {
        resolver state. The full account address appears there — an operator
        surface — and must be the address Receive elides. */
     const verifier = await page.context().newPage();
-    await verifier.goto(`https://midnightpassport.com/verify/?q=${alias}.night`);
+    await verifier.goto(`${process.env.LIVE_URL ?? 'https://midnightpassport.com'}/verify/?q=${alias}.night`);
     await expect(verifier.getByText(/register_domain_for/)).toBeVisible({ timeout: 90_000 });
     const verifierText = await verifier.locator('body').innerText();
     const full = verifierText.match(/[0-9a-f]{64}/);

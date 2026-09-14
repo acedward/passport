@@ -12,6 +12,22 @@ This repository is the planning and knowledge-gathering workspace for Midnight P
 
 **Core value:** produce a coordinated plan — scope, parallelisation map, delegation, decision records — that identifies what can be built simultaneously across teams (or sequenced by a single team), drives toward a public demo in October 2026, and ultimately produces a set of MIPs and CIPs the wider ecosystem can adopt.
 
+## Deployment rule (2026/09/14, non-negotiable)
+
+Two environments, one direction of travel:
+
+- **Production: `https://midnightpassport.com`** — the link stakeholders hold. It runs only a build that passed every gate on staging. Nothing is deployed there directly, ever, for any reason, including "it is a one-line fix".
+- **Staging: `https://staging.midnightpassport.com`** (Vercel project `midnight-passport-staging`, team Webisoft) — every build lands here first, including experiments. Sponsor changes are deployed to the droplet before the build that needs them is promoted.
+
+A build is promoted from staging to production only when all of these are true on staging:
+
+1. `tsc`, the unit suites, `check-pwa`, and the mocked Playwright tier are green on the exact commit.
+2. The live walk passes against staging: `RUN_LIVE=1 LIVE_URL=https://staging.midnightpassport.com npx playwright test e2e/stagenet.live.spec.ts --project=chromium`.
+3. A **returning-browser** check passes: a browser or installed PWA that already held the previous build opens the new one and completes onboarding and a send. The automated walk is fresh-browser only and cannot see cache defects (2026/09/14: a year-long immutable cache on the contract manifest broke new-account setup for every returning reviewer while the walk passed).
+4. A real-device walk on Android and iPhone of the three scoped flows: passkey onboarding, `.night` name, shielded balance with send and receive.
+
+Every promotion is backed by a `v<N> - YYYY/MM/DD` release on **midnightntwrk/passport-demo** at the carried commit (the repository the Foundation watches), with the ZK artefact bundle attached, and mirrored on midnightntwrk/passport. Lockfiles are never regenerated from scratch: rebuild from the previous lock and diff the resolutions.
+
 ## Constraints
 
 - **Timeline:** there is no fixed MVP deadline. We are aiming at a public demo in October 2026, but the plan's job is to map the work — not to enforce a critical path. Identify what can run in parallel across different teams (or be sequenced by the same team) so progress is bounded by capacity, not by one ordered chain of dependencies.
