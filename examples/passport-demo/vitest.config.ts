@@ -56,6 +56,21 @@
  * here to render a hook into. That file holds the watch's lifetime, a
  * `visibilitychange` listener, and two refs — no decisions.
  *
+ * `src/lib/buildId.ts` went IN on 2026/09/14, the day it was written. It is
+ * one string rewrite, and that rewrite is the whole of the repair for a
+ * reviewer who could not create a Passport at all: `/zk/**` is served with a
+ * year-long `immutable` on urls that carry no content hash, so a browser
+ * holding the previous contract manifest refused the new build's verifier keys
+ * against it and setup stopped dead. Every branch in it is a way of getting a
+ * cache key wrong — an id that never arrives leaves the stale entry in play, a
+ * query that is overwritten loses whatever the caller put there, an id appended
+ * twice makes two addresses out of one build, and an id appended after a
+ * fragment is not in the query at all. It holds no DOM, no React, no `fetch`,
+ * and above all NO `window` — the same code runs under the Node drill
+ * harness, which must not be given one — so all of it is drilled directly in
+ * `src/lib/buildId.test.ts`, in this file's default `node` environment, which
+ * is itself the windowless condition being asserted.
+ *
  * `src/lib/chainWait.ts` went IN on 2026/09/07, the day it was written. It
  * holds the bound on every wait this app makes on the chain, and the defect it
  * was written for is a reviewer left on "Setting up your account…" for ever
@@ -545,6 +560,7 @@ export default mergeConfig(
           'src/lib/address.ts',
           'src/lib/appBusy.ts',
           'src/lib/balanceWatch.ts',
+          'src/lib/buildId.ts',
           'src/lib/chainWait.ts',
           'src/lib/claimFailure.ts',
           'src/lib/claimRetry.ts',

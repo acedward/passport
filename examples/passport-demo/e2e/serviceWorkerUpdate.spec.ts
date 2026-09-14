@@ -21,7 +21,7 @@
  * WHY IT SERVES ITS OWN FIXTURE DEPLOYMENT
  * ----------------------------------------
  * The subject here is `public/sw.js` — the real, shipped file, read off disk
- * and stamped exactly as `stampServiceWorkerBuildId()` in `vite.config.ts`
+ * and stamped exactly as `stampBuildId()` in `vite.config.ts`
  * stamps it — against TWO successive deployments of a client. Producing two
  * real Passport builds inside one spec would take minutes and prove nothing
  * extra: what has to be true is that a worker sees a new deployment, takes

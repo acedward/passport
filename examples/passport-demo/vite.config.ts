@@ -48,11 +48,12 @@ function serveLocalCustodyAssets(): Plugin {
   };
 }
 
-/** The literal `public/sw.js` ships with, and the build replaces. */
+/** The literal `public/sw.js` and `src/lib/buildId.ts` ship with, and the build replaces. */
 const BUILD_ID_PLACEHOLDER = '__BUILD_ID__';
 
 /**
- * Gives the service worker an identity that changes with the client build.
+ * Gives the service worker — and the client itself — an identity that changes
+ * with the build.
  *
  * A browser decides a service worker has been updated by comparing the script
  * BYTE FOR BYTE against the copy it holds. `public/sw.js` used to carry a
@@ -68,10 +69,26 @@ const BUILD_ID_PLACEHOLDER = '__BUILD_ID__';
  * It runs in `closeBundle`: Vite copies `public/` into `dist/` while preparing
  * the output directory, well before the bundle is written, so `dist/sw.js` is
  * already there and this is a rewrite of it rather than a race with the copy.
+ *
+ * THE CLIENT GETS THE SAME STAMP (2026/09/14)
+ * -------------------------------------------
+ * `src/lib/buildId.ts` carries the identical placeholder and is stamped here
+ * too, so the app can put the build's id in the query of every `/zk/**`
+ * request. That closes a hole the worker's own cache naming never covered: the
+ * HTTP cache in front of it, which had been handed
+ * `max-age=31536000, immutable` for urls that carry no content hash. The full
+ * incident is written up in `src/lib/buildId.ts`.
+ *
+ * Stamping the emitted chunks rather than `define`-ing a value is not a
+ * preference — the id is a digest of what the build emitted, so it does not
+ * exist until the bundle is written. Rewriting a chunk cannot chase its own
+ * tail: the digest is taken over asset FILENAMES, which are hashes of the
+ * pre-stamp content and do not move when the content is stamped, so a rebuild
+ * of unchanged sources still produces one id and stamps it once.
  */
-function stampServiceWorkerBuildId(): Plugin {
+function stampBuildId(): Plugin {
   return {
-    name: 'stamp-service-worker-build-id',
+    name: 'stamp-build-id',
     apply: 'build',
     closeBundle: {
       order: 'post',
@@ -81,20 +98,42 @@ function stampServiceWorkerBuildId(): Plugin {
         const source = fs.readFileSync(workerPath, 'utf8');
         if (!source.includes(BUILD_ID_PLACEHOLDER)) {
           throw new Error(
-            `stamp-service-worker-build-id: ${BUILD_ID_PLACEHOLDER} is not in public/sw.js. ` +
+            `stamp-build-id: ${BUILD_ID_PLACEHOLDER} is not in public/sw.js. ` +
               'Without it the worker is byte-identical across deploys and installed ' +
               'clients never see an update. See the header of public/sw.js.',
           );
         }
+        const assetsDir = path.join(outDir, 'assets');
+        const assetNames = fs.readdirSync(assetsDir).sort();
         const digest = createHash('sha256');
-        for (const name of fs.readdirSync(path.join(outDir, 'assets')).sort()) {
+        for (const name of assetNames) {
           digest.update(`${name}\n`);
         }
         digest.update(fs.readFileSync(path.join(outDir, 'index.html')));
         digest.update(fs.readFileSync(path.join(outDir, 'verify', 'index.html')));
         const buildId = digest.digest('hex').slice(0, 16);
         fs.writeFileSync(workerPath, source.replaceAll(BUILD_ID_PLACEHOLDER, buildId));
-        this.info(`service worker stamped with build id ${buildId}`);
+
+        let stampedChunks = 0;
+        for (const name of assetNames) {
+          if (!name.endsWith('.js')) continue;
+          const chunkPath = path.join(assetsDir, name);
+          const chunk = fs.readFileSync(chunkPath, 'utf8');
+          if (!chunk.includes(BUILD_ID_PLACEHOLDER)) continue;
+          fs.writeFileSync(chunkPath, chunk.replaceAll(BUILD_ID_PLACEHOLDER, buildId));
+          stampedChunks += 1;
+        }
+        if (stampedChunks === 0) {
+          throw new Error(
+            `stamp-build-id: ${BUILD_ID_PLACEHOLDER} is in no emitted chunk. ` +
+              'src/lib/buildId.ts is what puts it there, and without it every ' +
+              '/zk/** request goes back to an address a year-long cache already ' +
+              'has an answer for. See the header of src/lib/buildId.ts.',
+          );
+        }
+        this.info(
+          `build id ${buildId} stamped into sw.js and ${stampedChunks} client chunk(s)`,
+        );
       },
     },
   };
@@ -128,7 +167,7 @@ export default defineConfig({
   // demo's WASM has had TLA for years, so dropping it costs nothing. It is
   // kept for `worker.plugins`, a separate and much smaller module graph that
   // does not contain the affected package.
-  plugins: [react(), wasm(), serveLocalCustodyAssets(), stampServiceWorkerBuildId()],
+  plugins: [react(), wasm(), serveLocalCustodyAssets(), stampBuildId()],
   resolve: {
     alias: [
       { find: /^node:buffer$/, replacement: workspaceBuffer },

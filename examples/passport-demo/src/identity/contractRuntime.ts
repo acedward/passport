@@ -58,6 +58,7 @@ import {
   RESUBMIT_WAIT_MS,
   SUBMIT_WAIT_MS,
 } from '../lib/chainWait.js';
+import { buildIdFetch } from '../lib/buildId.js';
 import { describeEndpointRefusals, firstEndpointThatServes } from '../lib/endpoints.js';
 import type { LocalMidnightWallet } from '../lib/localWallet.js';
 /* One fetch per ZK artefact instead of three. Pure, drilled, and the reason a
@@ -1068,8 +1069,20 @@ export async function createContractProviders(
     zkConfigProvider = memoisingZkConfigProvider(
       new FetchZkConfigProvider(contractAssetBase(options.contract), {
         /* `globalThis`, not `window`: the identical call has to work under the
-           Node drill harness, which deliberately has no window. */
-        fetchFunc: globalThis.fetch.bind(globalThis) as never,
+           Node drill harness, which deliberately has no window.
+
+           WRAPPED IN `buildIdFetch` (2026/09/14). Every artefact url this
+           provider composes — the keys, the ZKIR, and above all
+           `compiler/contract-manifest.json` — is served
+           `max-age=31536000, immutable` and carries no content hash, so a
+           browser that fetched the manifest before a contract gained a circuit
+           kept it for a YEAR and then refused the new build's keys against it:
+           `ZKConfigurationReadError: Failed to read verifier key for
+           passport-account#transfer_shielded_to_account`, met by a reviewer
+           creating a new Passport. `buildIdFetch` puts this build's id in the
+           query, so a new deploy asks for an address no cache has an answer
+           for. See `../lib/buildId.ts`. */
+        fetchFunc: buildIdFetch(globalThis.fetch.bind(globalThis)) as never,
       }) as unknown as ZkArtefactSource,
     );
     zkConfigProviders.set(options.contract, zkConfigProvider);

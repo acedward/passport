@@ -39,6 +39,10 @@
       "headers": [{ "key": "content-type", "value": "application/json" }]
     },
     {
+      "source": "/zk/(.*)/compiler/(.*).json",
+      "headers": [{ "key": "cache-control", "value": "no-cache" }]
+    },
+    {
       "source": "/assets/(.*)",
       "headers": [{ "key": "cache-control", "value": "public, max-age=31536000, immutable" }]
     },

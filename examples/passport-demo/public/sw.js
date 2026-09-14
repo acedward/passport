@@ -22,7 +22,7 @@
  *      to notice and press.
  *
  * `BUILD_ID` fixes both at the root. It is stamped by the build (see
- * `stampServiceWorkerBuildId` in `vite.config.ts`) with a digest of everything
+ * `stampBuildId` in `vite.config.ts`) with a digest of everything
  * the client build emitted, so these bytes change on every deploy that changes
  * the client and on no other. The worker then activates itself rather than
  * depending on any page code — the page code is exactly what was stale.
@@ -157,9 +157,27 @@ async function networkNavigation(request) {
  * contract recompile ships a new build, which is a new id, which is a new
  * cache — the old keys are dropped rather than pinned. Immutability holds
  * WITHIN a build, which is exactly the lifetime of the cache holding them.
+ *
+ * TWO THINGS MAKE THAT TRUE RATHER THAN NEARLY TRUE (2026/09/14)
+ * --------------------------------------------------------------
+ * The lookup is `caches.open(STATIC_CACHE)` and then `.match`, NOT the
+ * `caches.match(request)` this used to be. The bare form searches EVERY cache
+ * on the origin in creation order, so the previous build's entries could answer
+ * for this build in the window before `activate` has finished deleting them —
+ * and a worker that has just called `skipWaiting()` starts handling fetches
+ * inside exactly that window. Confined to this build's cache, an older build's
+ * copy cannot be reached whether it has been deleted yet or not.
+ *
+ * And the app now asks for `/zk/**` with `?b=<build id>` on it (see
+ * `src/lib/buildId.ts`, and the incident that put it there). `Cache.match` and
+ * `Cache.put` key on the FULL url including the query unless `ignoreSearch` is
+ * passed, and it is not passed anywhere here — so each build's artefacts are
+ * stored and found under their own addresses, which is what makes the same
+ * guarantee hold one layer up in the browser's HTTP cache too.
  */
 async function immutableAsset(request) {
-  const cached = await caches.match(request);
+  const cache = await caches.open(STATIC_CACHE).catch(() => null);
+  const cached = await cache?.match(request);
   if (cached) return cached;
   const response = await fetch(request).catch(() => null);
   if (response?.ok && response.type === 'basic') {
@@ -175,8 +193,9 @@ async function immutableAsset(request) {
 
        So the write is best effort, exactly as the sibling `staticAsset` below
        already treats it: an over-quota device pays the download again next
-       session and proves fine this one. */
-    const cache = await caches.open(STATIC_CACHE).catch(() => null);
+       session and proves fine this one. The `caches.open` that guard applies
+       to is now at the top of this function — the same handle serves the
+       lookup and the write — and it is still allowed to fail to `null`. */
     await cache?.put(request, response.clone()).catch(() => undefined);
   }
   return response || Response.error();

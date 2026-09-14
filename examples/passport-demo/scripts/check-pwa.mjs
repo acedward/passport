@@ -105,7 +105,7 @@ const builtWorker = await text(path.join(distDir, 'sw.js'));
    so deploys between two bumps shipped an identical worker and installed
    clients were never offered an update at all — the 2026/08/26 incident, in
    which a reviewer's installed PWA served a client weeks out of date. The id
-   is now stamped by `stampServiceWorkerBuildId()` in `vite.config.ts` from a
+   is now stamped by `stampBuildId()` in `vite.config.ts` from a
    digest of everything the build emitted, which is a fact about the pipeline
    and not about anyone remembering. Both halves are asserted here: the
    placeholder is in source, it is GONE from the build, and the build differs
@@ -214,7 +214,41 @@ pass('content-hashed assets are declared immutable');
    Vercel's `max-age=0, must-revalidate` default, which put a conditional
    request in front of 144 MB on every cold session that the service worker
    could not answer from its own cache — the CDN was being re-asked for files
-   that are, by construction, already final. */
+   that are, by construction, already final.
+
+   "A NEW BUILD ASKS FOR NEW URLS" WAS NOT TRUE UNTIL 2026/09/14, and this is
+   where the correction lives, because `vercel.json` is strict JSON with a
+   schema that rejects unknown keys and can hold no comment of its own.
+
+   It was not true because `/zk/**` carries no content hash anywhere in its
+   path. A browser that fetched `/zk/account/compiler/contract-manifest.json`
+   before the account contract gained a twelfth circuit was told to keep it for
+   a YEAR, and `FetchZkConfigProvider` checks every key it loads against that
+   manifest and fails closed — so a reviewer creating a new Passport on a
+   browser that had used Passport before Thursday's release met
+   `ZKConfigurationReadError: Failed to read verifier key for
+   passport-account#transfer_shielded_to_account`. A fresh browser was fine,
+   which is why every gate here passed while every returning user was broken.
+
+   Two rules answer it, and they answer it differently on purpose.
+
+   The KEYS and the ZKIR keep the year, because the client now puts this
+   build's id in the query of every artefact request — `src/lib/buildId.ts`,
+   stamped by `stampBuildId()` in `vite.config.ts`. The browser's HTTP cache,
+   the service worker's cache, and the CDN all key on the full url, so a new
+   build asks for `?b=<new id>`, an address none of them has ever answered.
+   That is what "immutable" was always claiming and is now true of: the bytes
+   at a given url cannot change, because the url names the build. Keeping the
+   year matters — `/zk` and `/zk-params` are 144 MB and a first shielded
+   withdrawal pulls roughly 54 MB of it, on a phone.
+
+   The MANIFEST does not keep it. It is a few kilobytes, it is fetched once per
+   contract per session, and it is the one file whose staleness takes the whole
+   app down rather than one circuit. `no-cache` — store it, revalidate it, take
+   the 304 — costs one conditional request and removes the manifest from the
+   list of things that can be wrong for a year if the query ever stops being
+   appended. The query is the fix; this is the part that does not depend on the
+   fix still being wired up next month. */
 for (const source of ['/zk/(.*)', '/zk-params/(.*)']) {
   assert.equal(
     headerValue(source, 'cache-control'),
@@ -223,6 +257,21 @@ for (const source of ['/zk/(.*)', '/zk-params/(.*)']) {
   );
 }
 pass('content-addressed proving keys and parameters are declared immutable');
+
+const manifestRule = '/zk/(.*)/compiler/(.*).json';
+assert.equal(
+  headerValue(manifestRule, 'cache-control'),
+  'no-cache',
+  `${manifestRule} must be revalidated — a stale ZK manifest fails every key closed`,
+);
+/* Later rules win, so the manifest's rule has to come after the blanket
+   `/zk/(.*)` one it is narrowing. */
+assert.ok(
+  vercelConfig.headers.findIndex((rule) => rule.source === manifestRule) >
+    vercelConfig.headers.findIndex((rule) => rule.source === '/zk/(.*)'),
+  'The ZK manifest rule must come after /zk/(.*) or the year-long value wins.',
+);
+pass('the ZK integrity manifest is revalidated rather than pinned for a year');
 assert.equal(headerValue('/((?!zk/|zk-params/|assets/).*)', 'cache-control'), 'no-cache');
 pass('every stable-url file, both HTML shells included, must be revalidated');
 assert.equal(headerValue('/sw.js', 'cache-control'), 'no-cache');
@@ -282,12 +331,44 @@ includes(pwaSource, "window.addEventListener('beforeinstallprompt'", 'install pr
 includes(pwaSource, "window.addEventListener('offline'", 'offline state is surfaced');
 includes(pwaSource, 'navigator.storage.persist()', 'private-state setup requests persistent origin storage');
 
+/* THE CLIENT'S HALF OF THE BUILD ID (2026/09/14)
+   ----------------------------------------------
+   The worker naming its caches for the build was never enough on its own: the
+   browser's HTTP cache sits in front of it and had been handed a year on urls
+   with no content hash. `src/lib/buildId.ts` carries the same placeholder as
+   `sw.js` and is stamped from the same digest, so the app can name the build
+   in the query of every `/zk/**` request. Asserted from both ends, exactly as
+   the worker is: the placeholder is in source, the stamp is in the build, and
+   it is the SAME stamp the worker got — two ids would be two cache keys and
+   the worker's cache would miss on everything the page asked for. */
+const buildIdSource = await text(path.join(root, 'src/lib/buildId.ts'));
+includes(
+  buildIdSource,
+  "const STAMPED_BUILD_ID = '__BUILD_ID__'",
+  'the client carries the build-id placeholder',
+);
+const contractRuntimeSource = await text(path.join(root, 'src/identity/contractRuntime.ts'));
+includes(
+  contractRuntimeSource,
+  'fetchFunc: buildIdFetch(globalThis.fetch.bind(globalThis))',
+  'every ZK artefact request carries the build id',
+);
+
 const assetNames = (await readdir(path.join(distDir, 'assets'))).filter((name) => name.endsWith('.js'));
 const builtJavascript = (
   await Promise.all(assetNames.map((name) => text(path.join(distDir, 'assets', name))))
 ).join('\n');
 includes(builtJavascript, '/sw.js', 'production JavaScript contains service-worker registration');
 includes(builtJavascript, 'SKIP_WAITING', 'production JavaScript contains explicit update activation');
+assert.ok(
+  !builtJavascript.includes('__BUILD_ID__'),
+  'Built client JavaScript still carries the __BUILD_ID__ placeholder.',
+);
+assert.ok(
+  builtJavascript.includes(builtBuildId[1]),
+  'Built client JavaScript does not carry the build id the service worker was stamped with.',
+);
+pass(`the client is stamped with the same build id as its service worker, ${builtBuildId[1]}`);
 
 const builtManifest = await json(path.join(distDir, 'manifest.webmanifest'));
 assert.deepEqual(builtManifest, manifest);
