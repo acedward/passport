@@ -22,3 +22,24 @@ export type AccountModuleName = 'account' | 'account-v1';
 export function accountModuleFor(carriesOneTxTransfer: boolean | null): AccountModuleName {
   return carriesOneTxTransfer === false ? 'account-v1' : 'account';
 }
+
+/** The operation this decides on; the name the deployed build answers with. */
+export const ONE_TX_TRANSFER_OPERATION_NAME = 'transfer_shielded_to_account';
+
+/**
+ * Reads the answer off a contract state the indexer served: `true` or `false`
+ * from `ContractState.operations()`, `null` when the state cannot say.
+ */
+export function carriesOneTxTransferIn(state: unknown): boolean | null {
+  const operations = (state as { operations?: () => (string | Uint8Array)[] } | null)?.operations;
+  if (typeof operations !== 'function') return null;
+  try {
+    const decoder = new TextDecoder();
+    const names = operations
+      .call(state)
+      .map((entry) => (typeof entry === 'string' ? entry : decoder.decode(entry)));
+    return names.includes(ONE_TX_TRANSFER_OPERATION_NAME);
+  } catch {
+    return null;
+  }
+}

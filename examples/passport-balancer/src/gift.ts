@@ -41,6 +41,7 @@
  * sUSD.
  */
 
+import { accountModuleFor, carriesOneTxTransferIn } from './accountModule.js';
 import { randomBytes } from 'node:crypto';
 
 import * as ledger from '@midnightntwrk/ledger-v9';
@@ -189,6 +190,8 @@ interface Prepared {
   account: AccountModule;
   compiledFaucet: unknown;
   compiledAccount: unknown;
+  /** The eleven-circuit build, for accounts set up before 2026/09/10. */
+  compiledAccountV1: unknown;
   faucetZkConfig: unknown;
   accountZkConfig: unknown;
   faucetProofProvider: unknown;
@@ -234,6 +237,15 @@ async function prepare(config: BalancerConfig): Promise<Prepared> {
   const account = (await import(
     '../contracts-stagenet/managed/account/contract/index.js'
   )) as unknown as AccountModule;
+  /* The build every Passport set up before 2026/09/10 carries — eleven entry
+     points, no `transfer_shielded_to_account` — proved against the same key
+     files, since the shared circuits' keys are bit-identical. See
+     `./accountModule.ts`: opening an older account with the current module is
+     refused before anything is deposited, which is the 503 a partner saw on
+     2026/09/15. */
+  const accountV1 = (await import(
+    '../contracts-stagenet/managed/account-v1/contract/index.js'
+  )) as unknown as AccountModule;
   const { CompiledContract } = await import('@midnight-ntwrk/compact-js');
   const { NodeZkConfigProvider } = await import(
     '@midnight-ntwrk/midnight-js-node-zk-config-provider'
@@ -266,11 +278,23 @@ async function prepare(config: BalancerConfig): Promise<Prepared> {
     } as never),
     CompiledContract.withCompiledFileAssets(accountPath),
   );
+  const compiledAccountV1 = CompiledContract.make(
+    'passport-account-v1',
+    accountV1.Contract as never,
+  ).pipe(
+    CompiledContract.withWitnesses({
+      device_secret: refusing('device secret'),
+      grant_secret: refusing('grant secret'),
+      recovery_secret: refusing('recovery secret'),
+    } as never),
+    CompiledContract.withCompiledFileAssets(accountPath),
+  );
   const reader = await publicDataProviderFor(config);
   return {
     account,
     compiledFaucet,
     compiledAccount,
+    compiledAccountV1,
     faucetZkConfig,
     accountZkConfig,
     faucetProofProvider,
@@ -475,6 +499,13 @@ export function createColourPayer(deps: {
       return decoded.coins.member(colourBytes) ? decoded.coins.lookup(colourBytes).value : 0n;
     };
     const before = await held();
+    /* Which build this account is: read off its own state, not assumed. */
+    const compiledForAccount =
+      accountModuleFor(
+        carriesOneTxTransferIn(await built.reader.queryContractState(address).catch(() => null)),
+      ) === 'account-v1'
+        ? built.compiledAccountV1
+        : built.compiledAccount;
 
     /* 1 and 2. mint_shielded to this wallet, and the wait for it to be
        spendable here. See {@link mintToSelf}. */
@@ -493,7 +524,7 @@ export function createColourPayer(deps: {
         });
         const { findDeployedContract } = await import('@midnight-ntwrk/midnight-js-contracts');
         const found = await findDeployedContract(providers as never, {
-          compiledContract: built.compiledAccount,
+          compiledContract: compiledForAccount,
           contractAddress: address,
           privateStateId,
           initialPrivateState: {},
