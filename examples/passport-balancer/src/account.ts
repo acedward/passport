@@ -69,6 +69,7 @@
  * verifier keys as the contracts the migrated PWA deploys on stagenet.
  */
 
+import { accountModuleFor } from './accountModule.js';
 import { randomBytes } from 'node:crypto';
 
 import * as ledger from '@midnightntwrk/ledger-v9';
@@ -824,6 +825,13 @@ export async function createAccountFunder(
   const account = (await import(
     '../contracts-stagenet/managed/account/contract/index.js'
   )) as unknown as AccountModule;
+  /* The build every Passport set up before 2026/09/10 carries: eleven entry
+     points, no `transfer_shielded_to_account`. Same key files — the shared
+     circuits' keys are bit-identical across the two builds. See
+     `./accountModule.ts` for why both are loaded. */
+  const accountV1 = (await import(
+    '../contracts-stagenet/managed/account-v1/contract/index.js'
+  )) as unknown as AccountModule;
   const { CompiledContract } = await import('@midnight-ntwrk/compact-js');
   const { NodeZkConfigProvider } = await import(
     '@midnight-ntwrk/midnight-js-node-zk-config-provider'
@@ -986,6 +994,43 @@ export async function createAccountFunder(
     } as never),
     CompiledContract.withCompiledFileAssets(managedPath),
   );
+  const compiledContractV1 = CompiledContract.make(
+    'passport-account-v1',
+    accountV1.Contract as never,
+  ).pipe(
+    CompiledContract.withWitnesses({
+      device_secret: refusingWitness('device secret'),
+      grant_secret: refusingWitness('grant secret'),
+      recovery_secret: refusingWitness('recovery secret'),
+    } as never),
+    CompiledContract.withCompiledFileAssets(managedPath),
+  );
+  /** Reads whether the deployed account carries the one-transaction circuit. */
+  const oneTxTransferOf = async (rawAddress: string): Promise<boolean | null> => {
+    let state: unknown;
+    try {
+      state = await reader.queryContractState(rawAddress);
+    } catch {
+      return null;
+    }
+    const operations = (state as { operations?: () => (string | Uint8Array)[] } | null)
+      ?.operations;
+    if (typeof operations !== 'function') return null;
+    try {
+      const decoder = new TextDecoder();
+      const names = operations
+        .call(state)
+        .map((entry) => (typeof entry === 'string' ? entry : decoder.decode(entry)));
+      return names.includes(ONE_TX_TRANSFER_OPERATION);
+    } catch {
+      return null;
+    }
+  };
+  /** The module a deployed account must be opened with — read from its state. */
+  const compiledFor = async (rawAddress: string) =>
+    accountModuleFor(await oneTxTransferOf(rawAddress)) === 'account-v1'
+      ? compiledContractV1
+      : compiledContract;
 
   /**
    * Reads the account's ledger state, or refuses.
@@ -1342,7 +1387,7 @@ export async function createAccountFunder(
         depositTx = await withNodeRejectionRetry(
           async () => {
             const found = await findDeployedContract(providers as never, {
-              compiledContract,
+              compiledContract: await compiledFor(address),
               contractAddress: address,
               privateStateId,
               initialPrivateState: {},
@@ -1462,7 +1507,7 @@ export async function createAccountFunder(
             walletProvider: wallet.contractWalletProvider(),
           });
           const found = await findDeployedContract(accountProviders as never, {
-            compiledContract,
+            compiledContract: await compiledFor(address),
             contractAddress: address,
             privateStateId,
             initialPrivateState: {},
