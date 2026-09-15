@@ -95,6 +95,7 @@ export interface HomeScreenProps {
     record: AliasRecord | null
     incentives: PassportIncentiveRecord[]
     onClaimName?: () => void
+    onFindExisting?: () => void
     /** Re-runs the real claim for a queued name. See EcosystemProps. */
     onRegisterNow?: () => void
     registerNowDisabledReason?: string | null
@@ -1020,6 +1021,7 @@ export default function HomeScreen(props: HomeScreenProps) {
             incentives={identity.incentives}
             variant="card"
             onClaimName={identity.onClaimName}
+            onFindExisting={identity.onFindExisting}
             onRegisterNow={identity.onRegisterNow}
             registerNowDisabledReason={identity.registerNowDisabledReason}
             registerNowBusy={identity.registerNowBusy}
