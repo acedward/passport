@@ -43,6 +43,7 @@ import {
   isBlockLimit,
   isTimeToDismiss,
   MAX_DUST_INPUTS_CEILING,
+  MAX_FEE_LEG_PADDING,
   maxDustInputsFor,
   MIN_TIME_TO_DISMISS_MS,
   parseBlockLimits,
@@ -698,7 +699,7 @@ describe("the chain's fee rule, in the ledger's own numbers", () => {
   it('needs one crumb fewer for a grant that spends an exact coin and makes no change', () => {
     assert.equal(crumbsForShape(15.935 - 2.49, 7118 - 80), 3);
     assert.equal(crumbsForShape(5, 7000), 0, 'a transaction already under the target needs none');
-    assert.equal(crumbsForShape(200, 7000), 8, 'and nothing sensible is capped at eight');
+    assert.equal(crumbsForShape(200, 7000), MAX_FEE_LEG_PADDING, 'and nothing sensible is capped at the fee-leg maximum');
   });
 });
 

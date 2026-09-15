@@ -463,10 +463,10 @@ export function boundMsFor(bytes: number): number {
  * both net losses. Never more than eight.
  */
 export function crumbsForShape(takesMs: number, bytes: number, target = TIME_TO_DISMISS_TARGET): number {
-  for (let k = 0; k <= 8; k += 1) {
+  for (let k = 0; k <= MAX_FEE_LEG_PADDING; k += 1) {
     if (takesMs + k * CRUMB_MS <= target * boundMsFor(bytes + k * CRUMB_BYTES)) return k;
   }
-  return 8;
+  return MAX_FEE_LEG_PADDING;
 }
 
 export function crumbsForDeficit(message: string): number {
@@ -550,7 +550,7 @@ export function timeToDismissSentence(shape: FeeShape): string {
  * is where {@link crumbsForShape} and {@link crumbsForDeficit} already stop and
  * where the contract-call climb in `./wallet.ts` has always stopped.
  */
-export const MAX_FEE_LEG_PADDING = 8;
+export const MAX_FEE_LEG_PADDING = 11;
 
 /**
  * The padding the ledger's sentence calls for: parse what the transaction takes
