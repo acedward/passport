@@ -43,7 +43,10 @@
 // offline checks), normalises S, and learns the device's public point by
 // recovering it from the device's own first signature.
 
-import { randomBytes } from 'node:crypto';
+// Randomness comes from WebCrypto rather than `node:crypto`: this module is
+// the one a browser wallet loads (project 00034 PR-C's smoke page bundles it
+// unchanged), and `globalThis.crypto.getRandomValues` is the one CSPRNG both
+// targets have. Same source of entropy, one import fewer to polyfill.
 import { secp256k1 } from '@noble/curves/secp256k1.js';
 
 import {
@@ -92,6 +95,22 @@ export interface CallContext {
 
 const addr = (ctx: CallContext) => ({ bytes: ctx.contractAddress });
 
+/** 32 cryptographically strong bytes, from whichever CSPRNG the host has. */
+function random32(): Uint8Array {
+  const out = new Uint8Array(32);
+  globalThis.crypto.getRandomValues(out);
+  return out;
+}
+
+/** Big-endian integer value of a byte string — how both arms read a sampled
+ *  scalar (the little-endian reading is `bytesToBigIntLE`, used for the
+ *  jubjub challenge's field element). */
+function bytesToBigIntBE(bytes: Uint8Array): bigint {
+  let v = 0n;
+  for (const byte of bytes) v = (v << 8n) | BigInt(byte);
+  return v;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Arm jubjub (MIP-0013 §5)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -104,7 +123,7 @@ export const JUBJUB_R = BigInt(
 /** Uniform scalar in [1, r_J), by rejection sampling. */
 export function randomJubjubScalar(): bigint {
   for (;;) {
-    const candidate = BigInt('0x' + randomBytes(32).toString('hex'));
+    const candidate = bytesToBigIntBE(random32());
     if (candidate > 0n && candidate < JUBJUB_R) return candidate;
   }
 }
@@ -249,7 +268,7 @@ export const SECP256K1_N = BigInt(
 /** Uniform scalar in [1, n), by rejection sampling. */
 export function randomSecp256k1Scalar(): bigint {
   for (;;) {
-    const candidate = BigInt('0x' + randomBytes(32).toString('hex'));
+    const candidate = bytesToBigIntBE(random32());
     if (candidate > 0n && candidate < SECP256K1_N) return candidate;
   }
 }

@@ -1,0 +1,52 @@
+{
+  "testId": "prc-c1",
+  "name": "client-offline",
+  "description": "The EIP-1193 path into a real gated circuit, the portable inbox codec against Passport's, third-party deposits, the S11 rescan, the roster snapshot, the constructor argument order and the network configuration.",
+  "verdict": "PASS",
+  "note": "No node, indexer or proof server; the account runs in the compact-runtime simulator.",
+  "details": {
+    "eip1193": {
+      "digest": "0xadb3d4f43117f17560a26d343e523a459c2b9b0278f614604687dbb699c928a9",
+      "owner": "0x2be39fd6a35b4dfd91926be2caca8204b565a9dd",
+      "primaryType": "AppendInbox",
+      "walletCalls": [
+        "personal_sign",
+        "eth_signTypedData_v4"
+      ]
+    },
+    "thirdPartyDeposit": {
+      "inboxCount": "2",
+      "recoveredValue": "250",
+      "entriesOpened": 2
+    },
+    "networks": {
+      "local": {
+        "networkId": "undeployed",
+        "indexer": "http://localhost:8088/api/v4/graphql",
+        "indexerWS": "ws://localhost:8088/api/v4/graphql/ws",
+        "node": "http://localhost:9944",
+        "proofServer": "http://127.0.0.1:6300"
+      },
+      "stagenet": {
+        "networkId": "stagenet",
+        "indexer": "https://indexer.stagenet.shielded.tools/api/v4/graphql",
+        "indexerWS": "wss://indexer.stagenet.shielded.tools/api/v4/graphql/ws",
+        "node": "https://rpc.stagenet.shielded.tools",
+        "proofServer": "http://127.0.0.1:6300"
+      },
+      "overridden": {
+        "networkId": "undeployed",
+        "indexer": "http://127.0.0.1:20883/api/v4/graphql",
+        "indexerWS": "ws://127.0.0.1:20883/api/v4/graphql/ws",
+        "node": "http://127.0.0.1:24435",
+        "proofServer": "http://127.0.0.1:49933"
+      }
+    }
+  },
+  "ranAt": "2026-09-16T06:41:48.622Z",
+  "stack": {
+    "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
+    "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",
+    "proofServer": "midnightntwrk/proof-server:9.0.0-rc.6"
+  }
+}

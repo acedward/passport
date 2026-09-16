@@ -4,14 +4,43 @@
   "type": "module",
   "private": true,
   "description": "Reference implementation of the Midnight account custody standard: MIP-0012 (contract custody of native assets) with the authorisation seam carried as co-resident arms: JubJub Schnorr (the MIP-0013 scheme) and an interim ECDSA-secp256k1 engineering arm.",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./node": {
+      "types": "./dist/src/node/wallet.d.ts",
+      "import": "./dist/src/node/wallet.js"
+    },
+    "./node/roster": {
+      "types": "./dist/src/node/roster.d.ts",
+      "import": "./dist/src/node/roster.js"
+    },
+    "./offer": {
+      "types": "./dist/src/wallet/offer.d.ts",
+      "import": "./dist/src/wallet/offer.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/src",
+    "docs",
+    "contracts/account.compact",
+    "contracts/modules",
+    "README.md"
+  ],
   "scripts": {
     "compile": "compact compile +0.34.0 --feature-zkir-v3 contracts/account.compact contracts/managed/account && compact compile +0.34.0 --feature-zkir-v3 contracts/control.compact contracts/managed/control && compact compile +0.34.0 --feature-zkir-v3 contracts/faucet.compact contracts/managed/faucet",
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-artifacts.mjs",
     "measure-k": "node scripts/measure-k.mjs",
     "fixtures:evm": "tsx src/tests/fixtures/generate-evm-v1.ts",
     "deploy-budget": "tsx src/tests/deploy-budget.ts",
     "test:eip712-evm": "tsx src/tests/eip712-evm-offline.ts",
     "test:eip712-oracles": "tsx src/tests/eip712-evm-oracles.ts",
+    "test:client-offline": "tsx src/tests/client-offline.ts",
     "test:evm-deploy": "tsx src/tests/evm-account-deploy.ts",
     "fixtures:swap": "tsx src/tests/fixtures/generate-evm-v1-swap.ts",
     "test:swap-primitives": "tsx src/tests/swap-primitives-offline.ts",
