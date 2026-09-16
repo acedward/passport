@@ -36,6 +36,7 @@ import {
   secp256k1PublicKeyOf,
   signAttestationDigest,
 } from '@sig-net/midnight/testing';
+import { formatSecp256k1PublicKey } from '../../contracts/erc20-vault/src/signet-sdk.js';
 
 import * as SignetSigner from '../../contracts/erc20-vault/managed/SignetSigner/contract/index.js';
 import * as Vault from '../../contracts/erc20-vault/managed/Erc20Vault/contract/index.js';
@@ -55,7 +56,7 @@ import { Contract, ledger as accountLedgerOf, pureCircuits } from '../wallet/con
 import { makeWitnesses } from '../wallet/witnesses.js';
 import { EvmDevice, authArgs, authorise, type CallContext as AuthContext, type EvmTxParams } from '../wallet/signer.js';
 import { evmDomainSaltFor } from '../wallet/eip712.js';
-import { BRIDGE_CIRCUITS, bridgeWaves, vaultColour } from '../wallet/bridge.js';
+import { BRIDGE_CIRCUITS, bridgeWaves, depositAddressFor, vaultColour } from '../wallet/bridge.js';
 import { generateEncKeyPair, openInboxEntry, sealInboxEntry } from '../wallet/inbox.js';
 import { bytesToHex, hexToBytes } from '../wallet/hex.js';
 
@@ -392,6 +393,29 @@ async function main(): Promise<void> {
   await mustFail('a refund settled twice', () => call('bridge_withdraw_refund',
     hexToBytes(refund2.id), attestation(hexToBytes(refund2.id), MPC_FAILURE_OUTPUT), MPC_FAILURE_OUTPUT,
     new Uint8Array(randomBytes(32)), refundEntry2));
+
+  // ── Deposit addresses are per account ──────────────────────────────────────
+  step('one account cannot be funded through another\'s deposit address');
+  const otherAccount = `dd${'44'.repeat(31)}`;
+  const pathHere = vaultPureCircuits.depositPath(
+    contractRecipient(hexToBytes(ACCOUNT_ADDRESS)) as never,
+  );
+  const pathThere = vaultPureCircuits.depositPath(
+    contractRecipient(hexToBytes(otherAccount)) as never,
+  );
+  assert(bytesToHex(pathHere) !== bytesToHex(pathThere),
+    'two accounts derive two MPC paths, so two different EVM addresses (spec User Story 5, scenario 5)');
+  const config = {
+    vaultAddress: VAULT_ADDRESS, signetContractAddress: SIGNET_ADDRESS,
+    mpcRootPublicKey: formatSecp256k1PublicKey(secp256k1PublicKeyOf(fill(32, 0x31))),
+    erc20: bytesToHex(ERC20), evmRpcUrl: 'http://127.0.0.1:0',
+  };
+  const addressHere = depositAddressFor(config, ACCOUNT_ADDRESS);
+  const addressThere = depositAddressFor(config, otherAccount);
+  assert(addressHere.toLowerCase() !== addressThere.toLowerCase(),
+    `and the addresses themselves differ (${addressHere} vs ${addressThere})`);
+  assert(depositAddressFor(config, ACCOUNT_ADDRESS) === addressHere,
+    'the derivation is deterministic — a user can be shown the same address twice');
 
   // ── The client's operation set ─────────────────────────────────────────────
   step('the deploy set a bridge account carries');
