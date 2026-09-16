@@ -61,9 +61,11 @@ export type EvmOp =
   | 'AppendInbox'
   | 'RotateEncKey'
   | 'AddDevice'
-  | 'RemoveDevice';
+  | 'RemoveDevice'
+  | 'BridgeDepositStart'
+  | 'BridgeWithdrawStart';
 
-export type FieldType = 'bytes32' | 'address' | 'uint64' | 'uint128';
+export type FieldType = 'bytes32' | 'address' | 'uint8' | 'uint64' | 'uint128';
 export interface FieldDefinition {
   readonly name: string;
   readonly type: FieldType;
@@ -104,6 +106,38 @@ const ACTION_FIELDS: Record<EvmOp, readonly FieldDefinition[]> = {
   RotateEncKey: [{ name: 'newKey', type: 'bytes32' }],
   AddDevice: [{ name: 'newEntry', type: 'bytes32' }],
   RemoveDevice: [{ name: 'entry', type: 'bytes32' }],
+  // The ERC20 bridge (project 00034 PR-G). Both types carry the five parameters of the
+  // Ethereum transaction the Sig Network MPC will sign, because signing them is the reason
+  // these two operations are gated at all: they spend GAS from an MPC-derived account (the
+  // user's own derived deposit address on the way in, the vault's on the way out). A relayer
+  // free to choose `maxFeePerGas` could otherwise drain that account without touching a
+  // single bridged token.
+  BridgeDepositStart: [
+    { name: 'erc20', type: 'address' },
+    { name: 'amount', type: 'uint128' },
+    { name: 'evmNonce', type: 'uint64' },
+    { name: 'gasLimit', type: 'uint64' },
+    { name: 'maxFeePerGas', type: 'uint128' },
+    { name: 'maxPriorityFeePerGas', type: 'uint128' },
+    { name: 'keyVersion', type: 'uint8' },
+  ],
+  // `dest` is the Ethereum address the ERC20 leaves to — the one field whose mistake the
+  // account cannot undo. `color` is the vault colour surrendered, and it determines the
+  // ERC20 (colour = tokenType(vaultTokenDomainSeparator(erc20), vault)), so the ERC20
+  // address is bound through `challenge` rather than shown twice. The witness coin and the
+  // 192-byte change inbox entry are bound through `challenge` too: a wallet can display
+  // neither (one is private, the other ciphertext) and AUTH-10 pinning is what makes them
+  // unsubstitutable.
+  BridgeWithdrawStart: [
+    { name: 'dest', type: 'address' },
+    { name: 'color', type: 'bytes32' },
+    { name: 'amount', type: 'uint128' },
+    { name: 'evmNonce', type: 'uint64' },
+    { name: 'gasLimit', type: 'uint64' },
+    { name: 'maxFeePerGas', type: 'uint128' },
+    { name: 'maxPriorityFeePerGas', type: 'uint128' },
+    { name: 'keyVersion', type: 'uint8' },
+  ],
 };
 
 export const EVM_OPS = Object.keys(ACTION_FIELDS) as EvmOp[];
@@ -162,8 +196,11 @@ export function addressWord(value: Uint8Array, label: string): Uint8Array {
   return out;
 }
 
-/** An unsigned integer as a big-endian 32-byte word. */
-export function uintWord(value: bigint, bits: 64 | 128, label: string): Uint8Array {
+/** An unsigned integer as a big-endian 32-byte word. EIP-712 gives every unsigned
+ *  integer one 32-byte word whatever its declared width, so `uint8` and `uint64` differ
+ *  only in the range check — which is why the in-circuit codec encodes `keyVersion`
+ *  with its uint64 encoder and produces the same bytes. */
+export function uintWord(value: bigint, bits: 8 | 64 | 128, label: string): Uint8Array {
   if (typeof value !== 'bigint') throw new TypeError(`${label} must be a bigint`);
   if (value < 0n || value >= 1n << BigInt(bits)) {
     throw new RangeError(`${label} must fit uint${bits}`);
@@ -226,6 +263,8 @@ function fieldWord(field: FieldDefinition, value: Uint8Array | bigint | undefine
       return bytes32Word(value as Uint8Array, field.name);
     case 'address':
       return addressWord(value as Uint8Array, field.name);
+    case 'uint8':
+      return uintWord(value as bigint, 8, field.name);
     case 'uint64':
       return uintWord(value as bigint, 64, field.name);
     case 'uint128':

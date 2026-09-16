@@ -1,15 +1,21 @@
 # AUTH-EIP712-PASSPORT-EVM-V1 — frozen byte contract of the `evm` arm
 
-**Status**: frozen by PR-A phase A1 (2026/09/16); **extended by PR-B phase B1 (2026/09/16) with an
-EIGHTH primary type, `OpenSwapShielded`**, in a way that changes no byte of the first seven — same
+**Status**: frozen by PR-A phase A1 (2026/09/16); **extended by PR-B phase B1 with an EIGHTH primary
+type, `OpenSwapShielded`, and by PR-G phase G1 with a NINTH and TENTH, `BridgeDepositStart` and
+`BridgeWithdrawStart`** (all 2026/09/16), in a way that changes no byte of the first seven — same
 type strings, same type hashes, same vectors, same domain. A signature produced before B1 still
 verifies. Any change to an existing byte would require a new version (`…-V2`) and a spec decision;
 adding a type does not, because the type hash is what separates operations and a new one collides
 with nothing.
 
-The vector set is versioned separately and now spans two files: `…/FIXTURES-1`
-(`passport-evm-v1.json`, the seven original types) and **`…/FIXTURES-2`
-(`passport-evm-v1-swap.json`, the eighth)**. All hex in this document and in the fixtures is
+The vector set is versioned separately and now spans two files:
+
+| File | Version | Holds |
+|---|---|---|
+| `passport-evm-v1.json` | `…/FIXTURES-3` | the seven original types and PR-G's two bridge types — 81 vectors (it was `FIXTURES-1`, 63 vectors, before the bridge) |
+| `passport-evm-v1-swap.json` | `…/FIXTURES-2` | PR-B's `OpenSwapShielded`, whose TypeScript codec lives in `src/wallet/offer.ts` rather than in the table-driven one (question Q36), and whose vectors therefore have their own generator |
+
+All hex in this document and in the fixtures is
 lowercase and `0x`-prefixed; all integers in wallet JSON are base-10 strings.
 
 **What this document is.** The `evm` arm of the account contract admits an ordinary Ethereum EOA
@@ -108,6 +114,8 @@ proved, published, and then executed by a STRANGER at a time the signer does not
 | 6 | `AddDevice` | `AddDevice(bytes32 account,address owner,uint64 authNonce,bytes32 newEntry,bytes32 challenge)` | `8fcd6e27a88f183fb4c2abfd1905a791ddb04588b785e973c4dbfc12abb4d7e4` | 192 B |
 | 7 | `RemoveDevice` | `RemoveDevice(bytes32 account,address owner,uint64 authNonce,bytes32 entry,bytes32 challenge)` | `c132901ac5a712b2c627c8e9eb6cd587966fb0214e7be36cc0e363e3b05417d4` | 192 B |
 | 8 | `OpenSwapShielded` | `OpenSwapShielded(bytes32 account,address owner,uint64 authNonce,bytes32 giveColor,uint128 giveAmount,uint8 recipientKind,bytes32 recipient,bytes32 wantNonce,bytes32 wantColor,uint128 wantAmount,uint64 validUntil,bytes32 challenge)` | `34626793abd7c67d21e1a61a99f1cfff4f82ae0e2325a6ba9dfdc4ff12d668ae` | 416 B |
+| 8 | `BridgeDepositStart` | `BridgeDepositStart(bytes32 account,address owner,uint64 authNonce,address erc20,uint128 amount,uint64 evmNonce,uint64 gasLimit,uint128 maxFeePerGas,uint128 maxPriorityFeePerGas,uint8 keyVersion,bytes32 challenge)` | `6737c68b20d3df2b20b6653c7b69983631aee7207fd81e4014bd268b017625ee` | 384 B |
+| 9 | `BridgeWithdrawStart` | `BridgeWithdrawStart(bytes32 account,address owner,uint64 authNonce,address dest,bytes32 color,uint128 amount,uint64 evmNonce,uint64 gasLimit,uint128 maxFeePerGas,uint128 maxPriorityFeePerGas,uint8 keyVersion,bytes32 challenge)` | `7fca5f3b9c61d79beceff09fb2101688a7422eeaab2505b158b80760c278b260` | 416 B |
 
 ```
 structHash = keccak256( typeHash || word(field_1) || … || word(field_n) )
@@ -145,6 +153,19 @@ commitment, exactly as on the other two arms, so it has no primary type here.
   give/want legs are a price rather than a transfer, which is why `recipientKind` is a readable
   field rather than three separate types: the SAME signed terms have to describe both shapes for a
   taker to compare them.
+- **The five EVM transaction parameters** of types 8 and 9 (`evmNonce`, `gasLimit`,
+  `maxFeePerGas`, `maxPriorityFeePerGas`, `keyVersion`) are the reason those two operations are
+  gated at all. The bridged value is already safe without a signature — the recipient is pinned to
+  the account inside the circuit and no argument can move it — but the transaction the MPC signs
+  spends GAS from an MPC-derived Ethereum account (the user's own derived deposit address on the
+  way in, the vault's on the way out), and a relayer free to choose the fee fields could drain it
+  without touching a single token. `keyVersion` selects the MPC root key and is 1 today.
+- **`BridgeWithdrawStart` shows `dest` and `color`, and not the ERC20 address**: the colour IS the
+  asset's identity on the Midnight side and it determines the ERC20 (colour =
+  `tokenType(vaultTokenDomainSeparator(erc20), vault)`), so showing the address as well would be
+  the same fact twice. The ERC20 address, the 192-byte change inbox entry and the qualified coin
+  the witness returned are all bound through `challenge`. `dest` is the one field a user must read
+  carefully: it is the only value in the byte contract whose mistake the account cannot undo.
 
 ## ABI word rules
 
@@ -154,9 +175,14 @@ Each field is one standard 32-byte ABI word.
 |---|---|
 | `bytes32` | the 32 bytes, unchanged |
 | `address` | 12 zero bytes, then the 20 address bytes |
-| `uint8` | 31 zero bytes, then the value (type 8's `recipientKind` only) |
+| `uint8` | 31 zero bytes, then the value (type 8's `recipientKind`, types 9 and 10's `keyVersion`) |
 | `uint64` | unsigned big-endian, left-padded to 32 bytes |
 | `uint128` | unsigned big-endian, left-padded to 32 bytes |
+
+EIP-712 gives every unsigned integer one 32-byte word whatever its declared width, so `uint8`,
+`uint64` and `uint128` differ only in the range the encoder accepts. `contracts/modules/Eip712.compact`
+therefore encodes `keyVersion` with its `uint64Word` encoder and produces identical bytes;
+`ByteCodec.compact` has no `uint8` encoder, and adding one would be dead weight.
 
 The TypeScript API accepts integers only as `bigint`, and the `eth_signTypedData_v4` JSON
 serializes them only as base-10 strings. Byte values serialize as lowercase `0x` hex.
@@ -185,7 +211,7 @@ can be read as another's (SIG-1):
 |---|---|
 | Device entry | `midnight:account:device:evm:v1` |
 | Boot commitment | `midnight:account:boot:evm:v1` |
-| Per-operation challenge | `midnight:account:auth:evm:v1:<op>`, `<op>` ∈ `withdraw_unshielded`, `withdraw_shielded`, `withdraw_shielded_to_contract`, `append_inbox`, `rotate_enc_key`, `add_device`, `remove_device`, `open_swap_shielded` |
+| Per-operation challenge | `midnight:account:auth:evm:v1:<op>`, `<op>` ∈ `withdraw_unshielded`, `withdraw_shielded`, `withdraw_shielded_to_contract`, `append_inbox`, `rotate_enc_key`, `add_device`, `remove_device`, `open_swap_shielded`, `bridge_deposit_start`, `bridge_withdraw_start` |
 
 The device entry binds the account address, the 20-byte Ethereum address, the epoch and the use
 counter; the boot commitment binds the salt and the address. The `evm` arm has no envelope id (the
@@ -254,6 +280,12 @@ domainSeparator   4b0a5945027e516dc1ebf1bb3ff970216c32e7af8a7c825c83e907421ca099
 | `RotateEncKey` | `883daba2e9459e8bb56844c456d2449e59d1e7eeae3c7c2461b5c123460b4bca` | `2b41c1d8dfb16909a79ea1312bc325660a9f55a1cb0e45e6e0c9432a7385f664` |
 | `AddDevice` | `2a9672fadde26bc1cb2d39b6e004decdeafa5d579763b97d1ded6f68f8450bca` | `384fec6b8be1969ff8573ae172e820fdd25c3eeefabbd6d2ab623f8b4cca5fd9` |
 | `RemoveDevice` | `bcf8997999f5aaf75dd50f086ddf2ace5f01b96c664d042eed38838f0ad911cd` | `83f15dc0c761248111ec8b17359cf41ce41acbf9f12ac0ecc77fa05056a8724a` |
+| `BridgeDepositStart` | `0af4bb90d717bc4777b1cc76df0e155cd81883c64f5a95a1d3effc0dc6ed6dcd` | `fac1b13d76bfa93a035dfc15d87a3ba81b9b31344cb33c8a00d03dbc49a715a5` |
+| `BridgeWithdrawStart` | `2754a232716b1159cf98e10002549ef69776d633d07be1af675549ffbd98c7a5` | `cf13ff147175ebbf9be2102f2b4ced0873a6b655d9cb28b8db4f7d78e02f142a` |
+
+The two bridge types take three word shapes the first seven do not, so their KAT inputs extend the
+fixed set above: every `address` field is `cc … cc` (20 bytes), every `uint64` is 4000000 like the
+amount, and `keyVersion` is 1.
 
 The `WithdrawShielded` signature, produced identically by `@noble/curves` and by ethers'
 `signTypedData` (RFC 6979 deterministic `k`):
@@ -312,14 +344,22 @@ The exact `eth_signTypedData_v4` payload for that vector, as the client builds i
 
 ## The fixture set
 
-`src/tests/fixtures/passport-evm-v1.json`, version `AUTH-EIP712-PASSPORT-EVM-V1/FIXTURES-1`,
-sha256 `e299bfeb9376b43a72128ecfd76a50b9b275d45dacbc999a548879c369d23ce0`, 63 vectors:
+`src/tests/fixtures/passport-evm-v1.json`, version `AUTH-EIP712-PASSPORT-EVM-V1/FIXTURES-3`,
+sha256 `00cbcbcc1927554101ab46767e6cf7a9fdf276d2e9f3d8296187feaf03231c57`, 81 vectors:
 
-- **7 KAT** — one per primary type, the normative key and the fixed inputs above.
-- **14 boundary** — per primary type, every word all-zero (`authNonce` 0, amount 0) and every word
-  all-`ff` (`authNonce` 2⁶⁴−1, amount 2¹²⁸−1).
-- **42 random** — from the xorshift64\* seed `0x50a5590703e70001`, six per primary type, with a
+- **9 KAT** — one per primary type, the normative key and the fixed inputs above.
+- **18 boundary** — per primary type, every word all-zero (`authNonce` 0, amount 0) and every word
+  all-`ff` (`authNonce` 2⁶⁴−1, amount 2¹²⁸−1, `keyVersion` 255).
+- **54 random** — from the xorshift64\* seed `0x50a5590703e70001`, six per primary type, with a
   fresh signing key, account, salt, nonce, challenge and action words each.
+
+FIXTURES-1 (63 vectors, sha256 `e299bfeb9376b43a72128ecfd76a50b9b275d45dacbc999a548879c369d23ce0`)
+is its predecessor. Checked vector by vector: **not one vector present in both files differs by a
+byte** — the 21 KAT and boundary vectors of the first seven types carry over unchanged, as do the
+first seven random ones, and the rest of the random block is renamed rather than altered (the
+round robin that assigns an operation to each index now runs over nine operations, and from index
+7 on a given index draws a different operation and a different number of words from the same
+stream). Nothing a wallet signs changed.
 
 Each vector carries the message, the full struct preimage, the alias, the domain separator, the
 struct hash, the digest, the low-S signature, its high-S twin, the signer's public point, and the
@@ -360,6 +400,8 @@ byte contract:
 9. `addDeviceType()` — `8fcd6e27…d7e4`
 10. `removeDeviceType()` — `c132901a…17d4`
 11. `type_hash_open_swap_shielded()` — `34626793…68ae` (phase B1)
+12. `type_hash_bridge_deposit_start()` — `6737c68b…25ee` (phase G1)
+13. `type_hash_bridge_withdraw_start()` — `7fca5f3b…b260` (phase G1)
 
 plus the structural (non-secret) zero prefixes of the word encoders in
 `contracts/modules/ByteCodec.compact` (`uint8Word` added in B1), and the DST strings of the challenge family, which live in

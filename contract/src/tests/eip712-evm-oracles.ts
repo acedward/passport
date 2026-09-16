@@ -114,6 +114,41 @@ const ORACLES: Record<EvmOp, {
       b32(v.message.entry!), b32(v.message.challenge!),
     ),
   },
+  // The ERC20 bridge (PR-G). These two carry the widest field lists of the byte contract —
+  // eleven and twelve — so they are also where a mis-ordered word is likeliest, and where
+  // an oracle check earns the most.
+  BridgeDepositStart: {
+    structHash: (v) => pureCircuits.evm_struct_hash_bridge_deposit_start(
+      b32(v.account), b20(v.owner), BigInt(v.message.authNonce!),
+      b20(v.message.erc20!), BigInt(v.message.amount!), BigInt(v.message.evmNonce!),
+      BigInt(v.message.gasLimit!), BigInt(v.message.maxFeePerGas!),
+      BigInt(v.message.maxPriorityFeePerGas!), BigInt(v.message.keyVersion!),
+      b32(v.message.challenge!),
+    ),
+    digest: (v) => pureCircuits.evm_digest_bridge_deposit_start(
+      b32(v.account), b32(v.salt), b20(v.owner), BigInt(v.message.authNonce!),
+      b20(v.message.erc20!), BigInt(v.message.amount!), BigInt(v.message.evmNonce!),
+      BigInt(v.message.gasLimit!), BigInt(v.message.maxFeePerGas!),
+      BigInt(v.message.maxPriorityFeePerGas!), BigInt(v.message.keyVersion!),
+      b32(v.message.challenge!),
+    ),
+  },
+  BridgeWithdrawStart: {
+    structHash: (v) => pureCircuits.evm_struct_hash_bridge_withdraw_start(
+      b32(v.account), b20(v.owner), BigInt(v.message.authNonce!),
+      b20(v.message.dest!), b32(v.message.color!), BigInt(v.message.amount!),
+      BigInt(v.message.evmNonce!), BigInt(v.message.gasLimit!), BigInt(v.message.maxFeePerGas!),
+      BigInt(v.message.maxPriorityFeePerGas!), BigInt(v.message.keyVersion!),
+      b32(v.message.challenge!),
+    ),
+    digest: (v) => pureCircuits.evm_digest_bridge_withdraw_start(
+      b32(v.account), b32(v.salt), b20(v.owner), BigInt(v.message.authNonce!),
+      b20(v.message.dest!), b32(v.message.color!), BigInt(v.message.amount!),
+      BigInt(v.message.evmNonce!), BigInt(v.message.gasLimit!), BigInt(v.message.maxFeePerGas!),
+      BigInt(v.message.maxPriorityFeePerGas!), BigInt(v.message.keyVersion!),
+      b32(v.message.challenge!),
+    ),
+  },
 };
 
 function equal(label: string, actual: Uint8Array, expected: string): void {

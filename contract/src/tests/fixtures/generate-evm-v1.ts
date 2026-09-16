@@ -48,10 +48,21 @@ import {
   verifyDigest,
 } from '../../wallet/evm-signature.js';
 
-export const FIXTURE_VERSION = 'AUTH-EIP712-PASSPORT-EVM-V1/FIXTURES-1';
+/** FIXTURES-3 adds the bridge types of project 00034 PR-G to this file. The byte contract
+ *  itself is unchanged — no existing type string, type hash or KAT digest moved — so the
+ *  document stays `…-V1`; what changed is the SET of vectors, and the random ones shifted
+ *  because the round robin now runs over nine operations instead of seven.
+ *
+ *  The number skips 2 on purpose: `FIXTURES-2` is PR-B's `passport-evm-v1-swap.json`, whose
+ *  `OpenSwapShielded` vectors have their own generator because its codec lives in
+ *  `src/wallet/offer.ts` rather than in this file's table (question Q36). One version number
+ *  per vector SET, not per file. */
+export const FIXTURE_VERSION = 'AUTH-EIP712-PASSPORT-EVM-V1/FIXTURES-3';
 /** Fixed seed of the deterministic generator; changing it changes the file. */
 const SEED = 0x50a5590703e70001n;
-const RANDOM_CASES = 42;
+/** Six random vectors per operation, so adding an operation neither starves it nor
+ *  reshuffles which operation a given index lands on. */
+const RANDOM_CASES_PER_OP = 6;
 
 /** The normative test key of the EIP-712 / Ethereum literature (the key used
  *  by the reference vectors of EIP-712 itself and by AA-v3's frozen set), so a
@@ -108,10 +119,22 @@ class Xorshift {
   }
 }
 
+const MAX_U8 = (1n << 8n) - 1n;
 const MAX_U64 = (1n << 64n) - 1n;
 const MAX_U128 = (1n << 128n) - 1n;
 
-function actionFields(op: EvmOp, source: { bytes32: () => Uint8Array; u128: () => bigint }): EvmMessage {
+/** Where a vector's action words come from: fixed bytes for the KAT and the boundaries,
+ *  the xorshift stream for the random cases. The bridge types added `address`, `u64` and
+ *  `u8` to what a source must supply (project 00034 PR-G). */
+interface WordSource {
+  bytes32: () => Uint8Array;
+  address: () => Uint8Array;
+  u128: () => bigint;
+  u64: () => bigint;
+  u8: () => bigint;
+}
+
+function actionFields(op: EvmOp, source: WordSource): EvmMessage {
   switch (op) {
     case 'WithdrawUnshielded':
       return { color: source.bytes32(), amount: source.u128(), recipient: source.bytes32() };
@@ -135,6 +158,27 @@ function actionFields(op: EvmOp, source: { bytes32: () => Uint8Array; u128: () =
       return { newEntry: source.bytes32() };
     case 'RemoveDevice':
       return { entry: source.bytes32() };
+    case 'BridgeDepositStart':
+      return {
+        erc20: source.address(),
+        amount: source.u128(),
+        evmNonce: source.u64(),
+        gasLimit: source.u64(),
+        maxFeePerGas: source.u128(),
+        maxPriorityFeePerGas: source.u128(),
+        keyVersion: source.u8(),
+      };
+    case 'BridgeWithdrawStart':
+      return {
+        dest: source.address(),
+        color: source.bytes32(),
+        amount: source.u128(),
+        evmNonce: source.u64(),
+        gasLimit: source.u64(),
+        maxFeePerGas: source.u128(),
+        maxPriorityFeePerGas: source.u128(),
+        keyVersion: source.u8(),
+      };
   }
 }
 
@@ -219,7 +263,10 @@ export function buildFixture() {
         challenge: KAT_CHALLENGE,
         action: actionFields(op, {
           bytes32: () => fromHex(`0x${'cc'.repeat(32)}`, 32),
+          address: () => fromHex(`0x${'cc'.repeat(20)}`, 20),
           u128: () => 4_000_000n,
+          u64: () => 4_000_000n,
+          u8: () => 1n,
         }),
       }),
     );
@@ -236,7 +283,13 @@ export function buildFixture() {
         salt: new Uint8Array(32),
         authNonce: 0n,
         challenge: new Uint8Array(32),
-        action: actionFields(op, { bytes32: () => new Uint8Array(32), u128: () => 0n }),
+        action: actionFields(op, {
+          bytes32: () => new Uint8Array(32),
+          address: () => new Uint8Array(20),
+          u128: () => 0n,
+          u64: () => 0n,
+          u8: () => 0n,
+        }),
       }),
     );
     vectors.push(
@@ -250,14 +303,18 @@ export function buildFixture() {
         challenge: fromHex(`0x${'ff'.repeat(32)}`, 32),
         action: actionFields(op, {
           bytes32: () => fromHex(`0x${'ff'.repeat(32)}`, 32),
+          address: () => fromHex(`0x${'ff'.repeat(20)}`, 20),
           u128: () => MAX_U128,
+          u64: () => MAX_U64,
+          u8: () => MAX_U8,
         }),
       }),
     );
   }
 
   // 3. Random cases over every operation, from the fixed seed.
-  for (let i = 0; i < RANDOM_CASES; i += 1) {
+  const randomCases = RANDOM_CASES_PER_OP * EVM_OPS.length;
+  for (let i = 0; i < randomCases; i += 1) {
     const op = EVM_OPS[i % EVM_OPS.length]!;
     vectors.push(
       vector({
@@ -268,7 +325,13 @@ export function buildFixture() {
         salt: random.bytes(32),
         authNonce: random.uint(64),
         challenge: random.bytes(32),
-        action: actionFields(op, { bytes32: () => random.bytes(32), u128: () => random.uint(128) }),
+        action: actionFields(op, {
+          bytes32: () => random.bytes(32),
+          address: () => random.bytes(20),
+          u128: () => random.uint(128),
+          u64: () => random.uint(64),
+          u8: () => random.uint(64) & MAX_U8,
+        }),
       }),
     );
   }
@@ -309,7 +372,8 @@ export function buildFixture() {
       amount: '4000000',
     },
     randomSeed: `0x${SEED.toString(16)}`,
-    randomCases: RANDOM_CASES,
+    randomCases: RANDOM_CASES_PER_OP * EVM_OPS.length,
+    randomCasesPerOperation: RANDOM_CASES_PER_OP,
     vectorCount: vectors.length,
     vectors,
   };

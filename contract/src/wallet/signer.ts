@@ -740,6 +740,30 @@ export const evmChallenges = {
 
   removeDevice: (ctx: CallContext, address: Uint8Array, entry: Uint8Array): Uint8Array =>
     pureCircuits.challenge_remove_device_with_evm(addr(ctx), address, entry, ctx.authNonce),
+
+  bridgeDepositStart: (
+    ctx: CallContext, address: Uint8Array, erc20: Uint8Array, amount: bigint, evm: EvmTxParams,
+  ): Uint8Array =>
+    pureCircuits.challenge_bridge_deposit_start_with_evm(
+      addr(ctx), address, erc20, amount,
+      evm.nonce, evm.gasLimit, evm.maxFeePerGas, evm.maxPriorityFeePerGas, evm.keyVersion,
+      ctx.authNonce,
+    ),
+
+  // Takes the request itself: fourteen arguments in one fixed order is a place where
+  // positional parameters would be a bug waiting to happen, and the request object is
+  // already the single description every other projection is built from.
+  bridgeWithdrawStart: (
+    ctx: CallContext,
+    address: Uint8Array,
+    r: { dest: Uint8Array; color: Uint8Array; amount: bigint; erc20: Uint8Array;
+         changeEntry: Uint8Array; coin: QualifiedCoin; evm: EvmTxParams },
+  ): Uint8Array =>
+    pureCircuits.challenge_bridge_withdraw_start_with_evm(
+      addr(ctx), address, r.dest, r.color, r.amount,
+      r.evm.nonce, r.evm.gasLimit, r.evm.maxFeePerGas, r.evm.maxPriorityFeePerGas, r.evm.keyVersion,
+      r.erc20, r.changeEntry, r.coin, ctx.authNonce,
+    ),
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -765,7 +789,46 @@ export type AuthRequest =
   | { op: 'appendInbox'; entry: Uint8Array }
   | { op: 'rotateEncKey'; newKey: Uint8Array }
   | { op: 'addDevice'; newEntry: Uint8Array }
-  | { op: 'removeDevice'; entry: Uint8Array };
+  | { op: 'removeDevice'; entry: Uint8Array }
+  // The ERC20 bridge (project 00034 PR-G). Both operations exist on the `evm` arm ONLY:
+  // the contract exports no `_with_jubjub` or `_with_k256` twin, because a bridge account
+  // is by construction an account an Ethereum wallet controls.
+  | { op: 'bridgeDepositStart'; erc20: Uint8Array; amount: bigint; evm: EvmTxParams }
+  | {
+      op: 'bridgeWithdrawStart';
+      dest: Uint8Array;
+      color: Uint8Array;
+      amount: bigint;
+      erc20: Uint8Array;
+      changeEntry: Uint8Array;
+      coin: QualifiedCoin;
+      evm: EvmTxParams;
+    };
+
+/**
+ * The parameters of the Ethereum transaction the Sig Network MPC will sign for a bridge
+ * operation. They are part of what the device signs, and that is the whole reason the two
+ * bridge starts are gated: the signed transaction spends GAS from an MPC-derived account —
+ * the user's own derived deposit address on the way in, the vault's on the way out — so a
+ * relayer free to choose `maxFeePerGas` could drain it without ever touching a bridged token.
+ *
+ * `keyVersion` selects which MPC root key the derivation uses; it is 1 today.
+ */
+export interface EvmTxParams {
+  nonce: bigint;
+  gasLimit: bigint;
+  maxFeePerGas: bigint;
+  maxPriorityFeePerGas: bigint;
+  keyVersion: bigint;
+}
+
+/** The message a non-`evm` arm gets when asked to authorise a bridge operation. */
+function noBridgeArm(arm: Exclude<Arm, 'evm'>, op: string): never {
+  throw new Error(
+    `${op} is an evm-arm operation: the account exports no ${op}_with_${arm} circuit `
+    + '(the ERC20 bridge exists for accounts an Ethereum wallet controls)',
+  );
+}
 
 /** The jubjub arm's challenge builder for a request. */
 export function jubjubChallengeFor(ctx: CallContext, pk: JubjubPoint, r: AuthRequest): ChallengeBuilder {
@@ -777,6 +840,8 @@ export function jubjubChallengeFor(ctx: CallContext, pk: JubjubPoint, r: AuthReq
     case 'rotateEncKey': return jubjubChallenges.rotateEncKey(ctx, pk, r.newKey);
     case 'addDevice': return jubjubChallenges.addDevice(ctx, pk, r.newEntry);
     case 'removeDevice': return jubjubChallenges.removeDevice(ctx, pk, r.entry);
+    case 'bridgeDepositStart':
+    case 'bridgeWithdrawStart': return noBridgeArm('jubjub', r.op);
   }
 }
 
@@ -790,6 +855,8 @@ export function k256ChallengeFor(ctx: CallContext, pk: Secp256k1Point, r: AuthRe
     case 'rotateEncKey': return k256Challenges.rotateEncKey(ctx, pk, r.newKey);
     case 'addDevice': return k256Challenges.addDevice(ctx, pk, r.newEntry);
     case 'removeDevice': return k256Challenges.removeDevice(ctx, pk, r.entry);
+    case 'bridgeDepositStart':
+    case 'bridgeWithdrawStart': return noBridgeArm('k256', r.op);
   }
 }
 
@@ -803,6 +870,8 @@ export function evmChallengeFor(ctx: CallContext, address: Uint8Array, r: AuthRe
     case 'rotateEncKey': return evmChallenges.rotateEncKey(ctx, address, r.newKey);
     case 'addDevice': return evmChallenges.addDevice(ctx, address, r.newEntry);
     case 'removeDevice': return evmChallenges.removeDevice(ctx, address, r.entry);
+    case 'bridgeDepositStart': return evmChallenges.bridgeDepositStart(ctx, address, r.erc20, r.amount, r.evm);
+    case 'bridgeWithdrawStart': return evmChallenges.bridgeWithdrawStart(ctx, address, r);
   }
 }
 
@@ -856,6 +925,35 @@ export function evmTypedMessage(
       return { op: 'AddDevice', message: { ...frame, newEntry: r.newEntry } };
     case 'removeDevice':
       return { op: 'RemoveDevice', message: { ...frame, entry: r.entry } };
+    case 'bridgeDepositStart':
+      return {
+        op: 'BridgeDepositStart',
+        message: {
+          ...frame,
+          erc20: r.erc20,
+          amount: r.amount,
+          evmNonce: r.evm.nonce,
+          gasLimit: r.evm.gasLimit,
+          maxFeePerGas: r.evm.maxFeePerGas,
+          maxPriorityFeePerGas: r.evm.maxPriorityFeePerGas,
+          keyVersion: r.evm.keyVersion,
+        },
+      };
+    case 'bridgeWithdrawStart':
+      return {
+        op: 'BridgeWithdrawStart',
+        message: {
+          ...frame,
+          dest: r.dest,
+          color: r.color,
+          amount: r.amount,
+          evmNonce: r.evm.nonce,
+          gasLimit: r.evm.gasLimit,
+          maxFeePerGas: r.evm.maxFeePerGas,
+          maxPriorityFeePerGas: r.evm.maxPriorityFeePerGas,
+          keyVersion: r.evm.keyVersion,
+        },
+      };
   }
 }
 

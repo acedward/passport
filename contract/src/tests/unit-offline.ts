@@ -464,6 +464,14 @@ await runScenario('unit-offline', async () => {
     // itself. `AppendInbox` is the one type whose field is a hash of a preimage
     // the fixture does not carry, so it is checked separately below.
     const dummyCoin = { nonce: new Uint8Array(32), color: new Uint8Array(32), value: 0n, mt_index: 0n };
+    /** The EVM transaction parameter group of a bridge vector (PR-G). */
+    const evmParamsOf = (m: Record<string, string>) => ({
+      nonce: BigInt(m.evmNonce!),
+      gasLimit: BigInt(m.gasLimit!),
+      maxFeePerGas: BigInt(m.maxFeePerGas!),
+      maxPriorityFeePerGas: BigInt(m.maxPriorityFeePerGas!),
+      keyVersion: BigInt(m.keyVersion!),
+    });
     let replayed = 0;
     for (const v of fixture.vectors) {
       if (v.primaryType === 'AppendInbox') continue;
@@ -487,7 +495,31 @@ await runScenario('unit-offline', async () => {
                 ? { op: 'rotateEncKey', newKey: fromHex(v.message.newKey!, 32) }
                 : v.primaryType === 'AddDevice'
                   ? { op: 'addDevice', newEntry: fromHex(v.message.newEntry!, 32) }
-                  : { op: 'removeDevice', entry: fromHex(v.message.entry!, 32) };
+                  : v.primaryType === 'RemoveDevice'
+                    ? { op: 'removeDevice', entry: fromHex(v.message.entry!, 32) }
+                    // The two bridge types (PR-G). Their requests carry three values the
+                    // typed message does NOT (the ERC20 address on the withdraw side, the
+                    // change inbox entry and the qualified coin): those are bound through
+                    // the challenge, which this replay supplies from the vector, so any
+                    // placeholder is correct here — and passing an obviously fake one is
+                    // how this check proves they reach no EIP-712 word.
+                    : v.primaryType === 'BridgeDepositStart'
+                      ? {
+                          op: 'bridgeDepositStart',
+                          erc20: fromHex(v.message.erc20!, 20),
+                          amount,
+                          evm: evmParamsOf(v.message),
+                        }
+                      : {
+                          op: 'bridgeWithdrawStart',
+                          dest: fromHex(v.message.dest!, 20),
+                          color,
+                          amount,
+                          erc20: new Uint8Array(20).fill(0xee),
+                          changeEntry: new Uint8Array(192).fill(0xee),
+                          coin: dummyCoin,
+                          evm: evmParamsOf(v.message),
+                        };
       const { op, message } = evmTypedMessage(ctxV, owner, request, challenge);
       if (op !== v.primaryType) throw new Error(`${v.label}: mapped to ${op}`);
       const built = buildTypedData(ctxV.contractAddress, ctxV.evmDomainSalt!, op, message);
@@ -500,7 +532,7 @@ await runScenario('unit-offline', async () => {
       }
       replayed += 1;
     }
-    assert(replayed >= 54, `[evm] ${replayed} frozen vectors replayed through the request mapping`);
+    assert(replayed >= 72, `[evm] ${replayed} frozen vectors replayed through the request mapping`);
 
     // AppendInbox: the 192-byte entry enters the struct as its keccak, so the
     // mapping is checked against the hash it must compute, and the digest
