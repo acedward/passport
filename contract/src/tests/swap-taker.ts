@@ -18,7 +18,8 @@
 //                    terms. This is the taker's protection against a lying envelope: the terms are
 //                    JSON the maker wrote, while the imbalances are what the taker will actually be
 //                    asked to fund. A mismatch — or an imbalance that cannot be read at all — is a
-//                    REFUSAL, never a pass.
+//                    REFUSAL, never a pass. See `assertFundable` for which SEGMENT the legs are
+//                    required to be in, and why it is not segment 0 at these pins.
 //   4. PRE-SUBMIT    the MERGED transaction is checked for any remaining non-dust DEFICIT before
 //                    submission. A deficit means the merge did not balance; catching it here keeps a
 //                    harness bug from being recorded as a protocol refusal. A remaining SURPLUS is
@@ -34,7 +35,9 @@
 import {
   ImbalanceUnreadableError,
   OfferEnvelopeError,
+  OfferPlacementError,
   decodeEnvelope,
+  legSegmentOf,
   nonDustDeficits,
   nonDustSurpluses,
   offerExpired,
@@ -55,11 +58,13 @@ export class MergedTransactionUnbalancedError extends Error {}
 
 export interface FundabilityReport {
   imbalances: ImbalanceReading;
+  /** The one segment the legs are in, as measured on the bytes. */
+  legSegment: string;
   /** What the taker must supply, `segment/token` → signed delta. */
   deficits: Record<string, string>;
   /** What the taker may sweep. Non-empty for the open shape and empty for the named one. */
   surpluses: Record<string, string>;
-  declared: { wants: string; gives?: string };
+  declared: { segment: string; wants: string; gives?: string };
   matchesTerms: boolean;
 }
 
@@ -67,28 +72,52 @@ export interface FundabilityReport {
  * Gate 3 — does the artefact ask for exactly what the terms say it asks for?
  *
  * The comparison is on the DESERIALISED transaction, so it is a statement about the bytes the taker
- * holds rather than about the JSON beside them. It also re-checks placement from the taker's side:
- * no segment other than 0 may carry anything, because a taker can only reach segment 0.
+ * holds rather than about the JSON beside them.
+ *
+ * WHICH SEGMENT, and why this is not "segment 0". At these pins midnight-js places a contract call —
+ * and the zswap offer it produces — in the transaction's own FALLIBLE segment, whose id is random per
+ * transaction; the guaranteed segment 0 carries nothing but dust. Project 00006 required segment 0
+ * and fails closed otherwise; applied here that would refuse every offer this contract can build, so
+ * the rule was re-derived from what a taker actually needs (project 00034, Q39, measured on a
+ * ledger-9 localnet):
+ *
+ *   * ALL the legs must be in ONE segment. Balancing is per (token, segment), so a deficit in one
+ *     segment with its matching surplus in another would leave the taker funding value it cannot
+ *     sweep. This is the real content of 00006's FR-302, and it is what still fails closed.
+ *   * That segment must be the one the TERMS declare, so the JSON and the bytes are checked against
+ *     each other rather than either being trusted alone.
+ *
+ * Being fallible is a property worth having rather than tolerating: if the call fails, the whole
+ * segment rolls back, so the taker's coins are not taken and the maker's coin is not spent. The
+ * taker's only exposure is the dust it paid.
  */
 export function assertFundable(tx: any, terms: OfferTerms): FundabilityReport {
   const imbalances = readAllImbalances(tx, `offer ${terms.contentAddress.slice(0, 16)}…`);
   const deficits = nonDustDeficits(imbalances);
   const surpluses = nonDustSurpluses(imbalances);
 
-  const wantsKey = `0/${shieldedLabel(terms.wants.colour)}`;
-  const givesKey = `0/${shieldedLabel(terms.gives.colour)}`;
-  const declared: FundabilityReport['declared'] = { wants: wantsKey };
-
   const problems: string[] = [];
-  for (const [seg, m] of Object.entries(imbalances)) {
-    const nonDust = Object.entries(m).filter(([t]) => t !== 'dust');
-    if (seg !== '0' && nonDust.length > 0) {
-      problems.push(
-        `segment ${seg} carries ${JSON.stringify(Object.fromEntries(nonDust))} — a leg outside the ` +
-          'guaranteed section is unsettleable by an independent taker',
-      );
-    }
+  let legSegment = '';
+  try {
+    legSegment = legSegmentOf(imbalances) ?? '';
+  } catch (e) {
+    if (!(e instanceof OfferPlacementError)) throw e;
+    problems.push((e as Error).message);
   }
+  if (!problems.length && legSegment === '') {
+    problems.push('the artefact carries no non-dust imbalance at all — there is nothing to settle');
+  }
+  if (!problems.length && legSegment !== terms.legSegment) {
+    problems.push(
+      `the terms declare the legs in segment ${terms.legSegment}, the transaction carries them in ` +
+        `segment ${legSegment}`,
+    );
+  }
+
+  const wantsKey = `${legSegment}/${shieldedLabel(terms.wants.colour)}`;
+  const givesKey = `${legSegment}/${shieldedLabel(terms.gives.colour)}`;
+  const declared: FundabilityReport['declared'] = { segment: terms.legSegment, wants: wantsKey };
+
   if (deficits[wantsKey] !== String(-BigInt(terms.wants.value))) {
     problems.push(
       `the terms want ${terms.wants.value} of ${terms.wants.colour} but the transaction's deficit at ` +
@@ -117,7 +146,7 @@ export function assertFundable(tx: any, terms: OfferTerms): FundabilityReport {
   }
 
   const report: FundabilityReport = {
-    imbalances, deficits, surpluses, declared, matchesTerms: problems.length === 0,
+    imbalances, legSegment, deficits, surpluses, declared, matchesTerms: problems.length === 0,
   };
   if (problems.length) {
     throw new OfferTermsMismatchError(

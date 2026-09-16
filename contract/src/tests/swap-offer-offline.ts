@@ -52,6 +52,12 @@ import { assertFundable, inspectOffer, OfferTermsMismatchError } from './swap-ta
 const A = unhex('a1'.repeat(32));
 const B = unhex('b2'.repeat(32));
 
+/** The segment an offer's legs land in. At these pins it is the call's own FALLIBLE segment, whose
+ *  id is random per transaction; the guaranteed segment 0 carries nothing but dust (project 00034,
+ *  Q39, measured on a ledger-9 localnet). The stubs use one fixed id so the tests are deterministic;
+ *  nothing in the gates depends on the value, only on there being exactly one. */
+const LEG_SEGMENT = '63212';
+
 let failures = 0;
 const details: Record<string, unknown> = {};
 
@@ -84,9 +90,9 @@ function refuses(label: string, fn: () => unknown, pattern: RegExp): string {
  * A stand-in for the ledger's `Transaction`, answering exactly the two accessors the gates use.
  *
  * It carries the deltas the COMPILED CIRCUIT produced, so the gates are checked against the real
- * offer's shape rather than against a hand-written expectation. `segments` places legs in a chosen
- * segment, which is how the "a leg outside the guaranteed section" case is reachable at all —
- * the circuit cannot produce one.
+ * offer's shape rather than against a hand-written expectation. `segments` places legs in chosen
+ * segments, which is how the "the legs are split across two segments" case is reachable at all — the
+ * circuit cannot produce one, and it is the shape no taker could settle.
  */
 function txStub(
   segments: Record<string, Record<string, bigint>>,
@@ -163,9 +169,9 @@ function termsFor(
   account: string,
   bytes: Uint8Array,
   ttlSeconds = 3600,
-): { terms: OfferTerms; segment0: Record<string, bigint> } {
-  const segment0: Record<string, bigint> = {};
-  for (const [colour, delta] of Object.entries(deltas)) segment0[shieldedLabel(colour)] = delta;
+): { terms: OfferTerms; legs: Record<string, bigint> } {
+  const legs: Record<string, bigint> = {};
+  for (const [colour, delta] of Object.entries(deltas)) legs[shieldedLabel(colour)] = delta;
   const createdAt = new Date();
   const terms = makeTerms(
     {
@@ -187,12 +193,16 @@ function termsFor(
       createdAt: createdAt.toISOString(),
       expiresAt: new Date(createdAt.getTime() + ttlSeconds * 1000).toISOString(),
       ttlSeconds,
-      imbalances: { '0': Object.fromEntries(Object.entries(segment0).map(([k, v]) => [k, String(v)])) },
+      imbalances: {
+        '0': { dust: '0' },
+        [LEG_SEGMENT]: Object.fromEntries(Object.entries(legs).map(([k, v]) => [k, String(v)])),
+      },
+      legSegment: LEG_SEGMENT,
       makerAttachedDust: false,
     },
     bytes,
   );
-  return { terms, segment0 };
+  return { terms, legs };
 }
 
 async function main(): Promise<void> {
@@ -233,7 +243,7 @@ async function main(): Promise<void> {
   const open = await measuredOffer('open', 2n, 3n);
   {
     const bytes = new Uint8Array(randomBytes(512));
-    const { terms, segment0 } = termsFor('open', open.call, open.deltas, open.account, bytes);
+    const { terms, legs } = termsFor('open', open.call, open.deltas, open.account, bytes);
     check(terms.contentAddress === sha256Hex(bytes), 'the content address is sha256 of the payload');
     check(terms.transactionBytes === bytes.length, 'the byte count is recorded');
 
@@ -245,10 +255,11 @@ async function main(): Promise<void> {
     const file = writeEnvelope(path.join(tmp, 'open.offer'), terms, bytes);
     check(readEnvelope(file).terms.contentAddress === terms.contentAddress, 'the file round-trips too');
 
-    const report = assertFundable(txStub({ '0': segment0 }), terms);
+    const report = assertFundable(txStub({ '0': { dust: 0n }, [LEG_SEGMENT]: legs }), terms);
     check(report.matchesTerms, 'gate 3 accepts an offer whose deltas match its terms');
-    check(report.deficits[`0/${shieldedLabel(hex(B))}`] === '-3', 'the one deficit is −3 B — what the taker funds');
-    check(report.surpluses[`0/${shieldedLabel(hex(A))}`] === '2', 'the one surplus is +2 A — what the taker sweeps');
+    check(report.legSegment === LEG_SEGMENT, 'the gate reports the one segment the legs are in');
+    check(report.deficits[`${LEG_SEGMENT}/${shieldedLabel(hex(B))}`] === '-3', 'the one deficit is −3 B — what the taker funds');
+    check(report.surpluses[`${LEG_SEGMENT}/${shieldedLabel(hex(A))}`] === '2', 'the one surplus is +2 A — what the taker sweeps');
     details.openGate = { deficits: report.deficits, surpluses: report.surpluses };
   }
 
@@ -257,11 +268,11 @@ async function main(): Promise<void> {
   const named = await measuredOffer('named', 4n, 7n);
   {
     const bytes = new Uint8Array(randomBytes(512));
-    const { terms, segment0 } = termsFor('named', named.call, named.deltas, named.account, bytes);
-    const report = assertFundable(txStub({ '0': segment0 }), terms);
+    const { terms, legs } = termsFor('named', named.call, named.deltas, named.account, bytes);
+    const report = assertFundable(txStub({ '0': { dust: 0n }, [LEG_SEGMENT]: legs }), terms);
     check(report.matchesTerms, 'gate 3 accepts the named offer');
     check(Object.keys(report.surpluses).length === 0, 'a named offer leaves NO surplus');
-    check(report.deficits[`0/${shieldedLabel(hex(B))}`] === '-7', 'the only deficit is −7 B');
+    check(report.deficits[`${LEG_SEGMENT}/${shieldedLabel(hex(B))}`] === '-7', 'the only deficit is −7 B');
     details.namedGate = { deficits: report.deficits, surpluses: report.surpluses };
   }
 
@@ -306,8 +317,8 @@ async function main(): Promise<void> {
   step('terms that lie about the bytes: gate 3 refuses each one');
   {
     const bytes = new Uint8Array(randomBytes(512));
-    const { terms, segment0 } = termsFor('open', open.call, open.deltas, open.account, bytes);
-    const tx = txStub({ '0': segment0 });
+    const { terms, legs } = termsFor('open', open.call, open.deltas, open.account, bytes);
+    const tx = txStub({ '0': { dust: 0n }, [LEG_SEGMENT]: legs });
 
     const lie = (label: string, mutate: (t: OfferTerms) => OfferTerms, pattern: RegExp) => {
       refusals[label] = refuses(label, () => assertFundable(tx, mutate(structuredClone(terms))), pattern);
@@ -327,41 +338,49 @@ async function main(): Promise<void> {
     const namedBytes = new Uint8Array(randomBytes(512));
     const namedTerms = termsFor('named', named.call, named.deltas, named.account, namedBytes);
     refusals.namedDeclaredOpen = refuses('a named offer declared as open',
-      () => assertFundable(txStub({ '0': namedTerms.segment0 }), { ...namedTerms.terms, shape: 'open' }),
+      () => assertFundable(txStub({ '0': { dust: 0n }, [LEG_SEGMENT]: namedTerms.legs }), { ...namedTerms.terms, shape: 'open' }),
       /must leave \+4 of/);
   }
 
   step('artefacts a taker cannot settle, whatever the terms say');
   {
     const bytes = new Uint8Array(randomBytes(512));
-    const { terms, segment0 } = termsFor('open', open.call, open.deltas, open.account, bytes);
+    const { terms, legs } = termsFor('open', open.call, open.deltas, open.account, bytes);
 
-    refusals.fallibleSegment = refuses('a leg parked in a fallible segment',
-      () => assertFundable(txStub({ '0': segment0, '1': { [shieldedLabel(hex(B))]: -1n } }), terms),
-      /outside the guaranteed section/);
+    refusals.splitSegments = refuses('the legs split across two segments — unsettleable by anybody',
+      () => assertFundable(txStub({ '0': { dust: 0n }, [LEG_SEGMENT]: legs, '1': { [shieldedLabel(hex(B))]: -1n } }), terms),
+      /split across segments/);
+
+    refusals.wrongSegment = refuses('the terms declare a segment the transaction does not use',
+      () => assertFundable(txStub({ '0': { dust: 0n }, '999': legs }), terms),
+      /declare the legs in segment/);
+
+    refusals.emptyArtefact = refuses('an artefact with no non-dust imbalance at all',
+      () => assertFundable(txStub({ '0': { dust: 0n } }), terms),
+      /nothing to settle/);
 
     refusals.twoDeficits = refuses('a second deficit the terms never mentioned',
       () => assertFundable(
-        txStub({ '0': { ...segment0, [shieldedLabel('cd'.repeat(32))]: -5n } }), terms),
+        txStub({ '0': { dust: 0n }, [LEG_SEGMENT]: { ...legs, [shieldedLabel('cd'.repeat(32))]: -5n } }), terms),
       /expected exactly ONE non-dust deficit/);
 
     refusals.extraSurplus = refuses('a second surplus the terms never mentioned',
       () => assertFundable(
-        txStub({ '0': { ...segment0, [shieldedLabel('ce'.repeat(32))]: 5n } }), terms),
+        txStub({ '0': { dust: 0n }, [LEG_SEGMENT]: { ...legs, [shieldedLabel('ce'.repeat(32))]: 5n } }), terms),
       /expected exactly ONE non-dust surplus/);
 
     refusals.unreadable = refuses('an imbalance that cannot be read at all',
-      () => assertFundable(txStub({ '0': segment0 }, { unreadableSegment: '0' }), terms),
+      () => assertFundable(txStub({ '0': { dust: 0n }, [LEG_SEGMENT]: legs }, { unreadableSegment: LEG_SEGMENT }), terms),
       /could not be read/);
   }
 
   step('an offer whose deltas match its terms is NOT refused for any of the above');
   {
     const bytes = new Uint8Array(randomBytes(512));
-    const { terms, segment0 } = termsFor('open', open.call, open.deltas, open.account, bytes);
+    const { terms, legs } = termsFor('open', open.call, open.deltas, open.account, bytes);
     let threw = false;
     try {
-      assertFundable(txStub({ '0': segment0 }), terms);
+      assertFundable(txStub({ '0': { dust: 0n }, [LEG_SEGMENT]: legs }), terms);
     } catch {
       threw = true;
     }

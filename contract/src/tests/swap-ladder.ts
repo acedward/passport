@@ -144,11 +144,19 @@ function check(cond: boolean, label: string, extra?: unknown): void {
 
 const hex = bytesToHex;
 
-async function walletCoinKeys(ctx: TestContext): Promise<{ coinPublicKey: any; encryptionPublicKey: any; bytes: Uint8Array }> {
+/**
+ * A wallet's shielded keys in the two forms this suite needs.
+ *
+ * `bytes` is the circuit argument (a `ZswapCoinPublicKey`). The two hex strings are for
+ * `additionalCoinEncPublicKeyMappings`, which midnight-js normalises with `parseCoinPublicKeyToHex` /
+ * `parseEncPublicKeyToHex` — so it wants STRINGS. Handing it the wallet's key OBJECTS fails inside
+ * bech32 with `input: string expected`, which names neither the argument nor the caller.
+ */
+async function walletCoinKeys(ctx: TestContext): Promise<{ coinPublicKey: string; encryptionPublicKey: string; bytes: Uint8Array }> {
   const state: any = await firstValueFrom(ctx.walletCtx.wallet.state());
   return {
-    coinPublicKey: state.shielded.coinPublicKey,
-    encryptionPublicKey: state.shielded.encryptionPublicKey,
+    coinPublicKey: String(state.shielded.coinPublicKey.toHexString()),
+    encryptionPublicKey: String(state.shielded.encryptionPublicKey.toHexString()),
     bytes: coinPublicKeyBytes(state),
   };
 }
@@ -347,24 +355,31 @@ async function main(): Promise<void> {
     { giveColor: A, giveAmount: 2n, recipientKind: RECIPIENT_OPEN, wantColor: B, wantAmount: 3n },
   );
   console.log(`  proved in ${open.offer.proveMs} ms, ${open.offer.bytes.length} bytes`);
+  const openSeg = open.offer.terms.legSegment;
   details.offer2 = {
     proveMs: open.offer.proveMs,
     bytes: open.offer.bytes.length,
     contentAddress: open.offer.terms.contentAddress,
     imbalances: open.offer.terms.imbalances,
+    legSegment: openSeg,
     attempts: open.attempts,
     mtIndex: String(open.mtIndex),
   };
   check(open.offer.terms.makerAttachedDust === false, 'the maker artefact carries NO dust action — the taker pays every fee');
   check(
-    open.offer.terms.imbalances['0']?.[shieldedLabel(hex(A))] === '2',
-    'the artefact carries +2 A at the guaranteed segment — the surplus IS the offer',
+    open.offer.terms.imbalances[openSeg]?.[shieldedLabel(hex(A))] === '2',
+    `the artefact carries +2 A in its one leg segment (${openSeg}) — the surplus IS the offer`,
     open.offer.terms.imbalances,
   );
   check(
-    open.offer.terms.imbalances['0']?.[shieldedLabel(hex(B))] === '-3',
+    open.offer.terms.imbalances[openSeg]?.[shieldedLabel(hex(B))] === '-3',
     'and −3 B, the deficit the taker funds',
     open.offer.terms.imbalances,
+  );
+  check(
+    Object.keys(open.offer.terms.imbalances['0'] ?? {}).filter((k) => k !== 'dust').length === 0,
+    'the guaranteed segment carries no leg at all — midnight-js puts the call in a fallible segment (Q39)',
+    open.offer.terms.imbalances['0'],
   );
   const openEnvelope = writeEnvelope(path.join(evidenceDir, 'prb-offer2-open.offer'), open.offer.terms, open.offer.bytes);
   console.log(`  envelope → ${openEnvelope}`);
@@ -385,12 +400,16 @@ async function main(): Promise<void> {
     console.error('  the ladder cannot continue without a settled offer');
   } else {
     check(
-      take2.fundability?.surpluses[`0/${shieldedLabel(hex(A))}`] === '2',
+      take2.fundability?.surpluses[`${openSeg}/${shieldedLabel(hex(A))}`] === '2',
       "the taker's own reading of the artefact found the +2 A surplus it may sweep",
     );
     check(
-      take2.fundability?.deficits[`0/${shieldedLabel(hex(B))}`] === '-3',
+      take2.fundability?.deficits[`${openSeg}/${shieldedLabel(hex(B))}`] === '-3',
       "and the −3 B deficit it must fund",
+    );
+    check(
+      take2.fundability?.legSegment === openSeg,
+      "the taker's reading of the bytes agrees with the segment the terms declare",
     );
     check(
       Object.keys(take2.merged?.unswept ?? {}).length === 0,
@@ -452,17 +471,19 @@ async function main(): Promise<void> {
     );
     console.log(`  proved in ${named.offer.proveMs} ms, ${named.offer.bytes.length} bytes`);
     check(named.change === null, 'giving the whole coin leaves no change — the no-change path, on a node');
+    const namedSeg = named.offer.terms.legSegment;
     check(
-      Object.keys(named.offer.terms.imbalances['0'] ?? {}).filter((k) => k !== 'dust').length === 1,
+      Object.keys(named.offer.terms.imbalances[namedSeg] ?? {}).filter((k) => k !== 'dust').length === 1,
       'the named artefact carries exactly ONE non-dust imbalance: the want deficit',
       named.offer.terms.imbalances,
     );
-    check(named.offer.terms.imbalances['0']?.[shieldedLabel(hex(B))] === '-7', 'which is −7 B');
+    check(named.offer.terms.imbalances[namedSeg]?.[shieldedLabel(hex(B))] === '-7', 'which is −7 B');
     details.offer1 = {
       proveMs: named.offer.proveMs,
       bytes: named.offer.bytes.length,
       contentAddress: named.offer.terms.contentAddress,
       imbalances: named.offer.terms.imbalances,
+      legSegment: namedSeg,
       attempts: named.attempts,
     };
 

@@ -13,7 +13,7 @@
     "reproducedByEthers": 16,
     "reproducedByCircuit": 16
   },
-  "ranAt": "2026-09-16T06:07:21.454Z",
+  "ranAt": "2026-09-16T06:51:24.196Z",
   "stack": {
     "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
     "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",

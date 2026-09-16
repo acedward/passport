@@ -9,7 +9,12 @@
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
+      "browser": "./dist/src/browser.js",
       "import": "./dist/src/index.js"
+    },
+    "./browser": {
+      "types": "./dist/src/browser.d.ts",
+      "import": "./dist/src/browser.js"
     },
     "./node": {
       "types": "./dist/src/node/wallet.d.ts",
@@ -54,6 +59,7 @@
     "test:swap-offer": "tsx src/tests/swap-offer-offline.ts",
     "test:swap-ladder": "tsx src/tests/swap-ladder.ts",
     "test:swap-deploy-budget": "tsx src/tests/swap-deploy-budget.ts",
+    "probe:swap-placement": "tsx src/tests/swap-placement-probe.ts",
     "test:unit": "tsx src/tests/unit-offline.ts",
     "test:crossimpl-offline": "tsx src/tests/crossimpl-offline.ts",
     "test:auth-crossimpl": "tsx src/tests/auth-crossimpl.ts",

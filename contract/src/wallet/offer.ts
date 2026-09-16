@@ -299,6 +299,10 @@ export type OfferTerms = {
   transactionBytes: number;
   /** Segment → token → signed delta, as measured on the proven artefact at build time. */
   imbalances: Record<string, Record<string, string>>;
+  /** The segment the legs are in. At these pins it is the call's own fallible segment, whose id is
+   *  random per transaction, NOT the guaranteed segment 0 (Q39) — so it is declared rather than
+   *  assumed, and the taker checks the bytes against this. */
+  legSegment: string;
   /** Whether the maker attached any DUST action. Always false on a conforming artefact. */
   makerAttachedDust: boolean;
 };
@@ -460,13 +464,13 @@ export const makerAttachedDust = (tx: any): boolean => {
 export class OfferPlacementError extends Error {}
 
 /**
- * What segment 0 must carry, per shape, derived from the circuit's structure rather than read off
+ * What the offer's legs must be, per shape, derived from the circuit's structure rather than read off
  * the artefact:
  *
  *   open   the given value has no output at all, so it stands as a POSITIVE imbalance beside the
  *          −want deficit. That positive number is the offer.
- *   named  `sendShielded` balances the give leg internally (input, payout, change), so the only
- *          imbalance is the −want deficit.
+ *   named  an output for exactly the given value is created for a named coin key, so the give leg is
+ *          internally balanced and the only imbalance is the −want deficit.
  */
 export const expectedPlacement = (
   shape: OfferShape,
@@ -480,34 +484,64 @@ export const expectedPlacement = (
   return { [shieldedLabel(giveColorHex)]: String(giveAmount), ...wants };
 };
 
+const nonDustOf = (m: Record<string, string>): Record<string, string> =>
+  Object.fromEntries(Object.entries(m).filter(([t]) => t !== 'dust'));
+
+const normalise = (o: Record<string, string>): string =>
+  JSON.stringify(Object.fromEntries(Object.entries(o).sort(([a], [b]) => a.localeCompare(b))));
+
 /**
- * FAIL CLOSED. A leg outside the guaranteed section is unsettleable by any independent taker, and an
- * artefact whose deltas are not exactly the declared terms is a lie about what the taker is being
- * asked to fund. Either one means the offer is not published — it is kept as evidence.
+ * The ONE segment an offer's legs live in.
+ *
+ * MEASURED, not assumed (project 00034, Q39). At these pins midnight-js places a contract call — and
+ * the zswap offer it produces — in the transaction's own FALLIBLE segment, whose id is random per
+ * transaction, and the guaranteed segment 0 is empty. Project 00006 required segment 0 and its
+ * assert would refuse every offer built here; measuring instead showed the pinned `WalletFacade`
+ * balances a fallible-segment deficit perfectly well and the node accepts the result.
+ *
+ * What still has to hold — and what this returns the segment for — is that ALL the legs are in ONE
+ * segment. A deficit in one segment and its matching surplus in another would leave a taker funding
+ * value it cannot sweep, because balancing is per (token, segment).
+ */
+export const legSegmentOf = (imbalances: ImbalanceReading): string | null => {
+  const carrying = Object.entries(imbalances)
+    .filter(([, m]) => Object.keys(nonDustOf(m)).length > 0)
+    .map(([seg]) => seg);
+  if (carrying.length === 0) return null;
+  if (carrying.length > 1) {
+    throw new OfferPlacementError(
+      `the offer's legs are split across segments ${JSON.stringify(carrying)} — balancing is per ` +
+        '(token, segment), so no taker could fund one leg and sweep the other',
+    );
+  }
+  return carrying[0]!;
+};
+
+/**
+ * FAIL CLOSED. An artefact whose legs are split across segments cannot be settled at all, and one
+ * whose deltas are not exactly the declared terms is a lie about what the taker is being asked to
+ * fund. Either means the offer is not published — it is kept as evidence.
+ *
+ * Returns the segment the legs are in, which the terms then declare so a taker can check the two
+ * against each other rather than trusting either alone.
  */
 export const requirePlacement = (
   label: string,
   imbalances: ImbalanceReading,
   expected: Record<string, string>,
-): void => {
-  const problems: string[] = [];
-  for (const [seg, m] of Object.entries(imbalances)) {
-    const nonDust = Object.fromEntries(Object.entries(m).filter(([t]) => t !== 'dust'));
-    if (seg !== '0' && Object.keys(nonDust).length > 0) {
-      problems.push(`segment ${seg} carries ${JSON.stringify(nonDust)} — a leg outside the guaranteed section`);
-    }
+): string => {
+  const segment = legSegmentOf(imbalances);
+  if (segment === null) {
+    throw new OfferPlacementError(`${label}:\n  - the artefact carries no non-dust imbalance at all — there is no offer in it`);
   }
-  const measured = Object.fromEntries(
-    Object.entries(imbalances['0'] ?? {}).filter(([t]) => t !== 'dust'),
-  );
-  const norm = (o: Record<string, string>) =>
-    JSON.stringify(Object.fromEntries(Object.entries(o).sort(([a], [b]) => a.localeCompare(b))));
-  if (norm(measured) !== norm(expected)) {
-    problems.push(`segment 0 carries ${norm(measured)}, the declared terms require ${norm(expected)}`);
+  const measured = nonDustOf(imbalances[segment] ?? {});
+  if (normalise(measured) !== normalise(expected)) {
+    throw new OfferPlacementError(
+      `${label}:\n  - segment ${segment} carries ${normalise(measured)}, the declared terms require ` +
+        `${normalise(expected)}`,
+    );
   }
-  if (problems.length) {
-    throw new OfferPlacementError(`${label}:\n  - ${problems.join('\n  - ')}`);
-  }
+  return segment;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -529,6 +563,16 @@ export interface OpenSwapOfferSpec {
   /** Encryption keys for a NAMED recipient's coin, when the shape needs one. */
   recipientEncryptionKey?: { coinPublicKey: unknown; encryptionPublicKey: unknown };
   ttlSeconds?: number;
+  /**
+   * MEASUREMENT ONLY: record the placement instead of failing closed on it.
+   *
+   * The placement assert is fail-closed by design and must stay that way for anything PUBLISHED — an
+   * offer whose legs sit outside the section a taker can reach is unsettleable, so publishing one
+   * would be publishing a lie. But a probe whose whole subject is WHERE the legs land needs the
+   * report for the failing cases too, and the assert throws before it can be read. `imbalances` on
+   * the returned offer still tells the truth, so a caller that ignores it is making its own mistake.
+   */
+  measureOnly?: boolean;
 }
 
 export interface OpenSwapOffer {
@@ -584,12 +628,18 @@ export async function buildOpenSwapOffer(spec: OpenSwapOfferSpec): Promise<OpenS
   }
 
   const imbalances = readAllImbalances(proven, `offer (${spec.circuitId}, ${shape})`);
-  requirePlacement(
-    `${shape} offer (${spec.circuitId}, give ${spec.call.giveAmount} ${giveHex.slice(0, 12)}… / ` +
-      `want ${spec.call.want.value} ${wantHex.slice(0, 12)}…)`,
-    imbalances,
-    expectedPlacement(shape, giveHex, spec.call.giveAmount, wantHex, spec.call.want.value),
-  );
+  let legSegment = '';
+  try {
+    legSegment = requirePlacement(
+      `${shape} offer (${spec.circuitId}, give ${spec.call.giveAmount} ${giveHex.slice(0, 12)}… / ` +
+        `want ${spec.call.want.value} ${wantHex.slice(0, 12)}…)`,
+      imbalances,
+      expectedPlacement(shape, giveHex, spec.call.giveAmount, wantHex, spec.call.want.value),
+    );
+  } catch (e) {
+    if (!spec.measureOnly) throw e;
+    legSegment = (legSegmentOf(imbalances) ?? '');
+  }
 
   const bytes: Uint8Array = proven.serialize();
   const createdAt = new Date();
@@ -614,6 +664,7 @@ export async function buildOpenSwapOffer(spec: OpenSwapOfferSpec): Promise<OpenS
       expiresAt: new Date(createdAt.getTime() + ttlSeconds * 1000).toISOString(),
       ttlSeconds,
       imbalances,
+      legSegment,
       makerAttachedDust: false,
     },
     bytes,
