@@ -1,0 +1,88 @@
+{
+  "testId": "G0V",
+  "name": "signet-vk-compare",
+  "description": "Is a local compactc 0.34.0 rebuild of the Signet singleton interchangeable with the published bundle (and hence with the singleton already deployed on stagenet)?",
+  "verdict": "PASS",
+  "note": "The published @sig-net/midnight-contract bundle CANNOT be loaded under compact-runtime 0.19.0 (its generated JS pins 0.18.0-rc.1; the check has no override), so a 0.34.0 caller must recompile the singleton's source locally. That rebuild is SAFE: every verifier key is byte-identical to the published one (and so is every ZKIR), so the expectedVk fingerprint a 0.34.0 caller embeds matches the key of the ALREADY-DEPLOYED singleton. The divergence is purely in the generated TypeScript (ours pins 0.19.0). Consequence for PR-F/PR-G/PR-S: bundle a locally recompiled SignetSigner artefact directory; no redeploy by Sig Network is needed and the stagenet singleton stays callable.",
+  "details": {
+    "publishedPackage": "@sig-net/midnight-contract@0.22.0-rc.1 dist/managed",
+    "publishedRuntimePin": "0.18.0-rc.1",
+    "ourRuntimePin": "0.19.0",
+    "ourCompiler": "compactc 0.34.0 --feature-zkir-v3",
+    "allVerifierKeysIdentical": true,
+    "allZkirIdentical": true,
+    "source": "sig-net/midnight-integration packages/signet-contract/src/signet-contract.compact @ 79ce225",
+    "circuits": {
+      "signBidirectional": {
+        "verifierSha256": {
+          "ours": "101ac368e366286272dbabd81ea7ca5c192e34fc69b7a3f5159d85054625214f",
+          "published": "101ac368e366286272dbabd81ea7ca5c192e34fc69b7a3f5159d85054625214f",
+          "identical": true
+        },
+        "zkirSha256": {
+          "ours": "1f8516f9ae6159d5ad0e99b91e57d238a4c233a33e7763e950cfe44ca4f1d76a",
+          "published": "1f8516f9ae6159d5ad0e99b91e57d238a4c233a33e7763e950cfe44ca4f1d76a",
+          "identical": true
+        },
+        "proverSha256": {
+          "ours": "faa4f746ec0c0e2ed0aae03cb2463f4a96ed3f09c14491b9f1dedbfc8146aaa0",
+          "published": "faa4f746ec0c0e2ed0aae03cb2463f4a96ed3f09c14491b9f1dedbfc8146aaa0",
+          "identical": true
+        }
+      },
+      "respond": {
+        "verifierSha256": {
+          "ours": "eb818b22d69927732dd5f27674fc500e9e0784b729bf60025379128e6e3e1453",
+          "published": "eb818b22d69927732dd5f27674fc500e9e0784b729bf60025379128e6e3e1453",
+          "identical": true
+        },
+        "zkirSha256": {
+          "ours": "0ff1fee97ed8d3362e69d526bac84ae2a7eb49b535d7506f315efdb0677099db",
+          "published": "0ff1fee97ed8d3362e69d526bac84ae2a7eb49b535d7506f315efdb0677099db",
+          "identical": true
+        },
+        "proverSha256": {
+          "ours": "8f64569d16b772e359271bb27c6a715cf2a5c93a0ce90d05fcbcb9ab614ea059",
+          "published": "8f64569d16b772e359271bb27c6a715cf2a5c93a0ce90d05fcbcb9ab614ea059",
+          "identical": true
+        }
+      },
+      "respondBidirectional": {
+        "verifierSha256": {
+          "ours": "b8f00268018b1c1ea09d067929559e6e2f4e1b8b5f2b5fcf162087fda8014647",
+          "published": "b8f00268018b1c1ea09d067929559e6e2f4e1b8b5f2b5fcf162087fda8014647",
+          "identical": true
+        },
+        "zkirSha256": {
+          "ours": "d85c05f454e88af6c60e6055ba86ae079b3c99223d6f2f35b337c6f150cc08b6",
+          "published": "d85c05f454e88af6c60e6055ba86ae079b3c99223d6f2f35b337c6f150cc08b6",
+          "identical": true
+        },
+        "proverSha256": {
+          "ours": "e41a065b5af27ff438282e9602c5d85113c12fcf66533d8993cc3da195a0c9b7",
+          "published": "e41a065b5af27ff438282e9602c5d85113c12fcf66533d8993cc3da195a0c9b7",
+          "identical": true
+        }
+      }
+    },
+    "publishedVersionsChecked": {
+      "0.21.0": "@midnight-ntwrk/compact-runtime 0.18.0-rc.1",
+      "0.22.0-rc.1": "@midnight-ntwrk/compact-runtime 0.18.0-rc.1",
+      "0.22.0-rc.3": "@midnight-ntwrk/compact-runtime 0.18.0-rc.1",
+      "0.22.0-rc.4": "@midnight-ntwrk/compact-runtime 0.18.0-rc.1"
+    }
+  },
+  "ranAt": "2026-09-16T03:37:26.239Z",
+  "stack": {
+    "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
+    "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",
+    "proofServer": "midnightntwrk/proof-server:9.0.0-rc.6",
+    "compactc": "0.34.0 (--feature-zkir-v3)",
+    "compactRuntime": "0.19.0",
+    "compactJs": "2.5.5-rc.8",
+    "midnightJs": "5.0.0-beta.7",
+    "ledgerV9": "1.0.0-rc.3",
+    "signetModule": "@sig-net/midnight 0.22.0-rc.1",
+    "signetSingleton": "@sig-net/midnight-contract 0.22.0-rc.1 (dist/managed)"
+  }
+}

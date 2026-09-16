@@ -5,18 +5,19 @@
   "private": true,
   "description": "Project 00034 Gate 0: does a depth-2 cross-contract chain (root -> callee -> Signet singleton) land in one transaction, and can a callee mintShieldedToken to the root which claims it with receiveShielded in the same transaction? Throwaway spike; pins copied from passport/experiments/cross-contract-calls.",
   "scripts": {
-    "link:signet": "mkdir -p contracts/managed && rm -rf contracts/managed/SignetSigner && cp -RL node_modules/@sig-net/midnight-contract/dist/managed contracts/managed/SignetSigner",
+    "compile:signet": "COMPACT_PATH=node_modules compact compile +0.34.0 --feature-zkir-v3 --compact-path node_modules contracts/vendor/signet-contract.compact contracts/managed/SignetSigner",
     "compile:mid": "COMPACT_PATH=node_modules compact compile +0.34.0 --feature-zkir-v3 --compact-path node_modules:contracts/managed contracts/mid.compact contracts/managed/Mid",
     "compile:root": "compact compile +0.34.0 --feature-zkir-v3 --compact-path node_modules:contracts/managed contracts/root.compact contracts/managed/Root",
     "compile:mint": "compact compile +0.34.0 --feature-zkir-v3 --compact-path node_modules:contracts/managed contracts/mint.compact contracts/managed/Mint",
     "compile:root2": "compact compile +0.34.0 --feature-zkir-v3 --compact-path node_modules:contracts/managed contracts/root2.compact contracts/managed/Root2",
-    "compile": "npm run link:signet && npm run compile:mid && npm run compile:root && npm run compile:mint && npm run compile:root2",
+    "compile": "npm run compile:signet && npm run compile:mid && npm run compile:root && npm run compile:mint && npm run compile:root2",
     "typecheck": "tsc --noEmit",
     "g0": "tsx src/tests/g0-depth2-chain.ts",
     "g0n": "tsx src/tests/g0n-cycle-negative.ts",
     "g1": "tsx src/tests/g1-mint-in-callee.ts",
     "g1n": "tsx src/tests/g1n-negatives.ts",
-    "g1b": "tsx src/tests/g1b-send-claim-onward.ts"
+    "g1b": "tsx src/tests/g1b-send-claim-onward.ts",
+    "vkcompare": "tsx src/tests/g0v-signet-vk-compare.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

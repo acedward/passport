@@ -34,6 +34,7 @@ import {
   setupWallet,
   connectWitnessFree,
   connectWithWitnesses,
+  loadDeployment,
   type ContractHandle,
 } from '../node/setup.js';
 import { midZkConfigPath, rootZkConfigPath, coinPublicKeyBytes } from '../node/wallet.js';
@@ -97,7 +98,11 @@ await runScenario('g1b-send-claim-onward', async () => {
   });
   details.midAddress = mid.address;
   details.rootAddress = root.address;
-  const signetAddress = (await mid.ledgerState()).signetSigner;
+  // Mid's `signetSigner` cell is sealed and NOT exported, so it does not appear
+  // in the generated ledger reader; the singleton's address comes from the
+  // deployment G0 recorded.
+  const signetAddress = loadDeployment('signet');
+  details.signetAddress = signetAddress ?? null;
   console.log(`  mid  ${mid.address}`);
   console.log(`  root ${root.address}`);
 
@@ -241,8 +246,8 @@ await runScenario('g1b-send-claim-onward', async () => {
   const midAddrHex = mid.address.replace(/^0x/, '').toLowerCase();
   let notificationNamesMid = false;
   try {
-    const signetHex = bytesToHex(signetAddress.bytes ?? signetAddress);
-    const rawEvents = await querySignetEvents(root.providers, signetHex);
+    if (!signetAddress) throw new Error("no 'signet' address in deployment.json — run G0 first");
+    const rawEvents = await querySignetEvents(root.providers, signetAddress);
     const notifications = decodeSignetEvents(rawEvents);
     details.signetEvents = notifications;
     notificationNamesMid = notifications.some(

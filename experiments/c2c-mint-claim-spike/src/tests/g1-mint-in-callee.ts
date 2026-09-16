@@ -149,7 +149,9 @@ await runScenario('g1-mint-in-callee', async () => {
     `mint.mints advanced and minted_total = ${AMOUNT}`,
     (l: any) => l.mints === mintBefore.mints + 1n && l.minted_total === mintBefore.minted_total + AMOUNT,
   );
-  const inboxEntry = rootAfter.inbox.lookup(rootBefore.inbox_next);
+  const inboxEntry = rootAfter.inbox.member(rootBefore.inbox_next)
+    ? rootAfter.inbox.lookup(rootBefore.inbox_next)
+    : undefined;
   const nonceMatchesArgument = bytesToHex(rootAfter.last_nonce) === bytesToHex(nonce);
   const valueMatches = rootAfter.last_value === AMOUNT;
   const inboxLanded = inboxEntry !== undefined && bytesToHex(inboxEntry).startsWith(bytesToHex(entry.subarray(0, 17)));
