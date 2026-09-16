@@ -1213,11 +1213,27 @@ export pure circuit challenge_bridge_deposit_start_with_evm(
   );
 }
 
-// The withdraw start binds three things the EIP-712 struct cannot show and therefore does
-// not carry: the ERC20 address (the colour already identifies the asset in the wallet
-// prompt, and this is the second binding), the 192-byte change inbox entry (ciphertext),
-// and the qualified coin the `held_coin` witness returned (AUTH-10 — the approver signs
-// over the exact coin the spend will consume, which the wallet cannot see).
+// The withdraw start binds two things the EIP-712 struct cannot show and therefore does not
+// carry: the ERC20 address (the colour already identifies the asset in the wallet prompt,
+// and this is the second binding), and the qualified coin the `held_coin` witness returned
+// (AUTH-10 — the approver signs over the exact coin the spend will consume, which the
+// wallet cannot see).
+//
+// The `change_entry` ARGUMENT of the circuit is deliberately NOT bound here, and this is
+// the one place in the whole arm where an argument escapes the challenge. The reason is
+// measured, not stylistic (question Q41): the nonce the standard library gives the change
+// coin of a `sendShielded` is NOT an `evolveNonce` of the spent coin's nonce on this
+// runtime — no index from 0 to 15, at one or two levels, reproduces it — so a client cannot
+// seal the change entry before the call. It CAN learn the nonce by executing the call
+// locally first (the execution is deterministic for the same state and arguments, also
+// measured), but only if it already holds a signature to execute WITH. Binding the entry
+// would therefore cost a second wallet prompt for every withdrawal that leaves change.
+//
+// What an unbound entry can and cannot do: it is ciphertext the contract never inspects, so
+// a wrong one strands DISCOVERY of the change coin and nothing else — the coin is created
+// either way, it stays in the client's own store, and it is spendable. `deposit_shielded`
+// has accepted an arbitrary entry from an arbitrary caller since MIP-0012 §6.2 for the same
+// reason. The change can always be re-filed later with `append_inbox_with_evm` (INV-4).
 export pure circuit challenge_bridge_withdraw_start_with_evm(
   self_addr:        ContractAddress,
   address:          Bytes<20>,
@@ -1230,7 +1246,6 @@ export pure circuit challenge_bridge_withdraw_start_with_evm(
   max_priority_fee: Uint<128>,
   key_version:      Uint<8>,
   erc20:            Bytes<20>,
-  change_entry:     Bytes<192>,
   coin:             QualifiedShieldedCoinInfo,
   nonce_value:      Uint<64>,
 ): Bytes<32> {
@@ -1239,10 +1254,10 @@ export pure circuit challenge_bridge_withdraw_start_with_evm(
   );
   return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<20>, Bytes<32>, Uint<128>,
                          Uint<64>, Uint<64>, Uint<128>, Uint<128>, Uint<8>, Bytes<20>,
-                         Bytes<192>, QualifiedShieldedCoinInfo, Uint<64>]>(
+                         QualifiedShieldedCoinInfo, Uint<64>]>(
     [dst, self_addr, address, dest, color, amount,
      evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, erc20,
-     change_entry, coin, nonce_value]
+     coin, nonce_value]
   );
 }
 
@@ -2408,10 +2423,12 @@ export circuit bridge_deposit_complete(
 // then calls the singleton. The surrendered coin is not burned — it is claimed and left
 // unspendable (question Q24), which is the same economics in the one shape a callee may use.
 //
-// The change coin follows the MIP-0012 surviving-coin rule, and its inbox entry is an
-// ARGUMENT rather than a later backfill: the entry is deterministic (the change coin's
-// nonce evolves from the spent coin's), and a bridge withdrawal should not need a second
-// device signature to become discoverable.
+// The change coin follows the MIP-0012 surviving-coin rule. Its inbox entry is an ARGUMENT
+// so that one transaction can create the change AND make it discoverable, but the entry is
+// NOT part of the signed challenge — see `challenge_bridge_withdraw_start_with_evm` for the
+// measurement behind that (question Q41). A caller that cannot predict the change coin
+// passes 32 zero bytes' worth of nothing (any 192 bytes: a spend of the WHOLE coin never
+// reaches the append at all) and re-files later with `append_inbox_with_evm`.
 export circuit bridge_withdraw_start_with_evm(
   dest:             Bytes<20>,
   color:            Bytes<32>,
@@ -2434,7 +2451,7 @@ export circuit bridge_withdraw_start_with_evm(
   const challenge = challenge_bridge_withdraw_start_with_evm(
     kernel.self(), address, dest, color, amount,
     evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, erc20,
-    change_entry, coin, auth_nonce
+    coin, auth_nonce
   );
   const digest = evm_digest_bridge_withdraw_start(
     kernel.self().bytes, evm_domain_salt, address, auth_nonce,

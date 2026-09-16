@@ -70,7 +70,7 @@ import {
   vaultZkConfigPath,
 } from "../deploy/wallet.ts";
 import { compileTestTokens, connectEvm, deployToken, fundEth, mintToken, tokenBalance } from "./evm.ts";
-import { relayRequest } from "./relay.ts";
+import { relayRequest } from "../src/relayer.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(here, "..");

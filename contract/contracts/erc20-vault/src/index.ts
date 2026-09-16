@@ -6,7 +6,7 @@
 
 // NOT "@sig-net/midnight": its root entry cannot be loaded on compact-runtime
 // 0.19.0. See src/signet-sdk.ts.
-import { bytesToHex, deriveEvmAddress } from "./signet-sdk.ts";
+import { bytesToHex, deriveEvmAddress } from "./signet-sdk.js";
 
 export * from "../managed/Erc20Vault/contract/index.js";
 import { pureCircuits } from "../managed/Erc20Vault/contract/index.js";

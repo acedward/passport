@@ -497,12 +497,12 @@ await runScenario('unit-offline', async () => {
                   ? { op: 'addDevice', newEntry: fromHex(v.message.newEntry!, 32) }
                   : v.primaryType === 'RemoveDevice'
                     ? { op: 'removeDevice', entry: fromHex(v.message.entry!, 32) }
-                    // The two bridge types (PR-G). Their requests carry three values the
-                    // typed message does NOT (the ERC20 address on the withdraw side, the
-                    // change inbox entry and the qualified coin): those are bound through
-                    // the challenge, which this replay supplies from the vector, so any
-                    // placeholder is correct here — and passing an obviously fake one is
-                    // how this check proves they reach no EIP-712 word.
+                    // The two bridge types (PR-G). Their requests carry two values the
+                    // typed message does NOT (the ERC20 address on the withdraw side and
+                    // the qualified coin): both are bound through the challenge, which this
+                    // replay supplies from the vector, so any placeholder is correct here —
+                    // and passing an obviously fake one is how this check proves they reach
+                    // no EIP-712 word.
                     : v.primaryType === 'BridgeDepositStart'
                       ? {
                           op: 'bridgeDepositStart',
@@ -516,7 +516,6 @@ await runScenario('unit-offline', async () => {
                           color,
                           amount,
                           erc20: new Uint8Array(20).fill(0xee),
-                          changeEntry: new Uint8Array(192).fill(0xee),
                           coin: dummyCoin,
                           evm: evmParamsOf(v.message),
                         };

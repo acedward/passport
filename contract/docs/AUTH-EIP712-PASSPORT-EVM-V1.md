@@ -163,9 +163,16 @@ commitment, exactly as on the other two arms, so it has no primary type here.
 - **`BridgeWithdrawStart` shows `dest` and `color`, and not the ERC20 address**: the colour IS the
   asset's identity on the Midnight side and it determines the ERC20 (colour =
   `tokenType(vaultTokenDomainSeparator(erc20), vault)`), so showing the address as well would be
-  the same fact twice. The ERC20 address, the 192-byte change inbox entry and the qualified coin
-  the witness returned are all bound through `challenge`. `dest` is the one field a user must read
-  carefully: it is the only value in the byte contract whose mistake the account cannot undo.
+  the same fact twice. The ERC20 address and the qualified coin the witness returned are bound
+  through `challenge`. `dest` is the one field a user must read carefully: it is the only value in
+  the byte contract whose mistake the account cannot undo.
+- **The circuit's `change_entry` argument is bound by NEITHER the struct nor the challenge**, and
+  it is the only argument of the whole arm that is not (question Q41). The change coin's nonce is
+  not derivable before the call on this runtime, so a bound entry would cost a second wallet
+  signature for every withdrawal that leaves change: the client would need a signature to execute
+  the call that reveals the coin, and then a second one over the entry it could finally seal. The
+  entry is ciphertext the contract never reads, so a wrong one strands discovery and nothing else —
+  the coin exists either way and `append_inbox_with_evm` re-files it (INV-4).
 
 ## ABI word rules
 

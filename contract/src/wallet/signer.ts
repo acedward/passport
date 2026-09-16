@@ -750,19 +750,20 @@ export const evmChallenges = {
       ctx.authNonce,
     ),
 
-  // Takes the request itself: fourteen arguments in one fixed order is a place where
+  // Takes the request itself: thirteen arguments in one fixed order is a place where
   // positional parameters would be a bug waiting to happen, and the request object is
-  // already the single description every other projection is built from.
+  // already the single description every other projection is built from. Note what is NOT
+  // here: the change inbox entry, which the challenge deliberately does not bind (Q41).
   bridgeWithdrawStart: (
     ctx: CallContext,
     address: Uint8Array,
     r: { dest: Uint8Array; color: Uint8Array; amount: bigint; erc20: Uint8Array;
-         changeEntry: Uint8Array; coin: QualifiedCoin; evm: EvmTxParams },
+         coin: QualifiedCoin; evm: EvmTxParams },
   ): Uint8Array =>
     pureCircuits.challenge_bridge_withdraw_start_with_evm(
       addr(ctx), address, r.dest, r.color, r.amount,
       r.evm.nonce, r.evm.gasLimit, r.evm.maxFeePerGas, r.evm.maxPriorityFeePerGas, r.evm.keyVersion,
-      r.erc20, r.changeEntry, r.coin, ctx.authNonce,
+      r.erc20, r.coin, ctx.authNonce,
     ),
 };
 
@@ -800,7 +801,6 @@ export type AuthRequest =
       color: Uint8Array;
       amount: bigint;
       erc20: Uint8Array;
-      changeEntry: Uint8Array;
       coin: QualifiedCoin;
       evm: EvmTxParams;
     };

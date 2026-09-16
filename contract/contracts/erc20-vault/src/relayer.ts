@@ -1,3 +1,9 @@
+// MOVED from e2e/relay.ts by project 00034 PR-G (G3), unchanged but for its import of the
+// SDK shim. It belongs to this package's client surface rather than to its test harness:
+// spec FR-024 asks the ACCOUNT's client to drive this loop "as ported flow helpers", and a
+// deliverable may not import another package's e2e directory. One implementation, used by
+// this package's own end-to-end driver and by contract/src/wallet/bridge.ts.
+//
 // The relayer loop, ported from Sig Network's integration-test flows
 // (poll-signature-response.ts, broadcast-evm.ts, poll-respond-bidirectional.ts,
 // respond-output.ts) and condensed for this fork's single request shape.
@@ -27,7 +33,7 @@ import {
   serializeRespondOutput,
   signetEventSourceFromPublicDataProvider,
   SignetRequestResponseReader,
-} from "../src/signet-sdk.ts";
+} from "./signet-sdk.js";
 
 export type AttestedKind = "success" | "returned-false" | "never-executed";
 
