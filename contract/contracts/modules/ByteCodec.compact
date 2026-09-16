@@ -24,9 +24,21 @@ module ByteCodec {
   import CompactStandardLibrary;
 
   export {
+    uint8Word,
     uint64Word,
     uint128Word,
     addressWord
+  }
+
+  /// A `uint8` enum in a 32-byte word: 31 zero bytes, then the value. Added for the swap circuit's
+  /// `recipientKind`, the one EIP-712 field of this contract that is a small enumeration rather than
+  /// an amount, an address or a hash — a wallet shows `0` (open) or `1` (named) rather than a hash.
+  export pure circuit uint8Word(value: Uint<8>): Bytes<32> {
+    const b = value as Bytes<1>;
+    return Bytes[0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, b[0]];
   }
 
   /// `v as Bytes<8>` is LITTLE-endian; EVM words are big-endian, so the bytes are placed in

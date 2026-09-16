@@ -54,13 +54,15 @@ module Eip712 {
     evm_struct_hash_rotate_enc_key,
     evm_struct_hash_add_device,
     evm_struct_hash_remove_device,
+    evm_struct_hash_open_swap_shielded,
     evm_digest_withdraw_unshielded,
     evm_digest_withdraw_shielded,
     evm_digest_withdraw_shielded_to_contract,
     evm_digest_append_inbox,
     evm_digest_rotate_enc_key,
     evm_digest_add_device,
-    evm_digest_remove_device
+    evm_digest_remove_device,
+    evm_digest_open_swap_shielded
   }
 
   // ── Frozen constants (AUTH-EIP712-PASSPORT-EVM-V1) ────────────────────────────────────────────
@@ -144,6 +146,20 @@ module Eip712 {
                  0xc6, 0x27, 0xc8, 0xe9, 0xeb, 0x6c, 0xd5, 0x87,
                  0x96, 0x6f, 0xb0, 0x21, 0x4e, 0x7b, 0xe3, 0x6c,
                  0xc0, 0xe3, 0x63, 0xe3, 0xb0, 0x54, 0x17, 0xd4];
+  }
+
+  /// keccak256("OpenSwapShielded(bytes32 account,address owner,uint64 authNonce,bytes32 giveColor,uint128 giveAmount,uint8 recipientKind,bytes32 recipient,bytes32 wantNonce,bytes32 wantColor,uint128 wantAmount,uint64 validUntil,bytes32 challenge)")
+  ///
+  /// The V1 byte contract's eighth and last type, added by project 00034 PR-B. It is the only one
+  /// that carries a `validUntil` (Q8-B: nonce-only freshness everywhere else, an optional deadline
+  /// here because an offer sits unexecuted until a taker settles it) and the only one with a
+  /// `uint8`. The other seven type strings are UNCHANGED, so every signature and every vector frozen
+  /// in A1 still verifies.
+  pure circuit type_hash_open_swap_shielded(): Bytes<32> {
+    return Bytes[0x34, 0x62, 0x67, 0x93, 0xab, 0xd7, 0xc6, 0x7d,
+                 0x21, 0xe1, 0xa6, 0x1a, 0x99, 0xf1, 0xcf, 0xff,
+                 0x4f, 0x82, 0xae, 0x0e, 0x23, 0x25, 0xa6, 0xba,
+                 0x9d, 0xfd, 0xc4, 0xff, 0x12, 0xd6, 0x68, 0xae];
   }
 
   // ── Domain ───────────────────────────────────────────────────────────────────────────────────
@@ -290,6 +306,42 @@ module Eip712 {
     return keccak256<Bytes<192>>(preimage);
   }
 
+  /// `OpenSwapShielded(bytes32 account,address owner,uint64 authNonce,bytes32 giveColor,uint128 giveAmount,uint8 recipientKind,bytes32 recipient,bytes32 wantNonce,bytes32 wantColor,uint128 wantAmount,uint64 validUntil,bytes32 challenge)`
+  ///
+  /// TWELVE fields — a 416-byte preimage, the largest in this codec — because an offer is the one
+  /// operation whose terms a counterparty reads and a wallet must therefore show in full: what
+  /// leaves (`giveColor`, `giveAmount`), where it goes (`recipientKind` 0 = open / 1 = a named coin
+  /// public key; `recipient`), what must arrive (`wantNonce`, `wantColor`, `wantAmount`) and until
+  /// when the authorisation is live (`validUntil`, 0 = no deadline).
+  ///
+  /// The two 192-byte inbox entries are NOT here. They are ciphertext — nothing readable is lost —
+  /// and adding them as `keccak` words would cost two more words plus two keccak calls for a value a
+  /// wallet cannot interpret; the challenge below binds all 384 bytes of them, exactly as it binds
+  /// the witness coin the wallet cannot see either.
+  export pure circuit evm_struct_hash_open_swap_shielded(
+    account:    Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    give_color: Bytes<32>,
+    give_amount: Uint<128>,
+    recipient_kind: Uint<8>,
+    recipient:  Bytes<32>,
+    want_nonce: Bytes<32>,
+    want_color: Bytes<32>,
+    want_amount: Uint<128>,
+    valid_until: Uint<64>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    const preimage: Bytes<416> = slice<416>([
+      ...type_hash_open_swap_shielded(), ...account, ...ByteCodec_addressWord(owner),
+      ...ByteCodec_uint64Word(auth_nonce_value), ...give_color,
+      ...ByteCodec_uint128Word(give_amount), ...ByteCodec_uint8Word(recipient_kind),
+      ...recipient, ...want_nonce, ...want_color, ...ByteCodec_uint128Word(want_amount),
+      ...ByteCodec_uint64Word(valid_until), ...challenge
+    ], 0) as Bytes<416>;
+    return keccak256<Bytes<416>>(preimage);
+  }
+
   // ── Digests ──────────────────────────────────────────────────────────────────────────────────
 
   pure circuit eip712_digest(separator: Bytes<32>, struct_hash: Bytes<32>): Bytes<32> {
@@ -384,6 +436,29 @@ module Eip712 {
     return eip712_digest(
       evm_domain_separator_for(account, salt),
       evm_struct_hash_add_device(account, owner, auth_nonce_value, new_entry, challenge)
+    );
+  }
+
+  export pure circuit evm_digest_open_swap_shielded(
+    account:    Bytes<32>,
+    salt:       Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    give_color: Bytes<32>,
+    give_amount: Uint<128>,
+    recipient_kind: Uint<8>,
+    recipient:  Bytes<32>,
+    want_nonce: Bytes<32>,
+    want_color: Bytes<32>,
+    want_amount: Uint<128>,
+    valid_until: Uint<64>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    return eip712_digest(
+      evm_domain_separator_for(account, salt),
+      evm_struct_hash_open_swap_shielded(
+        account, owner, auth_nonce_value, give_color, give_amount, recipient_kind, recipient,
+        want_nonce, want_color, want_amount, valid_until, challenge)
     );
   }
 

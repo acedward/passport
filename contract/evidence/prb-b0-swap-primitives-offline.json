@@ -1,0 +1,198 @@
+{
+  "testId": "PRB-B0",
+  "name": "swap-primitives-offline",
+  "description": "FR-008: the contract's ZswapPrimitives transcription equals the standard library's own coin nullifier and coin commitments, measured on the effects of withdraw_shielded_with_jubjub",
+  "verdict": "PASS",
+  "note": "20 random coins; each spend claims exactly one nullifier and two commitments (one user-addressed payout, one contract-addressed change), all reproduced byte-for-byte by the contract-exported oracles. Keyless: compact-runtime 0.19.0 only.",
+  "details": {
+    "coins": 20,
+    "rows": [
+      {
+        "i": "0",
+        "colour": "a19028d81edf5d20",
+        "value": "17508221627059029271",
+        "spend": "8754110813529514635",
+        "nullifier": "457e27baeafe901b",
+        "changeNonce": "7d87f7ab3f1a38d5",
+        "deltas": "{}"
+      },
+      {
+        "i": "1",
+        "colour": "ddfc7a92f7e74e2a",
+        "value": "12119527258740381665",
+        "spend": "6059763629370190832",
+        "nullifier": "37957f7196715786",
+        "changeNonce": "29e3cc6ae102bca1",
+        "deltas": "{}"
+      },
+      {
+        "i": "2",
+        "colour": "271f2edfa968fb1b",
+        "value": "12251769733065057216",
+        "spend": "6125884866532528608",
+        "nullifier": "a91d5eafec186f59",
+        "changeNonce": "86931a6f65878672",
+        "deltas": "{}"
+      },
+      {
+        "i": "3",
+        "colour": "f24459407455df3e",
+        "value": "5182835125369699362",
+        "spend": "2591417562684849681",
+        "nullifier": "633c50296d97d91d",
+        "changeNonce": "d12fff88e2e61f69",
+        "deltas": "{}"
+      },
+      {
+        "i": "4",
+        "colour": "a1b2e2a30cccdcba",
+        "value": "9678158964581586805",
+        "spend": "4839079482290793402",
+        "nullifier": "d81edbd76cf30a45",
+        "changeNonce": "fd504bb967ab9f34",
+        "deltas": "{}"
+      },
+      {
+        "i": "5",
+        "colour": "ebb86a9918702d89",
+        "value": "6865677389783795200",
+        "spend": "3432838694891897600",
+        "nullifier": "7c80952e8bc8afac",
+        "changeNonce": "8188b32cd939fcb8",
+        "deltas": "{}"
+      },
+      {
+        "i": "6",
+        "colour": "d290dc4fd1b212d6",
+        "value": "8310667735254097721",
+        "spend": "4155333867627048860",
+        "nullifier": "5315ecbbf29ae4f9",
+        "changeNonce": "53f86a4fef4704f8",
+        "deltas": "{}"
+      },
+      {
+        "i": "7",
+        "colour": "2e22b034f43dabe2",
+        "value": "13652018429188282036",
+        "spend": "6826009214594141018",
+        "nullifier": "c63738d12fcb2fbc",
+        "changeNonce": "06b562be348139ab",
+        "deltas": "{}"
+      },
+      {
+        "i": "8",
+        "colour": "b5bbff4ebb1ffc20",
+        "value": "12914658250203036758",
+        "spend": "6457329125101518379",
+        "nullifier": "3751df5a035c5b5b",
+        "changeNonce": "c462cdf7a610a937",
+        "deltas": "{}"
+      },
+      {
+        "i": "9",
+        "colour": "30d83ea9752d83c7",
+        "value": "3152734288908609821",
+        "spend": "1576367144454304910",
+        "nullifier": "51bb7f7860e60b0f",
+        "changeNonce": "39e1fa736b4386ba",
+        "deltas": "{}"
+      },
+      {
+        "i": "10",
+        "colour": "91e390beffc076d1",
+        "value": "3928364847564180061",
+        "spend": "1964182423782090030",
+        "nullifier": "424c0cd279db2ad5",
+        "changeNonce": "09bcfbb916a2d7aa",
+        "deltas": "{}"
+      },
+      {
+        "i": "11",
+        "colour": "2232523fde4f0ec7",
+        "value": "11396986301628018090",
+        "spend": "5698493150814009045",
+        "nullifier": "aa2560914e135e2c",
+        "changeNonce": "fde98d74e9483741",
+        "deltas": "{}"
+      },
+      {
+        "i": "12",
+        "colour": "893f2309582fac4a",
+        "value": "1229298856319697832",
+        "spend": "614649428159848916",
+        "nullifier": "6e829cf6c394ed23",
+        "changeNonce": "a3c5de34c8c0b527",
+        "deltas": "{}"
+      },
+      {
+        "i": "13",
+        "colour": "335a2344eda6e3be",
+        "value": "374230675667942036",
+        "spend": "187115337833971018",
+        "nullifier": "c6317fa4ed71f55a",
+        "changeNonce": "cf0f1d58236c7016",
+        "deltas": "{}"
+      },
+      {
+        "i": "14",
+        "colour": "e4e0fd9399c5c8cf",
+        "value": "6300790819258717410",
+        "spend": "3150395409629358705",
+        "nullifier": "c8a190a88eb40ebb",
+        "changeNonce": "5af2ff38c5dcf8d8",
+        "deltas": "{}"
+      },
+      {
+        "i": "15",
+        "colour": "e3c344753f8f303b",
+        "value": "12504833243983433687",
+        "spend": "6252416621991716843",
+        "nullifier": "cfc66cffa162d6fc",
+        "changeNonce": "c672eb05ae1d6737",
+        "deltas": "{}"
+      },
+      {
+        "i": "16",
+        "colour": "3560aeac6005407d",
+        "value": "17321528255008612070",
+        "spend": "8660764127504306035",
+        "nullifier": "a90bb85aed5ceaf1",
+        "changeNonce": "150710f68b6443f8",
+        "deltas": "{}"
+      },
+      {
+        "i": "17",
+        "colour": "a5af7b9d80659410",
+        "value": "18306769454026313612",
+        "spend": "9153384727013156806",
+        "nullifier": "b50a521216305af1",
+        "changeNonce": "3ed23d76bbb7a264",
+        "deltas": "{}"
+      },
+      {
+        "i": "18",
+        "colour": "ba98adb7a9c967f7",
+        "value": "8969803835934970692",
+        "spend": "4484901917967485346",
+        "nullifier": "e9a72cd43cee09e6",
+        "changeNonce": "78d2bfc83a16c007",
+        "deltas": "{}"
+      },
+      {
+        "i": "19",
+        "colour": "15b04d69d512aeee",
+        "value": "4696622033540657682",
+        "spend": "2348311016770328841",
+        "nullifier": "9b9537259fb6a69b",
+        "changeNonce": "2fd63d7e71d19485",
+        "deltas": "{}"
+      }
+    ]
+  },
+  "ranAt": "2026-09-16T05:22:36.330Z",
+  "stack": {
+    "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
+    "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",
+    "proofServer": "midnightntwrk/proof-server:9.0.0-rc.6"
+  }
+}

@@ -6,6 +6,12 @@ import CompactStandardLibrary;
 // circuits surface on this contract's artifact as free oracles; they emit no
 // proving key. `ByteCodec` is imported by that module and never directly.
 import "./modules/Eip712";
+// The two zswap primitives the pinned standard library keeps PRIVATE — the coin commitment and the
+// coin nullifier — plus the qualified-coin downcast. `open_swap_shielded_*`'s open shape releases
+// value with NO output, and `sendShielded` (the only exported route to a zswap input) always creates
+// one, so the open offer cannot be built out of exported pieces alone. Ported verbatim from AA-v3;
+// see the module header for why the two separators are frozen bytes we did not choose.
+import "./modules/ZswapPrimitives";
 
 // A name imported from a module does not reach the compiled artifact's surface
 // on its own, so the codec's pure circuits are re-exported here explicitly.
@@ -31,7 +37,18 @@ export {
   evm_digest_append_inbox,
   evm_digest_rotate_enc_key,
   evm_digest_add_device,
-  evm_digest_remove_device
+  evm_digest_remove_device,
+  evm_struct_hash_open_swap_shielded,
+  evm_digest_open_swap_shielded
+};
+
+// The two zswap oracles of `ZswapPrimitives`, re-exported for the same reason and on the same terms
+// (`pure`, therefore free). They exist so that the contract's transcription of the standard library's
+// private `coinCommitment` / `coinNullifier` can be TESTED for equality against the values the
+// stdlib itself claims, rather than trusted (FR-008, `src/tests/swap-primitives-offline.ts`).
+export {
+  zswapNullifierOf,
+  zswapCommitmentOf
 };
 
 // ---------------------------------------------------------------------------
@@ -744,6 +761,36 @@ export pure circuit challenge_remove_device_with_jubjub(
   );
 }
 
+// The open-offer challenge. It binds MORE than any other circuit's because an offer is the one
+// authorisation that travels: the maker proves it, publishes it, and a stranger settles it minutes
+// later. Everything the settled transaction will contain is therefore in the preimage — both legs,
+// the recipient shape, the deadline, BOTH inbox entries in full, and the witness coin (AUTH-10) —
+// so "the offer that was approved" and "the offer that executed" cannot differ in any field.
+export pure circuit challenge_open_swap_shielded_with_jubjub(
+  self_addr:      ContractAddress,
+  sig_r:          JubjubPoint,
+  pk:             JubjubPoint,
+  give_color:     Bytes<32>,
+  give_amount:    Uint<128>,
+  recipient_kind: Uint<8>,
+  recipient:      Bytes<32>,
+  want:           ShieldedCoinInfo,
+  want_entry:     Bytes<192>,
+  change_entry:   Bytes<192>,
+  valid_until:    Uint<64>,
+  coin:           QualifiedShieldedCoinInfo,
+  nonce_value:    Uint<64>,
+  grind_nonce:    Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:v1:open_swap_shielded")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, JubjubPoint, JubjubPoint, Bytes<32>, Uint<128>, Uint<8>, Bytes<32>, ShieldedCoinInfo, Bytes<192>, Bytes<192>, Uint<64>, QualifiedShieldedCoinInfo, Uint<64>, Uint<64>]>(
+    [dst, self_addr, sig_r, pk, give_color, give_amount, recipient_kind, recipient, want,
+     want_entry, change_entry, valid_until, coin, nonce_value, grind_nonce]
+  );
+}
+
 // ── Challenge constructions, arm k256 ───────────────────────────────────────
 //
 // Preimage:
@@ -995,6 +1042,34 @@ export pure circuit challenge_remove_device_with_evm(
   );
 }
 
+// The `evm` twin of the open-offer challenge. Same preimage, the key encoded as the 20-byte
+// Ethereum address. Note what is here and NOT in the EIP-712 struct above it: the two 192-byte inbox
+// entries and the witness coin. They are the fields a wallet cannot render — ciphertext and a
+// private coin description — and the challenge is where they are pinned, which is the whole reason
+// this arm signs a struct that CONTAINS a challenge rather than a struct alone.
+export pure circuit challenge_open_swap_shielded_with_evm(
+  self_addr:      ContractAddress,
+  address:        Bytes<20>,
+  give_color:     Bytes<32>,
+  give_amount:    Uint<128>,
+  recipient_kind: Uint<8>,
+  recipient:      Bytes<32>,
+  want:           ShieldedCoinInfo,
+  want_entry:     Bytes<192>,
+  change_entry:   Bytes<192>,
+  valid_until:    Uint<64>,
+  coin:           QualifiedShieldedCoinInfo,
+  nonce_value:    Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:open_swap_shielded")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<32>, Uint<128>, Uint<8>, Bytes<32>, ShieldedCoinInfo, Bytes<192>, Bytes<192>, Uint<64>, QualifiedShieldedCoinInfo, Uint<64>]>(
+    [dst, self_addr, address, give_color, give_amount, recipient_kind, recipient, want,
+     want_entry, change_entry, valid_until, coin, nonce_value]
+  );
+}
+
 // ── The authorisation seam (MIP-0012 §4), one chip per arm ──────────────────
 //
 // One seam chip per arm gates every asset-releasing and state-changing
@@ -1243,6 +1318,217 @@ circuit do_remove_device(entry: Bytes<32>, caller_entry: Bytes<32>): [] {
   assert(devices.member(e), "unknown device entry");
   devices.remove(e);
   device_count = ((device_count - (1 as Uint<8>)) as Uint<8>);
+}
+
+/// Parameter sanity for an offer, run BEFORE the seam so a malformed offer costs no signature
+/// verification and reports what is actually wrong. Pure arithmetic on the caller's own arguments
+/// plus the two fields of the witness coin the terms have to agree with; it reads no ledger state
+/// and leaks nothing. Ported from AA-v3's `assertActionEnvelope` selector-6 block, with the
+/// pooled-balance guards replaced by the two held-coin checks this stateless model needs instead.
+///
+/// NO CONTRACT TAKER (`recipient_kind == 2`), deliberately, and refused HERE rather than by the
+/// ledger. A contract-addressed shielded payout is accepted only if the recipient contract claims
+/// receipt in the SAME transaction — `commitments == claimed_shielded_receives` is an EQUALITY — and
+/// a taker composing its own transaction cannot reach inside the maker's call to claim one. Such an
+/// offer would be unsettleable by construction, and the maker would learn it only after minutes of
+/// proving, from a numeric node error. The range check is kept ahead of the refusal so an
+/// out-of-range kind still reports itself as out of range, and so this reads as what it is: a
+/// capability switched off, not a malformed field.
+export pure circuit assert_open_swap_terms(
+  give_color:     Bytes<32>,
+  give_amount:    Uint<128>,
+  recipient_kind: Uint<8>,
+  recipient:      Bytes<32>,
+  want:           ShieldedCoinInfo,
+  coin_color:     Bytes<32>,
+  coin_value:     Uint<128>,
+): [] {
+  assert(give_amount > (0 as Uint<128>), "swap must give a positive amount");
+  assert(want.value > (0 as Uint<128>), "swap must want a positive amount");
+  // Equal colours would let a maker "swap" a colour for itself, which is a withdrawal wearing an
+  // offer's clothes: the taker would fund the deficit and sweep the surplus of the SAME colour and
+  // the account would end up exactly where it started, minus nothing the taker paid for.
+  assert(give_color != want.color, "swap legs must be different colours");
+  assert(recipient_kind <= (2 as Uint<8>), "swap recipient kind is invalid");
+  assert(recipient_kind <= (1 as Uint<8>), "swap to a contract taker is not supported");
+  if (recipient_kind == (0 as Uint<8>)) {
+    assert(recipient == default<Bytes<32>>, "open swap recipient must be zero");
+  } else {
+    assert(recipient != default<Bytes<32>>, "named swap recipient must be nonzero");
+  }
+  // The witness is keyed by colour, so an honest client cannot return a coin of another colour; a
+  // DISHONEST one could, and the open shape builds its change coin from the input coin's own fields.
+  // Asserting the equality is what makes the offer's declared give colour the colour that actually
+  // moves, rather than a label.
+  assert(coin_color == give_color, "held coin colour does not match the give colour");
+  assert(coin_value >= give_amount, "held coin is smaller than the give amount");
+}
+
+/// The standard library's change rule, exported so a client can compute the surviving coin's nonce
+/// BEFORE the call instead of reading it from the result afterwards.
+///
+/// Every other spend on this contract lets the client backfill its change entry with a later
+/// `append_inbox`, so it never needs to predict the nonce. An offer cannot: its change entry is an
+/// argument, bound in the challenge and appended inside the same call, so the maker must know the
+/// coin at signing time. `pure`, therefore free — and it is the CONTRACT's own answer, not a client
+/// transcription of a rule it cannot see (`src/tests/swap-shapes-offline.ts` asserts on every run
+/// that the coin this predicts is the coin the circuit actually creates, for both shapes).
+export pure circuit swap_change_nonce(coin_nonce: Bytes<32>): Bytes<32> {
+  return evolveNonce(2, coin_nonce);
+}
+
+/// The offer deadline (Q8-B). ZERO MEANS NO DEADLINE, and this is the only circuit in the contract
+/// with one at all — every other operation relies on `auth_nonce` alone, which is enough exactly
+/// because a signature there is spent immediately.
+///
+/// The ledger op is GUARDED. A circuit has no control flow, but a guard over a PUBLIC value does
+/// suppress the ledger operations inside it, and it must: `blockTimeLt(0)` would bound the
+/// transaction to blocks with a timestamp below zero, i.e. to no block ever, so an offer with no
+/// deadline would be unsubmittable.
+///
+/// There is deliberately NO lower bound and therefore NO subtraction. AA-v3 pairs
+/// `blockTimeLt(validUntil)` with `blockTimeGte(validUntil - 3600)` to cap the horizon at an hour,
+/// and its own header records that the subtraction underflows on every call that does not reach it,
+/// so the value may never be routed into a hash or a cast. An offer's whole purpose is to stay live
+/// until a taker finds it, so an hour cap would be wrong here — and dropping it removes that hazard
+/// outright instead of clamping around it. The cost of having no lower bound is that the deadline
+/// bounds only the END of the window; nothing here needs it to bound the start.
+circuit assert_offer_live(valid_until: Uint<64>): [] {
+  const deadline = disclose(valid_until);
+  if (deadline != (0 as Uint<64>)) {
+    assert(blockTimeLt(deadline), "offer authorisation has expired");
+  }
+}
+
+// MIP-0012 §6.3, extended: THE OPEN ZSWAP OFFER.
+//
+// One proved call fuses a GIVE leg (a held coin leaves, in one of two shapes) and a WANT leg (a coin
+// this transaction does not fund is claimed into custody). The want leg is what makes the call
+// UNBALANCED — a deficit of `want.value` of `want.color` at the guaranteed segment — and THAT
+// DEFICIT IS THE OFFER. The maker proves the call and stops: no balancing, no signing, no DUST, no
+// submission. A taker who never knew the maker balances it with its own coins and submits one
+// atomic transaction, so the swap settles by construction rather than by two calls that could
+// diverge.
+//
+// `recipient_kind` picks between two genuinely different mechanisms, not a cosmetic flag:
+//
+//   KIND 0, THE OPEN OFFER — the held coin is consumed as a zswap INPUT and its nullifier claimed,
+//       and the only output created is the change back to this contract. The given value has NO
+//       OUTPUT AT ALL: it stands as a positive imbalance addressed to nobody, which any taker's
+//       stock balancer sweeps. That is what makes the offer usable by a holder whose keys the maker
+//       never knew — and why this contract transcribes the standard library's private coin
+//       commitment and nullifier (`modules/ZswapPrimitives.compact`): `sendShielded` is the only
+//       exported route to a zswap input and it always creates an output for the value it moves.
+//
+//   KIND 1, THE NAMED OFFER — an output for exactly the given value is created for a named coin
+//       public key, so the give leg is INTERNALLY BALANCED and the call's only imbalance is the
+//       want-side deficit.
+//       Naming a throwaway key whose secret ships with the offer turns this into a bearer offer,
+//       with no contract support beyond this branch.
+//
+//   KIND 2, a CONTRACT taker, is refused in `assert_open_swap_terms` — see the note there.
+//
+// STATELESS, like every other spend here: the coin comes from the `held_coin` witness and leaves as
+// zswap inputs and outputs; the only ledger writes are the inbox appends below and the seam's own
+// counters. There is no pool to re-pool into, which is the one structural difference from the AA-v3
+// circuit this is ported from.
+//
+// Returns the surviving change coin (none when the held coin is spent exactly), on the private
+// channel, exactly as `do_withdraw_shielded` does. The client needs its `nonce` BEFORE the call as
+// well — that is what `change_entry` is sealed to — so the same value is available ahead of time
+// through the free oracle `swap_change_nonce`.
+circuit do_open_swap(
+  coin:           QualifiedShieldedCoinInfo,
+  give_amount:    Uint<128>,
+  recipient_kind: Uint<8>,
+  recipient:      Bytes<32>,
+  want:           ShieldedCoinInfo,
+  want_entry:     Bytes<192>,
+  change_entry:   Bytes<192>,
+): Maybe<ShieldedCoinInfo> {
+  const self_addr = kernel.self();
+  const self_rcpt = right<ZswapCoinPublicKey, ContractAddress>(self_addr);
+  const c    = disclose(coin);
+  const give = disclose(give_amount);
+  const kind = disclose(recipient_kind);
+
+  // THE CLAMP. `assert_open_swap_terms` has already forced `c.value >= give`, so `safe_give == give`
+  // on every run that reaches this line and the clamp is the identity. It exists for the runs that
+  // do NOT reach it: a circuit has no control flow, so the guards below suppress their EFFECTS and
+  // ASSERTS but not their ARITHMETIC, and an unclamped `c.value - give` would be a negative field
+  // element, and both output coins below encode it as a `Uint<128>`. The witness VM refuses to
+  // encode that ("inputs did not match alignment"), which would cost the circuit its provable runs
+  // entirely. This is the clamp AA-v3's header warns about, kept.
+  const safe_give    = (c.value >= give ? give : 0) as Uint<128>;
+  const change_value = (c.value - safe_give) as Uint<128>;
+  const has_change   = change_value > 0;
+
+  // The surviving coin, named once and used by both shapes, with ONE rule: `evolveNonce(2, …)`, the
+  // same index the standard library reserves for a change coin and the same rule AA-v3's open shape
+  // used. The client reproduces it before the call through the free oracle `swap_change_nonce`, and
+  // `src/tests/swap-shapes-offline.ts` asserts the two agree on every run.
+  const change_coin = ShieldedCoinInfo {
+    nonce: evolveNonce(2, c.nonce),
+    color: c.color,
+    value: change_value
+  };
+
+  // THE GIVE LEG. The input and its nullifier are SHARED by both shapes and hoisted out of the
+  // select: every offer spends the held coin, and only what happens to the given value differs.
+  //
+  // The named shape does NOT call `sendShielded`, deliberately. The library's change coin takes its
+  // nonce from a DIFFERENT rule than `evolveNonce` — the generated code hashes a separator whose
+  // string already ends in `/2` over the nonce alone, where `evolveNonce(2, n)` hashes a separator,
+  // an index and the nonce, and the two are not equal. A circuit that used `sendShielded` for one
+  // shape and built its own change coin for the other would therefore have TWO change rules, and a
+  // client that has to seal the change entry BEFORE the call could only predict one of them. So both
+  // shapes build their outputs here, from one rule, and the offline suite pins it. (This is a
+  // departure from the AA-v3 circuit, which had a pool to re-pool into and read the surviving coin
+  // from the library's own result; see the questions file, Q37.)
+  createZswapInput(c);
+  kernel.claimZswapNullifier(zswapCoinNullifier(dropMerkleIndex(c), self_addr));
+
+  if (kind != 0) {
+    // NAMED: an output addressed to the recipient's coin public key, for exactly the given value.
+    // Only a SPEND is claimed — a receive would assert this contract owns it, and it does not. The
+    // payout's nonce evolves from the input coin's under index 1, the change's under index 2, so the
+    // two outputs of one call can never collide.
+    const payout = ShieldedCoinInfo {
+      nonce: evolveNonce(1, c.nonce),
+      color: c.color,
+      value: safe_give
+    };
+    const payout_rcpt =
+      left<ZswapCoinPublicKey, ContractAddress>(ZswapCoinPublicKey { bytes: disclose(recipient) });
+    createZswapOutput(payout, payout_rcpt);
+    kernel.claimZswapCoinSpend(zswapCoinCommitment(payout, payout_rcpt));
+  }
+  // OPEN (kind 0) creates NO output for the given value at all — that omission IS the open offer.
+
+  if (has_change) {
+    createZswapOutput(change_coin, self_rcpt);
+    const cm = zswapCoinCommitment(change_coin, self_rcpt);
+    kernel.claimZswapCoinSpend(cm);
+    kernel.claimZswapCoinReceive(cm);
+  }
+
+  // THE WANT LEG, both shapes. `receiveShielded` creates an output this transaction does not fund —
+  // the deficit that IS the offer — and must precede nothing else here: it is what allocates the
+  // coin's Merkle-tree index.
+  receiveShielded(disclose(want));
+
+  // The inbox, in a FIXED order so a client can predict the ordinals it must walk: the change entry
+  // first when change exists, then the want entry. Both are opaque 192-byte containers the client
+  // sealed to this account's encryption key and the challenge bound in full.
+  if (has_change) {
+    do_append_inbox(change_entry);
+  }
+  do_append_inbox(want_entry);
+
+  if (has_change) {
+    return some<ShieldedCoinInfo>(change_coin);
+  }
+  return none<ShieldedCoinInfo>();
 }
 
 // ── Unshielded custody (MIP-0012 §5) ────────────────────────────────────────
@@ -1739,4 +2025,93 @@ export circuit remove_device_with_evm(
     kernel.self(), address, device_epoch,
     ((use_counter + (1 as Uint<64>)) as Uint<64>)
   ));
+}
+
+// ── The open ZSwap offer, one gated export per arm ──────────────────────────
+//
+// Spec 00034 User Story 2 / FR-006–FR-008. The custody body is `do_open_swap` above; what follows is
+// the same seam mechanics every other gated circuit uses — witness first (AUTH-10), sanity, deadline,
+// challenge, verification, chip — with two additions that exist only here.
+//
+// FIRST, `valid_until`. Every other operation on every arm relies on `auth_nonce` alone (AUTH-2): a
+// signature never expires, but at most one executes. An offer breaks the assumption that makes that
+// enough — it is a proved call that sits published until a STRANGER settles it, so "at most one
+// executes" is true while "it executes when the maker still wants it to" is not. `valid_until` is
+// therefore a per-offer, zero-means-none deadline, bound in both the challenge and the EIP-712
+// struct, and it is the only place in this contract where ledger time is read at all.
+//
+// SECOND, the inbox entries are ARGUMENTS. Every other spend leaves the client to backfill its
+// change entry with a second call (`append_inbox`); an offer cannot, because the maker is gone by
+// the time the call executes and a second signed call would invalidate the pending offer (see the
+// concurrency note below). So both entries — for the change and for the wanted coin — are computed
+// client-side before proving, passed in, and appended inside the same call.
+//
+// ONE LIVE OFFER PER ACCOUNT (Q7, accepted for this project and documented rather than fixed). The
+// seam consumes the acting device's current entry and binds `auth_nonce`; a pending offer is a
+// proved call against a specific `auth_nonce` and a specific entry, so ANY other gated call from ANY
+// device on this account — including a second offer — makes it stale forever. A market maker wanting
+// concurrent offers needs one account per offer, or a seam change that is out of scope here.
+
+export circuit open_swap_shielded_with_jubjub(
+  give_color:     Bytes<32>,
+  give_amount:    Uint<128>,
+  recipient_kind: Uint<8>,
+  recipient:      Bytes<32>,
+  want:           ShieldedCoinInfo,
+  want_entry:     Bytes<192>,
+  change_entry:   Bytes<192>,
+  valid_until:    Uint<64>,
+  pk:             JubjubPoint,
+  use_counter:    Uint<64>,
+  sig_r:          JubjubPoint,
+  sig_s:          Field,
+  grind_nonce:    Uint<64>,
+): Maybe<ShieldedCoinInfo> {
+  const coin = held_coin(give_color);
+  assert_open_swap_terms(
+    give_color, give_amount, recipient_kind, recipient, want, coin.color, coin.value
+  );
+  assert_offer_live(valid_until);
+  const challenge = challenge_open_swap_shielded_with_jubjub(
+    kernel.self(), sig_r, pk, give_color, give_amount, recipient_kind, recipient, want,
+    want_entry, change_entry, valid_until, coin, auth_nonce, grind_nonce
+  );
+  require_authorised_with_jubjub(pk, use_counter, sig_r, sig_s, challenge);
+  return do_open_swap(coin, give_amount, recipient_kind, recipient, want, want_entry, change_entry);
+}
+
+export circuit open_swap_shielded_with_evm(
+  give_color:     Bytes<32>,
+  give_amount:    Uint<128>,
+  recipient_kind: Uint<8>,
+  recipient:      Bytes<32>,
+  want:           ShieldedCoinInfo,
+  want_entry:     Bytes<192>,
+  change_entry:   Bytes<192>,
+  valid_until:    Uint<64>,
+  pk:             Secp256k1Point,
+  use_counter:    Uint<64>,
+  sig:            Secp256k1EcdsaSignature,
+): Maybe<ShieldedCoinInfo> {
+  // The witness runs BEFORE the challenge, so the qualified coin the spend will consume enters the
+  // challenge (AUTH-10). On this arm that matters twice over: the wallet is shown the offer's TERMS
+  // (colours, amounts, recipient, deadline) and cannot be shown the coin, so the coin is pinned by
+  // the challenge the wallet signs as one field of the struct.
+  const coin = held_coin(give_color);
+  assert_open_swap_terms(
+    give_color, give_amount, recipient_kind, recipient, want, coin.color, coin.value
+  );
+  assert_offer_live(valid_until);
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_open_swap_shielded_with_evm(
+    kernel.self(), address, give_color, give_amount, recipient_kind, recipient, want,
+    want_entry, change_entry, valid_until, coin, auth_nonce
+  );
+  const digest = evm_digest_open_swap_shielded(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce,
+    give_color, give_amount, recipient_kind, recipient,
+    want.nonce, want.color, want.value, valid_until, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
+  return do_open_swap(coin, give_amount, recipient_kind, recipient, want, want_entry, change_entry);
 }

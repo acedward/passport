@@ -1,0 +1,101 @@
+pragma language_version >= 0.26.0;
+
+// @module ZswapPrimitives
+// @description Transcriptions of the two zswap primitives the pinned standard library keeps
+//              private — the coin commitment and the coin nullifier — plus the qualified-coin
+//              downcast, and the two exported oracles that make the transcription TESTABLE.
+//
+// Ported VERBATIM from AA-midnight-evm-experiment-v3 @ `41de69d`
+// (`contracts/modules/ZswapPrimitives.compact`); only the `pragma` and this header differ. The
+// circuits, the struct, the two domain separators and the export list are byte-for-byte the donor's,
+// because they are not ours to choose: they reproduce the standard library's own preimages.
+//
+// State-free. As with `Eip712`, a name imported from a module does NOT reach the compiled artifact's
+// surface on its own — `account.compact` re-exports the two oracles explicitly, and being `pure` they
+// emit no proving key and cost no deploy budget.
+//
+// FROZEN BYTES: the two separators "midnight:zswap-cc[v1]" and "midnight:zswap-cn[v1]". They are
+// the one group NOT chosen by this contract — they reproduce the standard library's own preimages
+// byte for byte, so renaming them would not version anything, it would make this contract's coins
+// unrecognisable to the ledger.
+
+module ZswapPrimitives {
+  import CompactStandardLibrary;
+
+  export {
+    zswapCoinCommitment,
+    zswapCoinNullifier,
+    dropMerkleIndex,
+    zswapNullifierOf,
+    zswapCommitmentOf
+  }
+
+  // --- zswap primitives the pinned standard library keeps private ---------------------------------
+  //
+  // `coinCommitment` and `coinNullifier` are unexported circuits in the pinned standard library, and
+  // `sendShielded` — the only exported route to a zswap INPUT — always creates an output for the value
+  // it moves. An open swap offer, which releases value with NO output, therefore cannot be built out
+  // of exported pieces alone. These two circuits are transcriptions of the stdlib's, preimage-
+  // identical field for field: same struct shape (a 21-byte separator, then the coin, then the
+  // recipient discriminant, then 32 bytes of recipient), same domain separators, same
+  // `persistentHash` — which digests the ALIGNED ENCODING of the fields, so the struct's NAME is
+  // irrelevant and only the field types and their order matter.
+  //
+  // Transcription is exactly the kind of code that is silently wrong, so the equality is PROVEN rather
+  // than asserted in a comment: `zswapNullifierOf` / `zswapCommitmentOf` below expose these values,
+  // and `src/tests/swap-primitives-offline.ts` compares them against the nullifier and commitments
+  // THE STDLIB ITSELF claims for the same coin inside `withdraw_shielded_with_<arm>`'s payout leg
+  // (FR-008). A wrong separator or a reordered field fails that test.
+
+  struct SwapCoinPreimage {
+    // `midnight:zswap-cc[v1]` / `midnight:zswap-cn[v1]` — 21 bytes each, exactly as the stdlib.
+    domain_sep: Bytes<21>,
+    info: ShieldedCoinInfo,
+    dataType: Boolean,
+    data: Bytes<32>,
+  }
+
+  export pure circuit zswapCoinCommitment(
+    coin: ShieldedCoinInfo,
+    recipient: Either<ZswapCoinPublicKey, ContractAddress>
+  ): Bytes<32> {
+    return persistentHash<SwapCoinPreimage>(
+      SwapCoinPreimage {
+        domain_sep: "midnight:zswap-cc[v1]",
+        info: coin,
+        dataType: recipient.is_left,
+        data: recipient.is_left ? recipient.left.bytes : recipient.right.bytes,
+      });
+  }
+
+  export pure circuit zswapCoinNullifier(coin: ShieldedCoinInfo, addr: ContractAddress): Bytes<32> {
+    return persistentHash<SwapCoinPreimage>(
+      SwapCoinPreimage {
+        domain_sep: "midnight:zswap-cn[v1]",
+        info: coin,
+        // The hypothetical `is_left` of `Either<ZswapCoinSecretKey, ContractAddress>` — a contract-owned
+        // coin is always the RIGHT variant, so this is `false`, verbatim as the stdlib comments it.
+        dataType: false,
+        data: addr.bytes,
+      });
+  }
+
+  /// The pooled coin without its Merkle index — the stdlib's private `downcastQualifiedCoin`.
+  export pure circuit dropMerkleIndex(coin: QualifiedShieldedCoinInfo): ShieldedCoinInfo {
+    return ShieldedCoinInfo{ nonce: coin.nonce, color: coin.color, value: coin.value };
+  }
+
+  /// EXPORTED so the equality above can be TESTED rather than believed. Pure: it reads no ledger state,
+  /// so the compiler emits no proving key for it, and it discloses nothing — a coin commitment and a
+  /// coin nullifier are public objects that live in the transaction anyway.
+  export pure circuit zswapNullifierOf(coin: ShieldedCoinInfo, addr: ContractAddress): Bytes<32> {
+    return zswapCoinNullifier(coin, addr);
+  }
+
+  export pure circuit zswapCommitmentOf(
+    coin: ShieldedCoinInfo,
+    recipient: Either<ZswapCoinPublicKey, ContractAddress>
+  ): Bytes<32> {
+    return zswapCoinCommitment(coin, recipient);
+  }
+}
