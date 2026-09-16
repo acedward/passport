@@ -1,0 +1,112 @@
+{
+  "testId": "G1",
+  "name": "mint-in-callee",
+  "description": "A callee mintShieldedToken addressed to the ROOT, claimed by the root receiveShielded in the same transaction, and the claimed coin then spent in a later transaction (spec FR-023(b), brief R1)",
+  "verdict": "PASS",
+  "txHash": "002fb62900c8171373aa9a7ed68d3356c4e0a2371ede5454ae472b5baf80c81544",
+  "note": "A CALLEE minted a shielded coin addressed to the ROOT and the root claimed it with receiveShielded in the SAME transaction (tx 002fb62900c8171373aa9a7ed68d3356c4e0a2371ede5454ae472b5baf80c81544, 2 contract call(s): claim_minted, mint_to, status SUCCESS). The brief's risk R1 is resolved positively. Public state agrees the claimed coin is the minted coin (nonce == the nonce argument: true; value 1000: true), and the inbox entry landed beside the claim (true) — so the atomic claim-plus-inbox-entry shape of bridge_deposit_complete works. The claimed coin was then SPENT in a later transaction (005f3368a77d8c2c6b0d3c56b34ead097a4a3187f81c5502335a7e347b4a7a5527, 400 to a wallet key), so it is genuinely in custody. Proving 4214 ms, 21608 bytes proven, 17329 ms end to end.",
+  "details": {
+    "mintAddress": "a4bb0ed405c971892e1da5db60965db4e1fe90d4bb1f508059d366efaf5c3026",
+    "root2Address": "a98f99aad0a8ed72b9436af3747d4fbbd1a8b9e0a693862cae3834fb9e8027a3",
+    "claimTxId": "002fb62900c8171373aa9a7ed68d3356c4e0a2371ede5454ae472b5baf80c81544",
+    "endToEndMs": 17329,
+    "provingMetrics": {
+      "unprovenTxBytes": 3985,
+      "proveWallMs": 4214,
+      "provenTxBytes": 21608
+    },
+    "returnedCoin": {
+      "nonceHex": "13c75e829653a0c8dae22aef5fb7ed7f600607f5739a5154fe13be10ed628dd3",
+      "colorHex": "105ad76479f745fef26693ace436b1b07253b669dd2594c50e81377429af680b",
+      "value": "1000"
+    },
+    "after": {
+      "mintMints": "1",
+      "mintMintedTotal": "1000",
+      "root2Claims": "1",
+      "root2ClaimedTotal": "1000",
+      "root2InboxNext": "1",
+      "lastNonceHex": "13c75e829653a0c8dae22aef5fb7ed7f600607f5739a5154fe13be10ed628dd3",
+      "lastColorHex": "105ad76479f745fef26693ace436b1b07253b669dd2594c50e81377429af680b",
+      "lastValue": "1000",
+      "nonceMatchesArgument": true,
+      "valueMatches": true,
+      "inboxEntryLandedBesideTheClaim": true
+    },
+    "observer": {
+      "hash": "3dc035b5fa1c4e6e250230813331e9c8109c5bc065f3d8f2b5c0db2e55241d17",
+      "identifiers": [
+        "00d95d798ed6785fabebc9e574fda35e4b6be5af687a083ab8f596f43b3097b04c",
+        "007b0b99f869798b2dbb4c9ad8e73a2975b8c730b390ee9f17bd4c16fc803c0951",
+        "002fb62900c8171373aa9a7ed68d3356c4e0a2371ede5454ae472b5baf80c81544"
+      ],
+      "transactionResult": {
+        "status": "SUCCESS"
+      },
+      "contractActions": [
+        {
+          "__typename": "ContractCall",
+          "address": "a98f99aad0a8ed72b9436af3747d4fbbd1a8b9e0a693862cae3834fb9e8027a3",
+          "entryPoint": "claim_minted"
+        },
+        {
+          "__typename": "ContractCall",
+          "address": "a4bb0ed405c971892e1da5db60965db4e1fe90d4bb1f508059d366efaf5c3026",
+          "entryPoint": "mint_to"
+        }
+      ]
+    },
+    "observerSummary": {
+      "status": "SUCCESS",
+      "contractCalls": 2,
+      "entryPoints": [
+        "claim_minted",
+        "mint_to"
+      ],
+      "addresses": [
+        "a98f99aad0a8ed72b9436af3747d4fbbd1a8b9e0a693862cae3834fb9e8027a3",
+        "a4bb0ed405c971892e1da5db60965db4e1fe90d4bb1f508059d366efaf5c3026"
+      ]
+    },
+    "mtIndexCapture": {
+      "mtIndex": "28",
+      "window": [
+        28,
+        29
+      ]
+    },
+    "spendTxId": "005f3368a77d8c2c6b0d3c56b34ead097a4a3187f81c5502335a7e347b4a7a5527",
+    "usedMtIndex": "28",
+    "spendSent": {
+      "nonceHex": "e1d216bba13f07b1b8c6d845208abcb44e6a3626fb25e600ec32827720b60500",
+      "value": "400"
+    },
+    "spendChange": {
+      "nonceHex": "5f7a09ba9ebfad7d2c8f00abb94b806df8c68dea8fc959c2a7f5fec57b6f2700",
+      "value": "600"
+    },
+    "spendObserverSummary": {
+      "status": "SUCCESS",
+      "contractCalls": 1,
+      "entryPoints": [
+        "spend_to_wallet"
+      ],
+      "addresses": [
+        "a98f99aad0a8ed72b9436af3747d4fbbd1a8b9e0a693862cae3834fb9e8027a3"
+      ]
+    }
+  },
+  "ranAt": "2026-09-16T04:11:25.830Z",
+  "stack": {
+    "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
+    "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",
+    "proofServer": "midnightntwrk/proof-server:9.0.0-rc.6",
+    "compactc": "0.34.0 (--feature-zkir-v3)",
+    "compactRuntime": "0.19.0",
+    "compactJs": "2.5.5-rc.8",
+    "midnightJs": "5.0.0-beta.7",
+    "ledgerV9": "1.0.0-rc.3",
+    "signetModule": "@sig-net/midnight 0.22.0-rc.1",
+    "signetSingleton": "@sig-net/midnight-contract 0.22.0-rc.1 (dist/managed)"
+  }
+}

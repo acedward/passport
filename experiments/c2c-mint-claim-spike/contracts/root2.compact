@@ -126,6 +126,34 @@ export circuit mint_to_wallet(
   return coin;
 }
 
+// Second control, added after the first on-node run: the ROOT mints to a user key
+// directly, with no callee involved. The callee-minted wallet-addressed mint
+// (mint_to_wallet) was rejected by the node with
+//   Malformed(EffectsCheck(AllCommitmentsSubsetCheckFailure))
+//   "claimed_shielded_spends is not a subset of all_commitments"
+// and this circuit is what tells us whether that is a property of minting to a
+// non-root recipient FROM A CALLEE, or of minting to a wallet key at all. The
+// distinction decides whether the bridge's fallback shape (the vault minting to
+// a wallet key the account owner controls, G2 option (b)) exists.
+export circuit mint_to_wallet_root(
+  domain: Bytes<32>,
+  amount: Uint<64>,
+  nonce: Bytes<32>,
+  recipient: ZswapCoinPublicKey
+): ShieldedCoinInfo {
+  const coin = mintShieldedToken(
+    disclose(domain),
+    disclose(amount),
+    disclose(nonce),
+    left<ZswapCoinPublicKey, ContractAddress>(disclose(recipient))
+  );
+  ops.increment(1);
+  last_nonce = coin.nonce;
+  last_color = coin.color;
+  last_value = coin.value;
+  return coin;
+}
+
 // Change continuity: spend the claimed coin to a user key in a LATER transaction.
 export circuit spend_to_wallet(
   color: Bytes<32>,

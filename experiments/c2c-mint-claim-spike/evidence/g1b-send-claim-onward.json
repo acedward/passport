@@ -1,0 +1,185 @@
+{
+  "testId": "G1B",
+  "name": "send-claim-onward",
+  "description": "The withdraw shape (spec FR-027): the root sendShieldeds to a callee which claims that exact coin AND makes its own onward cross-contract call to the Signet singleton, in one transaction",
+  "verdict": "PASS",
+  "txHash": "0082bd3baf3bccf5f0096a75d7be7d9b6e938613a9979a5df58f6bac7a3c5c614b",
+  "note": "The withdraw shape landed: root.pay_and_forward sendShieldeds 100 to Mid's ContractAddress and Mid.take_and_request claims that exact coin AND calls the Signet singleton, all in ONE transaction (tx 0082bd3baf3bccf5f0096a75d7be7d9b6e938613a9979a5df58f6bac7a3c5c614b, 3 contract call(s): pay_and_forward, take_and_request, signBidirectional, status SUCCESS). Mid's public custody cell carries the nonce of result.sent (true) and value 100 (true); mid.requests -> 3; the singleton's notification names Mid (true); the change followed the surviving-coin rule (900 = 1000 - 100: true) and was spent later (0054c1f8d39d9a0ba480e094588bee07a9c6035db90379a1666c616eb8c7ef8858). NEGATIVE, run FIRST with the SAME coin and mt_index so a refusal cannot be a wrong commitment index: the same send driving the non-claiming Mid.request was refused (node-rejected / ledger-218); Mid custody unchanged by it: true. Proving 3698 ms, 21608 bytes proven, 28785 ms end to end.",
+  "details": {
+    "midAddress": "8662f18f76b0014ad444854c3d9bd28d0ede771a4169c8868bae67ddf3cce765",
+    "rootAddress": "3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250",
+    "signetAddress": "ba89b53b963e46f167cf475115d22bc87e912e9072bde83d611f7a609acd5931",
+    "fundTxId": "00a49ac340e9ce1a08dbe18f5d697b800eceba4662fc02cbf9a1c2fd551740a345",
+    "fundedCoin": {
+      "nonceHex": "5a27c27ebc795ff0a4c83e9c8d374c3355f6040542e926f6a24189e1f05b82cb",
+      "colorHex": "36f126efea1d169f9dc254c4875627fc4646d565c72658af7c69c9627cf3ca35",
+      "value": "1000"
+    },
+    "mtIndexCapture": {
+      "mtIndex": "33",
+      "window": [
+        33,
+        34
+      ]
+    },
+    "noclaimError": {
+      "name": "Error",
+      "message": "Unexpected error submitting scoped transaction '<unnamed>': (FiberFailure) SubmissionError: Transaction submission error\n    at file:///Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@midnightntwrk/wallet-sdk-capabilities/dist/submission/submissionService.js:31:279\n    at /Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/core.ts:1078:35\n    at <anonymous> (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:1161:41)\n    at body (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/Utils.ts:786:14)\n    at FiberRuntime.Sync (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:1161:19)\n    at <anonymous> (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:1398:53)\n    at Object.f (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/tracer.ts:101:19)\n    at FiberRuntime.runLoop (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:1384:34)\n    at FiberRuntime.evaluateEffect (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:950:27)\n    at FiberRuntime.evaluateMessageWhileSuspended (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:918:14) {\n  [cause]: SubmissionError: Transaction submission failed\n      at file:///Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@midnightntwrk/wallet-sdk-node-client/dist/effect/PolkadotNodeClient.js:86:27\n      at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {\n    [cause]: RpcError: 1010: Invalid Transaction: Custom error: 218\n        at checkError (file:///Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@polkadot/rpc-provider/coder/index.js:19:15)\n        at RpcCoder.decodeResponse (file:///Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@polkadot/rpc-provider/coder/index.js:35:9)\n        at #onSocketMessageResult (file:///Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@polkadot/rpc-provider/ws/index.js:429:40)\n        at #onSocketMessage (file:///Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@polkadot/rpc-provider/ws/index.js:418:42)\n        at [nodejs.internal.kHybridDispatch] (node:internal/event_target:827:20)\n        at WebSocket.dispatchEvent (node:internal/event_target:762:26)\n        at fireEvent (node:internal/deps/undici/undici:12652:14)\n        at #onMessage (node:internal/deps/undici/undici:13883:9)\n        at Object.onMessage (node:internal/deps/undici/undici:13596:76)\n        at websocketMessageReceived (node:internal/deps/undici/undici:12656:15)\n  }\n}",
+      "stack": "Error: Unexpected error submitting scoped transaction '<unnamed>': (FiberFailure) SubmissionError: Transaction submission error\n    at file:///Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@midnightntwrk/wallet-sdk-capabilities/dist/submission/submissionService.js:31:279\n    at /Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/core.ts:1078:35\n    at <anonymous> (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:1161:41)\n    at body (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/Utils.ts:786:14)\n    at FiberRuntime.Sync (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:1161:19)\n    at <anonymous> (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:1398:53)\n    at Object.f (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/tracer.ts:101:19)\n    at FiberRuntime.runLoop (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:1384:34)\n    at FiberRuntime.evaluateEffect (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:950:27)\n    at FiberRuntime.evaluateMessageWhileSuspended (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:918:14) {\n  [cause]: SubmissionError: Transaction submission failed\n      at file:///Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@midnightntwrk/wallet-sdk-node-client/dist/effect/PolkadotNodeClient.js:86:27\n      at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {\n    [cause]: RpcError: 1010: Invalid Transaction: Custom error: 218\n        at checkError (file:///Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@polkadot/rpc-provider/coder/index.js:19:15)",
+      "causeChain": [
+        {
+          "name": "Error",
+          "tag": null,
+          "message": "Unexpected error submitting scoped transaction '<unnamed>': (FiberFailure) SubmissionError: Transaction submission error\n    at file:///Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@midnightntwrk/wallet-sdk-capabilities/dist/submission/submissionService.js:31:279\n    at /Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/core.ts:1078:35\n    at <anonymous> (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:1161:41)\n    at body (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/Utils.ts:786:14)\n    at FiberRuntime.Sync (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:1161:19)\n    at <anonymous> (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:1398:53)\n    at Object.f (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/tracer.ts:101:19)\n    at FiberRuntime.runLoop (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:1384:34)\n    at FiberRuntime.evaluateEffect (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:950:27)\n    at FiberRuntime.evaluateMessageWhileSuspended (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/effect/src/internal/fiberRuntime.ts:918:14) {\n  [cause]: SubmissionError: Transaction submission failed\n      at file:///Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@midnightntwrk/wallet-sdk-node-client/dist/effect/PolkadotNodeClient.js:86:27\n      at process.processTicksAndRejections (node:internal/process/task_queues:105:5) {\n    [cause]: RpcError: 1010: Invalid Transaction: Custom error: 218\n        at checkError (file:///Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@polkadot/rpc-provider/coder/index.js:19:15)\n        at RpcCoder.decodeResponse (file:///Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@polkadot/rpc-provider/coder/index.js:35:9)\n        at #onSocketMessageResult (file:///Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@polkadot/rpc-provider/ws/index.js:429:40)\n        at #onSocketMessage (file:///Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@polkadot/rpc-provider/ws/index.js:418:42)\n        at [nodejs.internal.kHybridDispatch] (node:internal/event_target:827:20)\n        at WebSocket.dispatchEvent (node:internal/event_target:762:26)\n        at fireEvent (node:internal/deps/undici/undici:12652:14)\n        at #onMessage (node:internal/deps/undici/undici:13883:9)\n        at Object.onMessage (node:internal/deps/undici/undici:13596:76)\n        at websocketMessageReceived (node:internal/deps/undici/undici:12656:15)\n  }\n}"
+        },
+        {
+          "name": "(FiberFailure) SubmissionError",
+          "tag": null,
+          "message": "Transaction submission error"
+        }
+      ]
+    },
+    "noclaimErrorClass": {
+      "outcome": "node-rejected",
+      "errorCode": "ledger-218",
+      "note": "Node rejected the transaction with ledger error 218 — an on-node verdict."
+    },
+    "noclaimMtIndex": "33",
+    "negativeStateDrift": {
+      "noDrift": true,
+      "mtIndexAmbiguity": false
+    },
+    "payTxId": "0082bd3baf3bccf5f0096a75d7be7d9b6e938613a9979a5df58f6bac7a3c5c614b",
+    "usedMtIndex": "33",
+    "endToEndMs": 28785,
+    "provingMetrics": {
+      "unprovenTxBytes": 3985,
+      "proveWallMs": 3698,
+      "provenTxBytes": 21608
+    },
+    "sent": {
+      "nonceHex": "889529d1fae45ca88cf0a8a1b133e37ab2c3648cf54d0b4aea7bc38d5a1ed400",
+      "value": "100"
+    },
+    "change": {
+      "nonceHex": "d22dbd2c76ba3f88f006ec0f6c883df4dda225fdeed7acd4fef789e59ff6bb00",
+      "value": "900"
+    },
+    "after": {
+      "midShieldedReceived": "100",
+      "midShieldedClaims": "1",
+      "midRequests": "3",
+      "midHeld": {
+        "nonceHex": "889529d1fae45ca88cf0a8a1b133e37ab2c3648cf54d0b4aea7bc38d5a1ed400",
+        "colorHex": "36f126efea1d169f9dc254c4875627fc4646d565c72658af7c69c9627cf3ca35",
+        "value": "100"
+      },
+      "rootForwards": "3",
+      "rootShieldedSpent": "100",
+      "heldNonceMatchesSent": true,
+      "heldValueMatchesPay": true,
+      "changeFollowsSurvivingCoinRule": true
+    },
+    "observer": {
+      "hash": "53955ad7296382e441684a5e3b5d530681c3ee3c6d9a860349dc42cf232f3759",
+      "identifiers": [
+        "001500761d83adfd3e05d181928216fc2d1db467d1dcfbd51802d8011f325bd2ef",
+        "0028c95c1b0c833894df39119f0079b2d4ede5ae2b54ddc40be9446fff2a667e1b",
+        "009e1ab1e069753dfb8c918a67a8a4d3d1648156649dab975230d5a962673e0963",
+        "00759b54f66a007c8c1e277af6b513ea071f5a21c596d52623bd6e46c409e69880",
+        "0082bd3baf3bccf5f0096a75d7be7d9b6e938613a9979a5df58f6bac7a3c5c614b"
+      ],
+      "transactionResult": {
+        "status": "SUCCESS"
+      },
+      "contractActions": [
+        {
+          "__typename": "ContractCall",
+          "address": "3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250",
+          "entryPoint": "pay_and_forward"
+        },
+        {
+          "__typename": "ContractCall",
+          "address": "8662f18f76b0014ad444854c3d9bd28d0ede771a4169c8868bae67ddf3cce765",
+          "entryPoint": "take_and_request"
+        },
+        {
+          "__typename": "ContractCall",
+          "address": "ba89b53b963e46f167cf475115d22bc87e912e9072bde83d611f7a609acd5931",
+          "entryPoint": "signBidirectional"
+        }
+      ]
+    },
+    "observerSummary": {
+      "status": "SUCCESS",
+      "contractCalls": 3,
+      "entryPoints": [
+        "pay_and_forward",
+        "take_and_request",
+        "signBidirectional"
+      ],
+      "addresses": [
+        "3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250",
+        "8662f18f76b0014ad444854c3d9bd28d0ede771a4169c8868bae67ddf3cce765",
+        "ba89b53b963e46f167cf475115d22bc87e912e9072bde83d611f7a609acd5931"
+      ]
+    },
+    "signetEvents": [
+      {
+        "name": "SignBidirectionalEvent",
+        "version": 1,
+        "requestIdHex": "1e96de05b5465e23daeedc966d117659dd7016b28a5551b03d5d621eb5418700",
+        "callerAddressHex": "8662f18f76b0014ad444854c3d9bd28d0ede771a4169c8868bae67ddf3cce765",
+        "requestsPathDepth": 1,
+        "requestsPath": [
+          3,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "name": "SignBidirectionalEvent",
+        "version": 1,
+        "requestIdHex": "92485aa9b36c68a9f7ecb692da6c570c73d797812f49dd61691a1d2932eabd00",
+        "callerAddressHex": "8662f18f76b0014ad444854c3d9bd28d0ede771a4169c8868bae67ddf3cce765",
+        "requestsPathDepth": 1,
+        "requestsPath": [
+          3,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "name": "SignBidirectionalEvent",
+        "version": 1,
+        "requestIdHex": "8b66e8df79a47452ea9d3a55aed8b5182f2b68e3fd19966cab6ba0e2fbaa4900",
+        "callerAddressHex": "8662f18f76b0014ad444854c3d9bd28d0ede771a4169c8868bae67ddf3cce765",
+        "requestsPathDepth": 1,
+        "requestsPath": [
+          3,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "notificationNamesMid": true,
+    "changeSpendTxId": "0054c1f8d39d9a0ba480e094588bee07a9c6035db90379a1666c616eb8c7ef8858",
+    "changeSpendMtIndex": "34"
+  },
+  "ranAt": "2026-09-16T04:18:38.597Z",
+  "stack": {
+    "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
+    "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",
+    "proofServer": "midnightntwrk/proof-server:9.0.0-rc.6",
+    "compactc": "0.34.0 (--feature-zkir-v3)",
+    "compactRuntime": "0.19.0",
+    "compactJs": "2.5.5-rc.8",
+    "midnightJs": "5.0.0-beta.7",
+    "ledgerV9": "1.0.0-rc.3",
+    "signetModule": "@sig-net/midnight 0.22.0-rc.1",
+    "signetSingleton": "@sig-net/midnight-contract 0.22.0-rc.1 (dist/managed)"
+  }
+}

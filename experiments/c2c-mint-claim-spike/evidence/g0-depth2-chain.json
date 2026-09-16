@@ -1,0 +1,119 @@
+{
+  "testId": "G0",
+  "name": "depth2-chain",
+  "description": "A depth-2 cross-contract chain — root -> callee -> Signet singleton — landing as one transaction with three contract calls (spec FR-023(a))",
+  "verdict": "PASS",
+  "txHash": "0044cb3e74be0026ba3c63ed8b0d0b1cd9947bca66b390d54dab229792ab6835bc",
+  "note": "Root.forward -> Mid.request -> SignetSigner.signBidirectional landed as ONE transaction carrying 3 contract call(s) (forward, request, signBidirectional), indexer status SUCCESS. root.forwards -> 1, mid.requests -> 1. The singleton's SignBidirectionalEvent names MID as the client contract (callerAddress == Mid: true; == Root: false), carries a request id present in Mid's own requestLog (true) and the flat ledger path [3] at depth 1 (true). Independently of the event query, Mid's own stored request record carries sender == Mid (true), i.e. kernel.self() inside the CALLEE named Mid. Proving 5677 ms, 13802 bytes proven, 24012 ms end to end.",
+  "details": {
+    "signetAddress": "ba89b53b963e46f167cf475115d22bc87e912e9072bde83d611f7a609acd5931",
+    "midAddress": "8662f18f76b0014ad444854c3d9bd28d0ede771a4169c8868bae67ddf3cce765",
+    "rootAddress": "3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250",
+    "before": {
+      "midRequests": "0",
+      "rootForwards": "0"
+    },
+    "txId": "0044cb3e74be0026ba3c63ed8b0d0b1cd9947bca66b390d54dab229792ab6835bc",
+    "endToEndMs": 24012,
+    "provingMetrics": {
+      "unprovenTxBytes": 4389,
+      "proveWallMs": 5677,
+      "provenTxBytes": 13802
+    },
+    "after": {
+      "rootForwards": "1",
+      "midRequests": "1",
+      "midSignetRequestNonce": "1",
+      "midRequestLog": [
+        "1e96de05b5465e23daeedc966d117659dd7016b28a5551b03d5d621eb5418700"
+      ]
+    },
+    "observer": {
+      "hash": "233f6f9817841c3c43c2b8976ed21be816b733c668c641d0acda2593a2d78c88",
+      "identifiers": [
+        "0092cdd265fba0245a39fe4945ee1012dd38dd23a40dc99d1a98b26b13186e29c7",
+        "0044cb3e74be0026ba3c63ed8b0d0b1cd9947bca66b390d54dab229792ab6835bc"
+      ],
+      "transactionResult": {
+        "status": "SUCCESS"
+      },
+      "contractActions": [
+        {
+          "__typename": "ContractCall",
+          "address": "3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250",
+          "entryPoint": "forward"
+        },
+        {
+          "__typename": "ContractCall",
+          "address": "8662f18f76b0014ad444854c3d9bd28d0ede771a4169c8868bae67ddf3cce765",
+          "entryPoint": "request"
+        },
+        {
+          "__typename": "ContractCall",
+          "address": "ba89b53b963e46f167cf475115d22bc87e912e9072bde83d611f7a609acd5931",
+          "entryPoint": "signBidirectional"
+        }
+      ]
+    },
+    "observerSummary": {
+      "status": "SUCCESS",
+      "contractCalls": 3,
+      "entryPoints": [
+        "forward",
+        "request",
+        "signBidirectional"
+      ],
+      "addresses": [
+        "3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250",
+        "8662f18f76b0014ad444854c3d9bd28d0ede771a4169c8868bae67ddf3cce765",
+        "ba89b53b963e46f167cf475115d22bc87e912e9072bde83d611f7a609acd5931"
+      ]
+    },
+    "signetEventCount": 1,
+    "signetEvents": [
+      {
+        "name": "SignBidirectionalEvent",
+        "version": 1,
+        "requestIdHex": "1e96de05b5465e23daeedc966d117659dd7016b28a5551b03d5d621eb5418700",
+        "callerAddressHex": "8662f18f76b0014ad444854c3d9bd28d0ede771a4169c8868bae67ddf3cce765",
+        "requestsPathDepth": 1,
+        "requestsPath": [
+          3,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "midStoredRequest": {
+      "requestIdHex": "1e96de05b5465e23daeedc966d117659dd7016b28a5551b03d5d621eb5418700",
+      "senderHex": "8662f18f76b0014ad444854c3d9bd28d0ede771a4169c8868bae67ddf3cce765",
+      "requestNonce": "0",
+      "keyVersion": "1",
+      "chainId": "31337",
+      "evmNonce": "0"
+    },
+    "senderIsMid": true,
+    "notificationChecks": {
+      "callerIsMid": true,
+      "callerIsRoot": false,
+      "requestIdMatchesMidsOwnLog": true,
+      "requestsPathIsFlatField3": true,
+      "midAddressHex": "8662f18f76b0014ad444854c3d9bd28d0ede771a4169c8868bae67ddf3cce765",
+      "rootAddressHex": "3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250"
+    }
+  },
+  "ranAt": "2026-09-16T04:08:14.671Z",
+  "stack": {
+    "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
+    "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",
+    "proofServer": "midnightntwrk/proof-server:9.0.0-rc.6",
+    "compactc": "0.34.0 (--feature-zkir-v3)",
+    "compactRuntime": "0.19.0",
+    "compactJs": "2.5.5-rc.8",
+    "midnightJs": "5.0.0-beta.7",
+    "ledgerV9": "1.0.0-rc.3",
+    "signetModule": "@sig-net/midnight 0.22.0-rc.1",
+    "signetSingleton": "@sig-net/midnight-contract 0.22.0-rc.1 (dist/managed)"
+  }
+}
