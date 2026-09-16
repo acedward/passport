@@ -12,6 +12,12 @@ import "./modules/Eip712";
 // one, so the open offer cannot be built out of exported pieces alone. Ported verbatim from AA-v3;
 // see the module header for why the two separators are frozen bytes we did not choose.
 import "./modules/ZswapPrimitives";
+// The Signet protocol's shared Compact library (Sig Network, resolved through node_modules
+// by COMPACT_PATH). It is imported for two TYPES only — `RequestId` and
+// `RespondBidirectionalEvent` — which are the settle circuits' arguments and therefore part
+// of the vault's cross-contract surface. This account never calls the Signet singleton
+// itself: the vault does, one level further down the same call tree.
+import "@sig-net/midnight/src/Signet";
 
 // A name imported from a module does not reach the compiled artifact's surface
 // on its own, so the codec's pure circuits are re-exported here explicitly.
@@ -39,7 +45,11 @@ export {
   evm_digest_add_device,
   evm_digest_remove_device,
   evm_struct_hash_open_swap_shielded,
-  evm_digest_open_swap_shielded
+  evm_digest_open_swap_shielded,
+  evm_struct_hash_bridge_deposit_start,
+  evm_struct_hash_bridge_withdraw_start,
+  evm_digest_bridge_deposit_start,
+  evm_digest_bridge_withdraw_start
 };
 
 // The two zswap oracles of `ZswapPrimitives`, re-exported for the same reason and on the same terms
@@ -50,6 +60,73 @@ export {
   zswapNullifierOf,
   zswapCommitmentOf
 };
+
+// ── The ERC20 vault's cross-contract surface (project 00034 PR-G, brief B.1) ─────────────
+//
+// The five circuits this account calls on the witness-free ERC20 vault fork
+// (`contracts/erc20-vault/`, PR-F). The declaration must match the vault's exported
+// signatures EXACTLY: the compiler resolves the contract type name `Erc20Vault` to
+// `<compact-path>/Erc20Vault` — the compiled artefact directory, whose NAME is the type
+// name — and embeds a fingerprint of each circuit's verifier key in this contract's own
+// operations. The runtime compares that fingerprint against the deployed vault's key and
+// refuses the call otherwise (`ContractInterfaceMismatchError`).
+//
+// Two consequences, both spec FR-022 and both operational rather than theoretical:
+//
+//   * the vault is deployed and FROZEN before any account that binds it is compiled;
+//     a vault redeploy with different keys orphans the bridge circuits of every account
+//     already deployed against it. Every account deploy receipt records the vault address
+//     and the artefact fingerprint (`contracts/erc20-vault/deploy/artefacts.ts`);
+//   * no vault-local struct may cross the boundary (it would have to be re-declared here,
+//     identically, forever), which is why the argument lists below are flat. `RequestId`
+//     and `RespondBidirectionalEvent` are the exception, and they are shared: they come
+//     from Sig Network's own module, imported above by both contracts.
+//
+// The callee is witness-free by construction (compact-runtime refuses witnesses in a
+// non-root contract). This contract, as the ROOT, keeps its `held_coin` witness — Passport
+// P7 settled that a root may consume witnesses and hold call sites.
+contract Erc20Vault {
+  circuit startDeposit(
+    evmNonce: Uint<64>,
+    gasLimit: Uint<64>,
+    maxFeePerGas: Uint<128>,
+    maxPriorityFeePerGas: Uint<128>,
+    keyVersion: Uint<8>,
+    erc20Address: Bytes<20>,
+    amount: Uint<128>,
+    recipient: Either<ZswapCoinPublicKey, ContractAddress>
+  ): [];
+  circuit completeDeposit(
+    requestId: RequestId,
+    respondBidirectionalEvent: RespondBidirectionalEvent,
+    serializedOutput: Bytes<1>,
+    mintNonce: Bytes<32>
+  ): Maybe<ShieldedCoinInfo>;
+  circuit startWithdraw(
+    evmNonce: Uint<64>,
+    gasLimit: Uint<64>,
+    maxFeePerGas: Uint<128>,
+    maxPriorityFeePerGas: Uint<128>,
+    keyVersion: Uint<8>,
+    erc20Address: Bytes<20>,
+    amount: Uint<128>,
+    destEvmAddress: Bytes<20>,
+    coin: ShieldedCoinInfo,
+    refundRecipient: Either<ZswapCoinPublicKey, ContractAddress>
+  ): [];
+  circuit completeWithdraw(
+    requestId: RequestId,
+    respondBidirectionalEvent: RespondBidirectionalEvent,
+    serializedOutput: Bytes<1>,
+    mintNonce: Bytes<32>
+  ): Maybe<ShieldedCoinInfo>;
+  circuit refundWithdraw(
+    requestId: RequestId,
+    respondBidirectionalEvent: RespondBidirectionalEvent,
+    serializedOutput: Bytes<5>,
+    mintNonce: Bytes<32>
+  ): ShieldedCoinInfo;
+}
 
 // ---------------------------------------------------------------------------
 // Midnight account custody contract — reference implementation.
@@ -360,6 +437,30 @@ export sealed ledger evm_domain_salt: Bytes<32>;
 // intended for one network cannot be replayed on another, which the account
 // address in the domain alias already enforces between accounts.
 
+export sealed ledger vault: Erc20Vault;
+export sealed ledger vault_address: ContractAddress;
+// The ERC20 bridge vault this account is bound to (project 00034 PR-G, spec FR-021/FR-027),
+// named TWICE because the language has no cast between a contract reference and the raw
+// ContractAddress a shielded send targets (Gate 0 recorded the same limitation in its
+// root contract):
+//
+//   * `vault` is the CALLABLE reference — what `vault.startDeposit(...)` needs;
+//   * `vault_address` is the SEND target — what `sendShielded(coin, right(vault_address), n)`
+//     needs in `bridge_withdraw_start_*`, where the vault must claim that exact output with
+//     `receiveShielded` in the same transaction.
+//
+// Both are sealed: a mutable vault binding would be a second custody anchor above the
+// MIP-0013 seam (whoever could re-point it could redirect a withdrawal), and the compiled
+// verifier-key fingerprint pins the vault's CODE at compile time anyway, so a mutable
+// address could only ever point at a different deployment of that same code.
+//
+// The two are supplied by one client-side value (`CustodyAccount.deploy`'s `vaultAddress`
+// derives both), and a disagreement between them cannot pass silently: the withdraw would
+// address its output to a contract that does not claim it, and the node refuses the whole
+// transaction (an unclaimed contract-addressed output fails balancing — Gate 0's
+// `pay_and_forward_noclaim` control). An account with no bridge use deploys with the zero
+// address and simply never carries the bridge circuits (they live in wave 2).
+
 // ── Constructor ─────────────────────────────────────────────────────────────
 //
 // MIP-0013 §3 semantics via the boot commitment (see the `boot` cell): the
@@ -372,6 +473,8 @@ constructor(
   initial_device_boot: Bytes<32>,
   encryption_key:      Bytes<32>,
   evm_domain:          Bytes<32>,
+  vault_ref:           Erc20Vault,
+  vault_addr:          ContractAddress,
 ) {
   round        = 0 as Uint<64>;
   enc_key      = disclose(encryption_key);
@@ -387,6 +490,11 @@ constructor(
   // address inside a constructor, the same reason the boot commitment exists),
   // so the deploying client supplies it.
   evm_domain_salt = disclose(evm_domain);
+  // The bridge binding (PR-G). Public by nature — the vault is a public contract and the
+  // deposit address a user funds is derived from THIS account's address and the vault's,
+  // both public — so there is nothing to hide here, only something to freeze.
+  vault         = disclose(vault_ref);
+  vault_address = disclose(vault_addr);
 }
 
 // ── Bootstrap (per arm) ─────────────────────────────────────────────────────
@@ -1067,6 +1175,74 @@ export pure circuit challenge_open_swap_shielded_with_evm(
   return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<32>, Uint<128>, Uint<8>, Bytes<32>, ShieldedCoinInfo, Bytes<192>, Bytes<192>, Uint<64>, QualifiedShieldedCoinInfo, Uint<64>]>(
     [dst, self_addr, address, give_color, give_amount, recipient_kind, recipient, want,
      want_entry, change_entry, valid_until, coin, nonce_value]
+  );
+}
+
+// ── Challenge constructions, arm evm: the ERC20 bridge (PR-G) ───────────────
+//
+// Same preimage rule as every other `evm` challenge — [DST_CIRCUIT, self, address, ...args,
+// ...witness_values, auth_nonce] — for the two device-gated bridge starts.
+//
+// Both bind EVERY parameter of the Ethereum transaction the MPC will sign (`evm_nonce`,
+// `gas_limit`, `max_fee`, `max_priority_fee`, `key_version`). That is the reason these two
+// circuits are gated at all, and it is not about the bridged value: the signed transaction
+// spends GAS from an account the MPC derives, and a relayer free to choose the gas fields
+// could drain that account by having the MPC sign a maximally expensive transaction. The
+// value itself is already safe — the recipient is pinned to `kernel.self()` inside the
+// circuit and cannot be influenced from outside.
+
+export pure circuit challenge_bridge_deposit_start_with_evm(
+  self_addr:        ContractAddress,
+  address:          Bytes<20>,
+  erc20:            Bytes<20>,
+  amount:           Uint<128>,
+  evm_nonce:        Uint<64>,
+  gas_limit:        Uint<64>,
+  max_fee:          Uint<128>,
+  max_priority_fee: Uint<128>,
+  key_version:      Uint<8>,
+  nonce_value:      Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:bridge_deposit_start")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<20>, Uint<128>,
+                         Uint<64>, Uint<64>, Uint<128>, Uint<128>, Uint<8>, Uint<64>]>(
+    [dst, self_addr, address, erc20, amount,
+     evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, nonce_value]
+  );
+}
+
+// The withdraw start binds three things the EIP-712 struct cannot show and therefore does
+// not carry: the ERC20 address (the colour already identifies the asset in the wallet
+// prompt, and this is the second binding), the 192-byte change inbox entry (ciphertext),
+// and the qualified coin the `held_coin` witness returned (AUTH-10 — the approver signs
+// over the exact coin the spend will consume, which the wallet cannot see).
+export pure circuit challenge_bridge_withdraw_start_with_evm(
+  self_addr:        ContractAddress,
+  address:          Bytes<20>,
+  dest:             Bytes<20>,
+  color:            Bytes<32>,
+  amount:           Uint<128>,
+  evm_nonce:        Uint<64>,
+  gas_limit:        Uint<64>,
+  max_fee:          Uint<128>,
+  max_priority_fee: Uint<128>,
+  key_version:      Uint<8>,
+  erc20:            Bytes<20>,
+  change_entry:     Bytes<192>,
+  coin:             QualifiedShieldedCoinInfo,
+  nonce_value:      Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:bridge_withdraw_start")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<20>, Bytes<32>, Uint<128>,
+                         Uint<64>, Uint<64>, Uint<128>, Uint<128>, Uint<8>, Bytes<20>,
+                         Bytes<192>, QualifiedShieldedCoinInfo, Uint<64>]>(
+    [dst, self_addr, address, dest, color, amount,
+     evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, erc20,
+     change_entry, coin, nonce_value]
   );
 }
 
@@ -2114,4 +2290,230 @@ export circuit open_swap_shielded_with_evm(
   );
   require_authorised_with_evm(pk, use_counter, sig, digest, address);
   return do_open_swap(coin, give_amount, recipient_kind, recipient, want, want_entry, change_entry);
+}
+
+
+// ── The ERC20 bridge (project 00034 PR-G; spec User Stories 5 and 7, FR-021, FR-027) ────
+//
+// Five circuits, two device-gated and three permissionless, driving the witness-free ERC20
+// vault fork by cross-contract call. The asymmetry is the design, not an oversight:
+//
+//   START is gated because it commits this account to an ERC20 and an amount and, above
+//   all, because the EVM transaction parameters it signs SPEND GAS from an MPC-derived
+//   Ethereum account. A relayer that could choose them could drain that account.
+//
+//   SETTLE is permissionless because the vault verifies the MPC's attestation in-circuit
+//   against the response key it pinned at initialise, and because the only recipient a
+//   settle can pay was pinned when the start ran (`right(kernel.self())` — this account).
+//   Whoever submits the transaction, the coin can only land here. That is what lets a
+//   relayer finish a deposit the owner started, and it is why the owner's device signature
+//   is not needed twice for one round trip.
+//
+// A deposit is therefore TWO Midnight transactions with an MPC round trip in between, and
+// a withdraw is two more. The round trip cannot be collapsed: nothing on Midnight can wait
+// for an Ethereum transaction inside one proof.
+//
+// THE CALLEE RULE (Gate 0, question Q21b) governs every recipient here. A callee's shielded
+// output only survives when the transaction's ROOT claims it in the same tree — a callee
+// paying a wallet key is refused by the node (ledger 213). The vault is the callee in all
+// five of these calls, so every mint it makes must be addressed to THIS account and claimed
+// by `receiveShielded` in the same circuit. The vault cannot check that itself (Compact has
+// no caller introspection), which makes it the CALLER'S obligation: `right(kernel.self())`
+// is passed as the recipient at both starts and is not a parameter anyone can influence.
+
+// Start a deposit: the client has already told the user an Ethereum address derived from
+// `depositPath(right(this account))`, and the user has funded it with the ERC20 and gas ETH.
+// This call asks the MPC to sign `transfer(vault, amount)` FROM that derived address.
+//
+// One transaction, three contract calls: account -> vault.startDeposit -> the Signet
+// singleton's signBidirectional (the vault makes the second hop). No value moves on
+// Midnight here and no account state changes beyond the seam's own (`auth_nonce`, `round`,
+// the rolled device entry).
+export circuit bridge_deposit_start_with_evm(
+  erc20:            Bytes<20>,
+  amount:           Uint<128>,
+  evm_nonce:        Uint<64>,
+  gas_limit:        Uint<64>,
+  max_fee:          Uint<128>,
+  max_priority_fee: Uint<128>,
+  key_version:      Uint<8>,
+  pk:               Secp256k1Point,
+  use_counter:      Uint<64>,
+  sig:              Secp256k1EcdsaSignature,
+): [] {
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_bridge_deposit_start_with_evm(
+    kernel.self(), address, erc20, amount,
+    evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, auth_nonce
+  );
+  const digest = evm_digest_bridge_deposit_start(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce,
+    erc20, amount, evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
+  vault.startDeposit(
+    disclose(evm_nonce), disclose(gas_limit), disclose(max_fee), disclose(max_priority_fee),
+    disclose(key_version), disclose(erc20), disclose(amount),
+    // The pinned recipient. It is `kernel.self()` and nothing else, in every build of this
+    // contract: the MPC derivation path — and therefore the Ethereum address the user
+    // funded — is a function of it, so an account cannot sweep another account's deposit
+    // address, and the minted coin cannot land anywhere but here.
+    right<ZswapCoinPublicKey, ContractAddress>(kernel.self())
+  );
+}
+
+// Settle a deposit. Permissionless (see the banner): the vault's in-circuit attestation
+// check is the only authority.
+//
+// `entry` is the account-encrypted description of the coin the vault is about to mint, in
+// the same InboxEntry v1 container `deposit_shielded` takes. The client knows the coin
+// before proving because it dry-runs this very call locally first and reads `minted.value`
+// (question Q11 option A); the `mint_nonce` it passes is what makes the coin predictable.
+// A wrong entry strands discovery, never funds — the coin is claimed either way, and the
+// owner can recover it by rescanning and re-filing with `append_inbox_with_evm` (INV-4).
+//
+// The `none` branch is a deposit whose ERC20 `transfer` executed and returned FALSE: the
+// vault closes the request without minting, because the value never left the depositor's
+// own derived address. Nothing is claimed, nothing is appended, and `round` still advances
+// so a client watching state sees the settle landed.
+export circuit bridge_deposit_complete(
+  request_id:  RequestId,
+  // `event` is a reserved keyword in Compact 0.26, so the MPC's attestation travels under
+  // its role name here; it is the vault's `respondBidirectionalEvent` argument unchanged.
+  attestation: RespondBidirectionalEvent,
+  output:      Bytes<1>,
+  mint_nonce:  Bytes<32>,
+  entry:       Bytes<192>,
+): Maybe<ShieldedCoinInfo> {
+  const minted = vault.completeDeposit(
+    disclose(request_id), disclose(attestation), disclose(output), disclose(mint_nonce)
+  );
+  if (disclose(minted.is_some)) {
+    // The claim that makes the callee's mint legal, in the same transaction (Gate 0 G1).
+    receiveShielded(minted.value);
+    do_append_inbox(entry);
+    bump_round();
+    return some<ShieldedCoinInfo>(minted.value);
+  }
+  bump_round();
+  return none<ShieldedCoinInfo>();
+}
+
+// Start a withdrawal: hand `amount` of the vault colour back to the vault and have the MPC
+// sign `transfer(dest, amount)` from the VAULT's own Ethereum account.
+//
+// One transaction, three contract calls, and value crossing the boundary in the direction
+// Gate 0's G1b proved: this account's `sendShielded` creates a vault-addressed output, the
+// vault claims that exact output with `receiveShielded` inside the same tree, and the vault
+// then calls the singleton. The surrendered coin is not burned — it is claimed and left
+// unspendable (question Q24), which is the same economics in the one shape a callee may use.
+//
+// The change coin follows the MIP-0012 surviving-coin rule, and its inbox entry is an
+// ARGUMENT rather than a later backfill: the entry is deterministic (the change coin's
+// nonce evolves from the spent coin's), and a bridge withdrawal should not need a second
+// device signature to become discoverable.
+export circuit bridge_withdraw_start_with_evm(
+  dest:             Bytes<20>,
+  color:            Bytes<32>,
+  amount:           Uint<128>,
+  evm_nonce:        Uint<64>,
+  gas_limit:        Uint<64>,
+  max_fee:          Uint<128>,
+  max_priority_fee: Uint<128>,
+  key_version:      Uint<8>,
+  erc20:            Bytes<20>,
+  change_entry:     Bytes<192>,
+  pk:               Secp256k1Point,
+  use_counter:      Uint<64>,
+  sig:              Secp256k1EcdsaSignature,
+): Maybe<ShieldedCoinInfo> {
+  // The witness runs BEFORE the challenge, so the coin it returns is pinned by the
+  // signature (AUTH-10), exactly as in withdraw_shielded_with_evm.
+  const coin = held_coin(color);
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_bridge_withdraw_start_with_evm(
+    kernel.self(), address, dest, color, amount,
+    evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, erc20,
+    change_entry, coin, auth_nonce
+  );
+  const digest = evm_digest_bridge_withdraw_start(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce,
+    dest, color, amount, evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
+
+  // Not do_withdraw_shielded_to_contract: the vault needs the SENT coin as a call argument
+  // (it claims that exact description), and the chip returns it inside a tuple. The send is
+  // otherwise identical, including the change rule.
+  const result = sendShielded(
+    disclose(coin),
+    right<ZswapCoinPublicKey, ContractAddress>(vault_address),
+    disclose(amount),
+  );
+  vault.startWithdraw(
+    disclose(evm_nonce), disclose(gas_limit), disclose(max_fee), disclose(max_priority_fee),
+    disclose(key_version), disclose(erc20), disclose(amount), disclose(dest),
+    disclose(result.sent),
+    // The refund recipient, pinned for the whole life of the request: a withdrawal whose
+    // EVM leg fails can re-mint only into this account (spec FR-026, question Q21b).
+    right<ZswapCoinPublicKey, ContractAddress>(kernel.self())
+  );
+  if (disclose(result.change.is_some)) {
+    do_append_inbox(change_entry);
+    return some<ShieldedCoinInfo>(disclose(result.change.value));
+  }
+  return none<ShieldedCoinInfo>();
+}
+
+// Settle an EXECUTED withdrawal. Permissionless. Two branches, decided by the attested
+// return value and never by the caller: on success the request simply closes (the ERC20 is
+// already at `dest` on the EVM chain, and nothing comes back to Midnight); on a `transfer`
+// that executed and returned FALSE the vault re-mints the surrendered amount to the pinned
+// recipient — this account — which claims it here and files its inbox entry.
+export circuit bridge_withdraw_complete(
+  request_id:  RequestId,
+  // `event` is a reserved keyword in Compact 0.26, so the MPC's attestation travels under
+  // its role name here; it is the vault's `respondBidirectionalEvent` argument unchanged.
+  attestation: RespondBidirectionalEvent,
+  output:      Bytes<1>,
+  mint_nonce:  Bytes<32>,
+  entry:       Bytes<192>,
+): Maybe<ShieldedCoinInfo> {
+  const refunded = vault.completeWithdraw(
+    disclose(request_id), disclose(attestation), disclose(output), disclose(mint_nonce)
+  );
+  if (disclose(refunded.is_some)) {
+    receiveShielded(refunded.value);
+    do_append_inbox(entry);
+    bump_round();
+    return some<ShieldedCoinInfo>(refunded.value);
+  }
+  bump_round();
+  return none<ShieldedCoinInfo>();
+}
+
+// Settle a NEVER-EXECUTED withdrawal: the MPC signed, nobody broadcast (or the signed
+// transaction became unusable), and the MPC attested the protocol's fixed 5-byte
+// never-executed marker. The vault always re-mints in this branch, so unlike the two
+// settles above this one carries no `Maybe` — a coin is always claimed.
+//
+// There is no account-side twin for the vault's `abandonDeposit`: a never-executed DEPOSIT
+// surrendered no Midnight value, so closing it mints nothing and touches no account state.
+// Anyone calls it on the vault directly.
+export circuit bridge_withdraw_refund(
+  request_id:  RequestId,
+  // `event` is a reserved keyword in Compact 0.26, so the MPC's attestation travels under
+  // its role name here; it is the vault's `respondBidirectionalEvent` argument unchanged.
+  attestation: RespondBidirectionalEvent,
+  output:      Bytes<5>,
+  mint_nonce:  Bytes<32>,
+  entry:       Bytes<192>,
+): ShieldedCoinInfo {
+  const refunded = vault.refundWithdraw(
+    disclose(request_id), disclose(attestation), disclose(output), disclose(mint_nonce)
+  );
+  receiveShielded(refunded);
+  do_append_inbox(entry);
+  bump_round();
+  return refunded;
 }

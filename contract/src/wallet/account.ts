@@ -30,11 +30,38 @@ import { evmDomainSaltFor } from './eip712.js';
 
 /** Deploy-time choices. `evmDomainSalt` is the `evm` arm's EIP-712 domain
  *  (constructor-sealed); `armsInWaveTwo` overrides which arms the maintenance
- *  update adds. Both default per the notes at their use sites. */
+ *  update adds; `vaultAddress` is the ERC20 bridge vault this account binds
+ *  (also constructor-sealed). All default per the notes at their use sites. */
 export interface DeployOptions {
   retireAuthority?: boolean;
   evmDomainSalt?: Uint8Array;
   armsInWaveTwo?: Arm[];
+  /**
+   * The ERC20 vault (project 00034 PR-G) this account may bridge through, as its
+   * contract address — hex string or the raw 32 bytes.
+   *
+   * It is sealed at construction and it goes into the constructor TWICE, as the
+   * callable contract reference and as the raw address a shielded send targets;
+   * the contract's `vault` cell explains why the language needs both. Passing one
+   * value here is what keeps them equal.
+   *
+   * The default is the zero address: an account with no bridge. That is not a
+   * placeholder to be fixed later — the binding is sealed — but it costs nothing,
+   * because the five bridge circuits are deployed only when asked for (they are
+   * wave-2 operations, see `src/wallet/bridge.ts`) and an account that does not
+   * carry them can never call the vault anyway.
+   */
+  vaultAddress?: Uint8Array | string;
+}
+
+/** A ContractAddress / contract-reference circuit argument: `{ bytes }`. */
+function contractArg(address?: Uint8Array | string): { bytes: Uint8Array } {
+  if (address === undefined) return { bytes: new Uint8Array(32) };
+  const bytes = typeof address === 'string' ? addressToBytes(address) : Uint8Array.from(address);
+  if (bytes.length !== 32) {
+    throw new RangeError(`a contract address is 32 bytes, got ${bytes.length}`);
+  }
+  return { bytes };
 }
 
 import { ledger, type Ledger, type ShieldedCoin, type QualifiedCoin } from './contract.js';
@@ -190,12 +217,17 @@ export class CustodyAccount {
     // domain passes its own 32 bytes. It is public and carries no secret, and
     // an account whose devices are all jubjub or k256 never reads it.
     const evmDomainSalt = opts?.evmDomainSalt ?? evmDomainSaltFor(String(getNetworkId()));
+    // The vault binding (PR-G): one address, two constructor arguments — the callable
+    // `Erc20Vault` reference and the raw `ContractAddress` a `sendShielded` targets.
+    // Compact has no cast between the two, so they are named twice and derived once.
+    const vaultRef = contractArg(opts?.vaultAddress);
     const address = await deployAccountInWaves(providers, compiledContract, {
       firstArm: initialDevice.arm,
       args: accountConstructorArgs({
         bootCommitment: boot,
         encryptionPublicKey: encKeys.publicKey,
         evmDomainSalt,
+        vaultAddress: vaultRef.bytes,
       }),
       privateStateId,
       initialPrivateState,
@@ -711,11 +743,23 @@ export function accountConstructorArgs(o: {
   bootCommitment: Uint8Array;
   encryptionPublicKey: Uint8Array;
   evmDomainSalt: Uint8Array;
+  /** The ERC20 bridge vault's contract address (PR-G). It goes in TWICE — as the
+   *  callable `Erc20Vault` reference and as the raw `ContractAddress` a shielded
+   *  send targets — because Compact has no cast between the two. Passing one value
+   *  here is what keeps them equal. Omitted means the zero address: an account with
+   *  no bridge, which is exactly what an account that never carries the five bridge
+   *  circuits wants. */
+  vaultAddress?: Uint8Array;
 }): unknown[] {
   if (o.bootCommitment.length !== 32) throw new RangeError('boot commitment must be 32 bytes');
   if (o.encryptionPublicKey.length !== 32) throw new RangeError('encryption key must be 32 bytes');
   if (o.evmDomainSalt.length !== 32) throw new RangeError('evm domain salt must be 32 bytes');
-  return [o.bootCommitment, o.encryptionPublicKey, o.evmDomainSalt];
+  const vault = o.vaultAddress ?? new Uint8Array(32);
+  if (vault.length !== 32) throw new RangeError('vault address must be 32 bytes');
+  return [
+    o.bootCommitment, o.encryptionPublicKey, o.evmDomainSalt,
+    { bytes: vault }, { bytes: Uint8Array.from(vault) },
+  ];
 }
 
 /** Everything `deployEvmAccount` needs. `compiledContract` defaults to the

@@ -136,6 +136,10 @@ async function main(): Promise<void> {
     boot,
     encryptionKey,
     evmDomainSaltFor('undeployed'),
+    // The ERC20 bridge vault binding (PR-G), zero here: the constructor only stores it,
+    // and what this script prices is verifier keys, which the value cannot change.
+    { bytes: new Uint8Array(32) },
+    { bytes: new Uint8Array(32) },
   );
   const full: ContractState = ContractState.deserialize(initial.currentContractState.serialize());
   const allIds: string[] = [...(full.operations() as unknown as string[])].map(String);

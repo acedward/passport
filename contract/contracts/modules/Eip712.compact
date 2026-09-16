@@ -55,6 +55,8 @@ module Eip712 {
     evm_struct_hash_add_device,
     evm_struct_hash_remove_device,
     evm_struct_hash_open_swap_shielded,
+    evm_struct_hash_bridge_deposit_start,
+    evm_struct_hash_bridge_withdraw_start,
     evm_digest_withdraw_unshielded,
     evm_digest_withdraw_shielded,
     evm_digest_withdraw_shielded_to_contract,
@@ -62,7 +64,9 @@ module Eip712 {
     evm_digest_rotate_enc_key,
     evm_digest_add_device,
     evm_digest_remove_device,
-    evm_digest_open_swap_shielded
+    evm_digest_open_swap_shielded,
+    evm_digest_bridge_deposit_start,
+    evm_digest_bridge_withdraw_start
   }
 
   // ── Frozen constants (AUTH-EIP712-PASSPORT-EVM-V1) ────────────────────────────────────────────
@@ -160,6 +164,34 @@ module Eip712 {
                  0x21, 0xe1, 0xa6, 0x1a, 0x99, 0xf1, 0xcf, 0xff,
                  0x4f, 0x82, 0xae, 0x0e, 0x23, 0x25, 0xa6, 0xba,
                  0x9d, 0xfd, 0xc4, 0xff, 0x12, 0xd6, 0x68, 0xae];
+  }
+
+  /// keccak256("BridgeDepositStart(bytes32 account,address owner,uint64 authNonce,address erc20,uint128 amount,uint64 evmNonce,uint64 gasLimit,uint128 maxFeePerGas,uint128 maxPriorityFeePerGas,uint8 keyVersion,bytes32 challenge)")
+  ///
+  /// The bridge deposit start (project 00034 PR-G, spec FR-021). Eleven fields: the frame, the
+  /// ERC20 and amount the vault will sweep, and the five parameters of the Ethereum transaction the
+  /// MPC will sign FROM THE USER'S OWN DERIVED DEPOSIT ADDRESS — which is why they are signed
+  /// rather than supplied by the relayer: they spend that address's ETH.
+  pure circuit type_hash_bridge_deposit_start(): Bytes<32> {
+    return Bytes[0x67, 0x37, 0xc6, 0x8b, 0x20, 0xd3, 0xdf, 0x2b,
+                 0x20, 0xb6, 0x65, 0x3c, 0x7b, 0x69, 0x98, 0x36,
+                 0x31, 0xae, 0xe7, 0x20, 0x7f, 0xd8, 0x1e, 0x40,
+                 0x14, 0xbd, 0x26, 0x8b, 0x01, 0x76, 0x25, 0xee];
+  }
+
+  /// keccak256("BridgeWithdrawStart(bytes32 account,address owner,uint64 authNonce,address dest,bytes32 color,uint128 amount,uint64 evmNonce,uint64 gasLimit,uint128 maxFeePerGas,uint128 maxPriorityFeePerGas,uint8 keyVersion,bytes32 challenge)")
+  ///
+  /// The bridge withdraw start (spec FR-027). Twelve fields. `color` is the vault colour being
+  /// surrendered — it IS the asset's identity on this side, and it determines the ERC20 (the colour
+  /// is `tokenType(vaultTokenDomainSeparator(erc20), vault)`), so the ERC20 address itself is bound
+  /// through `challenge` rather than shown twice. The witness coin and the change inbox entry are
+  /// likewise bound through `challenge`: a wallet cannot display either (one is private, the other
+  /// is ciphertext), and AUTH-10 pinning is what makes them unsubstitutable.
+  pure circuit type_hash_bridge_withdraw_start(): Bytes<32> {
+    return Bytes[0x7f, 0xca, 0x5f, 0x3b, 0x9c, 0x61, 0xd7, 0x9b,
+                 0xec, 0xef, 0xf0, 0x9f, 0xb2, 0x10, 0x16, 0x88,
+                 0xa7, 0x42, 0x2e, 0xea, 0xab, 0x25, 0x05, 0xb1,
+                 0x58, 0xb8, 0x07, 0x60, 0xc2, 0x78, 0xb2, 0x60];
   }
 
   // ── Domain ───────────────────────────────────────────────────────────────────────────────────
@@ -342,6 +374,69 @@ module Eip712 {
     return keccak256<Bytes<416>>(preimage);
   }
 
+  /// `BridgeDepositStart(bytes32 account,address owner,uint64 authNonce,address erc20,uint128 amount,uint64 evmNonce,uint64 gasLimit,uint128 maxFeePerGas,uint128 maxPriorityFeePerGas,uint8 keyVersion,bytes32 challenge)`
+  ///
+  /// Twelve words, 384 bytes — three keccak permutations rather than the two the six- and
+  /// eight-word types pay (the sponge absorbs 136 bytes at a time).
+  ///
+  /// `key_version` is a `uint8` in the type string and uses `ByteCodec_uint8Word`, which PR-B added
+  /// for the swap circuit's `recipientKind`. EIP-712 gives every unsigned integer one big-endian
+  /// 32-byte word whatever its declared width, so this is the same 32 bytes the uint64 encoder would
+  /// produce — with one variable byte instead of eight for the backend to charge for.
+  export pure circuit evm_struct_hash_bridge_deposit_start(
+    account:    Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    erc20:      Bytes<20>,
+    amount:     Uint<128>,
+    evm_nonce:  Uint<64>,
+    gas_limit:  Uint<64>,
+    max_fee:    Uint<128>,
+    max_priority_fee: Uint<128>,
+    key_version: Uint<8>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    const preimage: Bytes<384> = slice<384>([
+      ...type_hash_bridge_deposit_start(), ...account, ...ByteCodec_addressWord(owner),
+      ...ByteCodec_uint64Word(auth_nonce_value), ...ByteCodec_addressWord(erc20),
+      ...ByteCodec_uint128Word(amount), ...ByteCodec_uint64Word(evm_nonce),
+      ...ByteCodec_uint64Word(gas_limit), ...ByteCodec_uint128Word(max_fee),
+      ...ByteCodec_uint128Word(max_priority_fee), ...ByteCodec_uint8Word(key_version),
+      ...challenge
+    ], 0) as Bytes<384>;
+    return keccak256<Bytes<384>>(preimage);
+  }
+
+  /// `BridgeWithdrawStart(bytes32 account,address owner,uint64 authNonce,address dest,bytes32 color,uint128 amount,uint64 evmNonce,uint64 gasLimit,uint128 maxFeePerGas,uint128 maxPriorityFeePerGas,uint8 keyVersion,bytes32 challenge)`
+  ///
+  /// Thirteen words, 416 bytes — four keccak permutations. `dest` is the Ethereum address the ERC20
+  /// leaves to, and it is the one field a user must read carefully: it is the only one the account
+  /// cannot recover from if it is wrong.
+  export pure circuit evm_struct_hash_bridge_withdraw_start(
+    account:    Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    dest:       Bytes<20>,
+    color:      Bytes<32>,
+    amount:     Uint<128>,
+    evm_nonce:  Uint<64>,
+    gas_limit:  Uint<64>,
+    max_fee:    Uint<128>,
+    max_priority_fee: Uint<128>,
+    key_version: Uint<8>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    const preimage: Bytes<416> = slice<416>([
+      ...type_hash_bridge_withdraw_start(), ...account, ...ByteCodec_addressWord(owner),
+      ...ByteCodec_uint64Word(auth_nonce_value), ...ByteCodec_addressWord(dest), ...color,
+      ...ByteCodec_uint128Word(amount), ...ByteCodec_uint64Word(evm_nonce),
+      ...ByteCodec_uint64Word(gas_limit), ...ByteCodec_uint128Word(max_fee),
+      ...ByteCodec_uint128Word(max_priority_fee), ...ByteCodec_uint8Word(key_version),
+      ...challenge
+    ], 0) as Bytes<416>;
+    return keccak256<Bytes<416>>(preimage);
+  }
+
   // ── Digests ──────────────────────────────────────────────────────────────────────────────────
 
   pure circuit eip712_digest(separator: Bytes<32>, struct_hash: Bytes<32>): Bytes<32> {
@@ -473,6 +568,49 @@ module Eip712 {
     return eip712_digest(
       evm_domain_separator_for(account, salt),
       evm_struct_hash_remove_device(account, owner, auth_nonce_value, entry, challenge)
+    );
+  }
+
+  export pure circuit evm_digest_bridge_deposit_start(
+    account:    Bytes<32>,
+    salt:       Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    erc20:      Bytes<20>,
+    amount:     Uint<128>,
+    evm_nonce:  Uint<64>,
+    gas_limit:  Uint<64>,
+    max_fee:    Uint<128>,
+    max_priority_fee: Uint<128>,
+    key_version: Uint<8>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    return eip712_digest(
+      evm_domain_separator_for(account, salt),
+      evm_struct_hash_bridge_deposit_start(account, owner, auth_nonce_value, erc20, amount,
+        evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, challenge)
+    );
+  }
+
+  export pure circuit evm_digest_bridge_withdraw_start(
+    account:    Bytes<32>,
+    salt:       Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    dest:       Bytes<20>,
+    color:      Bytes<32>,
+    amount:     Uint<128>,
+    evm_nonce:  Uint<64>,
+    gas_limit:  Uint<64>,
+    max_fee:    Uint<128>,
+    max_priority_fee: Uint<128>,
+    key_version: Uint<8>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    return eip712_digest(
+      evm_domain_separator_for(account, salt),
+      evm_struct_hash_bridge_withdraw_start(account, owner, auth_nonce_value, dest, color, amount,
+        evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, challenge)
     );
   }
 }

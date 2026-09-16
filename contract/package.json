@@ -33,7 +33,9 @@
     "README.md"
   ],
   "scripts": {
-    "compile": "compact compile +0.34.0 --feature-zkir-v3 contracts/account.compact contracts/managed/account && compact compile +0.34.0 --feature-zkir-v3 contracts/control.compact contracts/managed/control && compact compile +0.34.0 --feature-zkir-v3 contracts/faucet.compact contracts/managed/faucet",
+    "link-callees": "bash scripts/link-callees.sh",
+    "compile:account": "npm run link-callees && COMPACT_PATH=node_modules compact compile +0.34.0 --feature-zkir-v3 --compact-path node_modules:contracts/managed contracts/account.compact contracts/managed/account",
+    "compile": "npm run compile:account && compact compile +0.34.0 --feature-zkir-v3 contracts/control.compact contracts/managed/control && compact compile +0.34.0 --feature-zkir-v3 contracts/faucet.compact contracts/managed/faucet",
     "build": "tsc && node scripts/copy-artifacts.mjs",
     "measure-k": "node scripts/measure-k.mjs",
     "fixtures:evm": "tsx src/tests/fixtures/generate-evm-v1.ts",
@@ -67,8 +69,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "ethers": "6.17.0",
     "@types/ws": "^8.18.1",
+    "ethers": "6.17.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   },
@@ -90,6 +92,7 @@
     "@midnightntwrk/wallet-sdk-unshielded-wallet": "4.0.0-beta.2",
     "@noble/curves": "2.2.0",
     "@noble/hashes": "2.2.0",
+    "@sig-net/midnight": "0.22.0-rc.1",
     "rxjs": "^7.8.2",
     "ws": "^8.19.0"
   }
