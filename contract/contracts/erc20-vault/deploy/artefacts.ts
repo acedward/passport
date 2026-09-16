@@ -25,7 +25,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(here, "..");
 
 export const MANAGED_DIR = path.join(packageRoot, "managed");
-export const VAULT_MANAGED_DIR = path.join(MANAGED_DIR, "erc20-vault");
+export const VAULT_MANAGED_DIR = path.join(MANAGED_DIR, "Erc20Vault");
 export const SIGNET_MANAGED_DIR = path.join(MANAGED_DIR, "SignetSigner");
 export const VAULT_SOURCE = path.join(packageRoot, "src", "erc20-vault.compact");
 export const SIGNET_SOURCE = path.join(packageRoot, "src", "vendor", "signet-contract.compact");

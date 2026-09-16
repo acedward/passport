@@ -1,0 +1,149 @@
+# F4 localnet for the ERC20 vault fork (project 00034 PR-F): Midnight (node, indexer,
+# proof server) + a local EVM chain + the Sig Network fakenet MPC responder.
+#
+# Derived from sig-net/midnight-examples docker-compose.yaml @ 11482cd, with four
+# deliberate changes:
+#
+#   * a unique project name and NO container_name pins, so this stack's containers and
+#     volumes never collide with another agent's on this shared host;
+#   * every published port comes from an env var with a >= 10000 default, so the standard
+#     9944 / 8088 / 6300 / 8545 stay free for whoever holds them (workspace rule, Q23);
+#   * the three Midnight images are the PASSPORT C2C SET the Gate 0 verdict was produced on
+#     (node 2.1.0-2e92c4ae642c, indexer 4.4.0-rc.2, proof-server 9.0.0-rc.6), not Sig
+#     Network's older pins. Question Q16 took that decision for Gate 0 and the same reason
+#     holds here: a failure must be attributable to the mechanism, not to a stack
+#     difference, and these are the images every cross-contract result in this project was
+#     measured on. Sig Network's own indexer pin is a `pre-alpha` tag whose availability is
+#     not guaranteed;
+#   * anvil runs BARE by default (chain id 31337) and the harness deploys its own ERC20
+#     (question Q27). Set SEPOLIA_FORK_RPC_URL to fork Sepolia instead.
+#
+# Fresh volumes are mandatory: ledger 9 has no 8-to-9 state migration.
+#
+# Up:   docker compose -f infra/docker-compose.yml --env-file infra/.env up -d
+# Down: docker compose -f infra/docker-compose.yml --env-file infra/.env down -v
+
+name: ${COMPOSE_PROJECT_NAME:-prf-erc20-vault}
+
+services:
+  node:
+    image: '${MIDNIGHT_NODE_IMAGE:-midnightntwrk/midnight-node:2.1.0-2e92c4ae642c}'
+    networks: [vault]
+    ports:
+      - '${NODE_PORT:-19844}:9944'
+      - '${NODE_P2P_PORT:-19833}:30333'
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    volumes:
+      - node-data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9944/health']
+      interval: 2s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    environment:
+      CFG_PRESET: 'dev'
+      SIDECHAIN_BLOCK_BENEFICIARY: '04bcf7ad3be7a5c790460be82a713af570f22e0f801f6659ab8e84a52be6969e'
+
+  indexer:
+    image: '${MIDNIGHT_INDEXER_IMAGE:-midnightntwrk/indexer-standalone:4.4.0-rc.2}'
+    networks: [vault]
+    ports:
+      - '${INDEXER_PORT:-18188}:8088'
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    volumes:
+      - indexer-data:/data
+    environment:
+      RUST_LOG: 'indexer=info,chain_indexer=info,indexer_api=info,info'
+      APP__INFRA__SECRET: '${APP__INFRA__SECRET}'
+      APP__APPLICATION__NETWORK_ID: 'undeployed'
+      # Plaintext ws is intentional: container-to-container on the private compose bridge
+      # network; the localnet node terminates no TLS.
+      APP__INFRA__NODE__URL: 'ws://node:9944' # nosemgrep
+      APP__INFRA__SPO_NODE__URL: 'ws://node:9944' # nosemgrep
+      APP__INFRA__SPO_NODE__BLOCKFROST_ID: 'dummy-not-using-spo'
+    healthcheck:
+      test: ['CMD-SHELL', 'cat /var/run/indexer-standalone/running']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    depends_on:
+      node:
+        condition: service_healthy
+
+  proof-server:
+    image: '${MIDNIGHT_PROOF_IMAGE:-midnightntwrk/proof-server:9.0.0-rc.6}'
+    networks: [vault]
+    ports:
+      - '${PROOF_PORT:-16400}:6300'
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    # Proving a depth-2 call tree is memory-hungry and can kill this server outright.
+    # Bring it back on its own; `docker stop` is still respected.
+    restart: 'unless-stopped'
+    healthcheck:
+      disable: true
+    environment:
+      RUST_BACKTRACE: 'full'
+      EXTRA_ARGS: -v
+
+  evm:
+    # anvil. Bare by default (chain id 31337, in-memory, dev-mnemonic accounts pre-funded);
+    # set SEPOLIA_FORK_RPC_URL to fork Sepolia instead. The vault only needs an ERC20 with
+    # a `transfer`, and the harness deploys its own (question Q27).
+    image: '${FOUNDRY_IMAGE:-ghcr.io/foundry-rs/foundry:v1.5.1}'
+    networks: [vault]
+    entrypoint: ['sh', '-c']
+    command:
+      - >
+        anvil --host 0.0.0.0
+        ${SEPOLIA_FORK_RPC_URL:+--fork-url ${SEPOLIA_FORK_RPC_URL}}
+        ${SEPOLIA_FORK_BLOCK:+--fork-block-number ${SEPOLIA_FORK_BLOCK}}
+    ports:
+      - '${EVM_PORT:-18545}:8545'
+
+  fakenet:
+    # The MPC fakenet responder in Midnight-only mode: it polls the Signet singleton's
+    # notification registry through the indexer, signs with keys derived from MPC_ROOT_KEY,
+    # observes the EVM execution and posts the attestation back through the proof server.
+    #
+    # Only runs under `--profile fakenet`: MPC_ROOT_KEY and the singleton address exist
+    # only once the harness has generated the key and deployed the singleton, so the
+    # harness starts this service itself after those two steps.
+    image: '${FAKENET_IMAGE:-ghcr.io/sig-net/fakenet:0.23.0}'
+    profiles: ['fakenet']
+    networks: [vault]
+    depends_on:
+      indexer:
+        condition: service_started
+      proof-server:
+        condition: service_started
+      evm:
+        condition: service_started
+    environment:
+      VERBOSE: '${VERBOSE:-true}'
+      DISABLE_SOLANA: '${DISABLE_SOLANA:-true}'
+      EVM_RPC_URL: '${FAKENET_EVM_RPC_URL:-http://evm:8545}'
+      MIDNIGHT_NETWORK_ID: '${MIDNIGHT_NETWORK_ID:-undeployed}'
+      # Container-side endpoints. The GraphQL API version is an env var because the
+      # responder image and our indexer pin may not agree on it — see FAKENET_API_VERSION
+      # in run-f4.sh.
+      MIDNIGHT_INDEXER_URL: '${FAKENET_INDEXER_URL:-http://indexer:8088/api/v3/graphql}'
+      MIDNIGHT_INDEXER_WS_URL: '${FAKENET_INDEXER_WS_URL:-ws://indexer:8088/api/v3/graphql/ws}'
+      MIDNIGHT_NODE_URL: '${FAKENET_MIDNIGHT_NODE_URL:-http://node:9944}'
+      MIDNIGHT_PROOF_SERVER_URL: '${FAKENET_PROOF_SERVER_URL:-http://proof-server:6300}'
+      # The responder's fee-paying wallet: the local genesis-funded seed.
+      MIDNIGHT_WALLET_SEED: '${MPC_RESPONDER_SEED:-0000000000000000000000000000000000000000000000000000000000000001}'
+      MPC_ROOT_KEY: '${MPC_ROOT_KEY:-}'
+      MIDNIGHT_SIGNET_CONTRACT_ADDRESS: '${MIDNIGHT_SIGNET_CONTRACT_ADDRESS:-}'
+
+networks:
+  vault:
+    driver: bridge
+
+volumes:
+  node-data:
+  indexer-data:

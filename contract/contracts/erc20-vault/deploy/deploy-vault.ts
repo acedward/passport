@@ -41,7 +41,7 @@ import { fileURLToPath } from "node:url";
 
 import { secp256k1PublicKeyOf, signAttestationDigest } from "@sig-net/midnight/testing";
 
-import * as VaultModule from "../managed/erc20-vault/contract/index.js";
+import * as VaultModule from "../managed/Erc20Vault/contract/index.js";
 import { deriveDepositEvmAddress, deriveVaultEvmAddress, pureCircuits } from "../src/index.ts";
 import {
   bytesToHex,

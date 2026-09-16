@@ -8,8 +8,8 @@
 // 0.19.0. See src/signet-sdk.ts.
 import { bytesToHex, deriveEvmAddress } from "./signet-sdk.ts";
 
-export * from "../managed/erc20-vault/contract/index.js";
-import { pureCircuits } from "../managed/erc20-vault/contract/index.js";
+export * from "../managed/Erc20Vault/contract/index.js";
+import { pureCircuits } from "../managed/Erc20Vault/contract/index.js";
 
 /** `Either<ZswapCoinPublicKey, ContractAddress>` as the generated code shapes it. */
 export interface EitherRecipient {
@@ -48,7 +48,7 @@ export const contractRecipient = (contractAddressBytes: Uint8Array): EitherRecip
 // the wire contract with the MPC. The fork declares 11 ledger fields — under the 15 at
 // which compactc chunks the state tree — so every path is FLAT: one element, depth 1.
 // The compiler records each field's path as its "index" in
-// managed/erc20-vault/compiler/contract-info.json, and tests/ledger-paths.test.ts asserts
+// managed/Erc20Vault/compiler/contract-info.json, and tests/ledger-paths.test.ts asserts
 // these constants against it. Never hand-derive one.
 
 /** Resolved ledger-tree path of `depositEventMap` (ledger field 0). */

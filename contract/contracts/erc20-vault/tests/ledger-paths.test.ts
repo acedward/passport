@@ -29,7 +29,7 @@ interface LedgerFieldInfo {
 }
 
 const contractInfo = JSON.parse(
-  readFileSync(new URL("../managed/erc20-vault/compiler/contract-info.json", import.meta.url), "utf8"),
+  readFileSync(new URL("../managed/Erc20Vault/compiler/contract-info.json", import.meta.url), "utf8"),
 ) as { readonly ledger: readonly LedgerFieldInfo[] };
 
 const compiledFieldPath = (name: string): readonly number[] => {

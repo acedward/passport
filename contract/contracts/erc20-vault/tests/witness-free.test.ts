@@ -24,7 +24,7 @@ const code = source
   .join("\n");
 
 const contractInfo = JSON.parse(
-  readFileSync(new URL("../managed/erc20-vault/compiler/contract-info.json", import.meta.url), "utf8"),
+  readFileSync(new URL("../managed/Erc20Vault/compiler/contract-info.json", import.meta.url), "utf8"),
 ) as { readonly witnesses: readonly unknown[]; readonly contracts: readonly { name: string }[] };
 
 describe("the fork is witness-free", () => {

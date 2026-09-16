@@ -119,7 +119,7 @@ export const managedPath = path.resolve(__dirname, '..', 'managed');
 // every published version of that package pins compact-runtime 0.18.0-rc.1 and cannot be
 // loaded here). The directory name IS the declared contract type name, for the compiler
 // and for the generated JS that imports the callee.
-export const vaultZkConfigPath = path.join(managedPath, 'erc20-vault');
+export const vaultZkConfigPath = path.join(managedPath, 'Erc20Vault');
 export const signetZkConfigPath = path.join(managedPath, 'SignetSigner');
 
 export function deriveKeys(seed: string) {

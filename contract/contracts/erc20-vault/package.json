@@ -5,11 +5,11 @@
   "private": true,
   "license": "MIT",
   "description": "Project 00034 PR-F: a WITNESS-FREE fork of sig-net/midnight-examples examples/erc20-vault @ 11482cd, so a Passport account can reach the Signet ERC20 bridge by cross-contract call. Deposit and withdraw only; no Uniswap, no Aave, no callerSecretKey.",
-  "//compile": "The callee is compiled BEFORE the caller: the compiler resolves the declared contract type `SignetSigner` to <compact-path>/SignetSigner and embeds a fingerprint of its verifier key. The singleton is recompiled from the VENDORED source rather than linked from @sig-net/midnight-contract/dist/managed (Sig Network's own recipe): every published version of that package pins compact-runtime 0.18.0-rc.1 and cannot be loaded on the 0.19.0 runtime this project uses. Question Q20; the verifier keys come out byte-identical, which tests/signet-vk-compare.test.ts re-checks.",
+  "//compile": "The callee is compiled BEFORE the caller: the compiler resolves the declared contract type `SignetSigner` to <compact-path>/SignetSigner and embeds a fingerprint of its verifier key. The vault's own output directory is `managed/Erc20Vault` — the DIRECTORY NAME IS THE DECLARED CONTRACT TYPE NAME, so it must be what a caller declares (brief B.1: `export contract Erc20Vault { … }`), not the package or file name. The singleton is recompiled from the VENDORED source rather than linked from @sig-net/midnight-contract/dist/managed (Sig Network's own recipe): every published version of that package pins compact-runtime 0.18.0-rc.1 and cannot be loaded on the 0.19.0 runtime this project uses. Question Q20; the verifier keys come out byte-identical, which tests/signet-vk-compare.test.ts re-checks.",
   "scripts": {
     "compile:signet": "COMPACT_PATH=node_modules compact compile +0.34.0 --feature-zkir-v3 --compact-path node_modules src/vendor/signet-contract.compact managed/SignetSigner",
     "compile:signet-circuits": "COMPACT_PATH=node_modules compact compile +0.34.0 --skip-zk --feature-zkir-v3 --compact-path node_modules node_modules/@sig-net/midnight/src/circuits.compact managed/SignetCircuits",
-    "compile:vault": "COMPACT_PATH=node_modules compact compile +0.34.0 --feature-zkir-v3 --compact-path node_modules:managed src/erc20-vault.compact managed/erc20-vault",
+    "compile:vault": "COMPACT_PATH=node_modules compact compile +0.34.0 --feature-zkir-v3 --compact-path node_modules:managed src/erc20-vault.compact managed/Erc20Vault",
     "compile": "npm run compile:signet && npm run compile:signet-circuits && npm run compile:vault",
     "witness-free": "test \"$(grep -c '^witness' src/erc20-vault.compact)\" = \"0\" && echo 'witness-free: OK (0 witness declarations)'",
     "typecheck": "tsc --noEmit",
@@ -44,6 +44,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.1",
+    "solc": "^0.8.28",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
