@@ -152,6 +152,42 @@ await runScenario('g1b-send-claim-onward', async () => {
       'The funding transaction exposed no commitment-tree window, so the coin could not be spent.');
   }
 
+  step('NEGATIVE FIRST: the same send driving Mid.request, which never claims');
+  // Run BEFORE the positive and with the SAME coin and the SAME mt_index the
+  // positive will use. A refusal is then attributable to the missing claim and
+  // not to a wrong commitment-tree index: the very next call, identical except
+  // that the callee circuit claims, lands. A refused call spends nothing, so
+  // the coin is still available for the positive.
+  const midPreNeg: any = await mid.ledgerState();
+  let noclaimLanded = false;
+  let clsN: any;
+  for (let i = 0; i < candidates.length; i++) {
+    await root.providers.privateStateProvider.set('root', withCoin(emptyCoinStore(), {
+      nonce: coin.nonce, color: coin.color, value: coin.value, mtIndex: candidates[i],
+    }));
+    try {
+      const bad = await root.call('pay_and_forward_noclaim', coin.color, PAY, 21n, 1n);
+      noclaimLanded = true;
+      details.noclaimTxId = bad.txId;
+      details.noclaimMtIndex = candidates[i];
+      break;
+    } catch (e: any) {
+      clsN = classifyCallError(e);
+      details.noclaimError = serialiseError(e);
+      details.noclaimErrorClass = clsN;
+      details.noclaimMtIndex = candidates[i];
+      if (i < candidates.length - 1 &&
+          (clsN.outcome === 'prover-rejected' || clsN.outcome === 'construction-rejected')) continue;
+      break;
+    }
+  }
+  const midPostNeg: any = await mid.ledgerState();
+  const negNoDrift =
+    midPostNeg.shielded_claims === midPreNeg.shielded_claims &&
+    midPostNeg.requests === midPreNeg.requests;
+  details.negativeStateDrift = { noDrift: negNoDrift, mtIndexAmbiguity: candidates.length > 1 };
+  console.log(`  negative landed: ${noclaimLanded} · mid custody unchanged: ${negNoDrift}`);
+
   const midBefore: any = await mid.ledgerState();
   const rootBefore: any = await root.ledgerState();
 
@@ -258,42 +294,6 @@ await runScenario('g1b-send-claim-onward', async () => {
   }
   details.notificationNamesMid = notificationNamesMid;
 
-  step('NEGATIVE: the same send driving Mid.request, which never claims');
-  let noclaimLanded = false;
-  let clsN: any;
-  const midPreNeg: any = await mid.ledgerState();
-  if (change) {
-    const { candidates: changeCandidates } = await candidateIndices(outcome.txId).catch(() => ({ candidates: [] as bigint[] }));
-    details.changeCandidates = changeCandidates;
-    for (let i = 0; i < Math.max(changeCandidates.length, 1); i++) {
-      if (changeCandidates.length === 0) break;
-      await root.providers.privateStateProvider.set('root', withCoin(emptyCoinStore(), {
-        nonce: change.nonce, color: change.color, value: change.value, mtIndex: changeCandidates[i],
-      }));
-      try {
-        const bad = await root.call('pay_and_forward_noclaim', change.color, 10n, 21n, 1n);
-        noclaimLanded = true;
-        details.noclaimTxId = bad.txId;
-        break;
-      } catch (e: any) {
-        clsN = classifyCallError(e);
-        details.noclaimError = serialiseError(e);
-        details.noclaimErrorClass = clsN;
-        // A wrong mt_index is also a construction/prover rejection, so only the
-        // LAST candidate's refusal is evidence; keep trying while candidates remain.
-        if (i < changeCandidates.length - 1 &&
-            (clsN.outcome === 'prover-rejected' || clsN.outcome === 'construction-rejected')) {
-          continue;
-        }
-        break;
-      }
-    }
-  }
-  const midPostNeg: any = await mid.ledgerState();
-  const negNoDrift = midPostNeg.shielded_claims === midPreNeg.shielded_claims;
-  details.negativeStateDrift = { noDrift: negNoDrift };
-  console.log(`  negative landed: ${noclaimLanded} · mid custody unchanged: ${negNoDrift}`);
-
   step('change continuity: spend the root change in a LATER transaction');
   let changeSpendTxId: string | undefined;
   if (change) {
@@ -341,7 +341,8 @@ await runScenario('g1b-send-claim-onward', async () => {
       `(${heldValueMatches}); mid.requests -> ${midAfter.requests}; the singleton's notification names ` +
       `Mid (${notificationNamesMid}); the change followed the surviving-coin rule ` +
       `(${change?.value ?? 'none'} = ${FUND} - ${PAY}: ${changeCorrect}) and was spent later ` +
-      `(${changeSpendTxId ?? 'NOT SPENT'}). NEGATIVE: the same send driving the non-claiming ` +
+      `(${changeSpendTxId ?? 'NOT SPENT'}). NEGATIVE, run FIRST with the SAME coin and mt_index so a ` +
+      `refusal cannot be a wrong commitment index: the same send driving the non-claiming ` +
       `Mid.request ${noclaimLanded ? `LANDED (tx ${details.noclaimTxId}) — the claim requirement does not hold` : `was refused (${clsN?.outcome} / ${clsN?.errorCode})`}; ` +
       `Mid custody unchanged by it: ${negNoDrift}. Proving ${metrics.proveWallMs} ms, ` +
       `${metrics.provenTxBytes ?? '?'} bytes proven, ${endToEndMs} ms end to end.` +
