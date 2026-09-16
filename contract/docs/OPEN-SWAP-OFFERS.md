@@ -17,9 +17,10 @@ contract of what an Ethereum wallet signs is `AUTH-EIP712-PASSPORT-EVM-V1.md` (t
 - a **give leg** — a coin the account holds leaves, in one of two shapes;
 - a **want leg** — a coin the transaction does not fund is claimed into the account.
 
-The want leg is what makes the call **unbalanced**: a deficit of `want.value` of `want.color` at the
-guaranteed segment. **That deficit is the offer.** In the open shape the give leg adds a *surplus*
-beside it, because the released value is given no output at all.
+The want leg is what makes the call **unbalanced**: a deficit of `want.value` of `want.color`.
+**That deficit is the offer.** In the open shape the give leg adds a *surplus* beside it, because the
+released value is given no output at all. (Which segment they land in is measured, not assumed — see
+"Which segment the legs are in" below.)
 
 The maker proves the call and stops. No balancing, no signature, no DUST action, no submission. A
 taker who has never heard of the maker sweeps the surplus, funds the deficit, pays every fee, and
@@ -28,7 +29,7 @@ two calls that could diverge.
 
 ## The two shapes
 
-| `recipient_kind` | Shape | What the artefact carries at segment 0 | Who can settle it |
+| `recipient_kind` | Shape | What the artefact carries | Who can settle it |
 |---|---|---|---|
 | `0` | **open** — the given value has no output at all | `+give` of the give colour, `−want` of the want colour | anybody; a stock balancer sweeps the surplus |
 | `1` | **named** — the given value is paid to a coin public key | `−want` only; the give leg is internally balanced | anybody, but only the named key receives the payout |
