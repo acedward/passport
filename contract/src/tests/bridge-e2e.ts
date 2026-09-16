@@ -41,6 +41,7 @@ import { secp256k1PublicKeyOf, signAttestationDigest } from '@sig-net/midnight/t
 import * as SignetModule from '../../contracts/managed/SignetSigner/contract/index.js';
 import * as VaultModule from '../../contracts/managed/Erc20Vault/contract/index.js';
 import { pureCircuits as vaultPureCircuits } from '../../contracts/erc20-vault/src/index.js';
+import { fingerprintDeployArtefacts } from '../../contracts/erc20-vault/deploy/artefacts.js';
 import {
   bytesToHex as sdkBytesToHex,
   deriveMidnightResponseKey,
@@ -268,14 +269,22 @@ async function main(): Promise<void> {
   check(bytesToHex(ledgerAfterDeploy.vault_address.bytes) === vault.address.replace(/^0x/, ''),
     'the sealed vault_address is the vault this run deployed');
   console.log(`account ${account.address} (${deploySeconds}s, waves ${waves.waveOne.length}+${waves.waveTwo.length})`);
+  // FR-022: the account is bound to ONE vault build, so the deploy receipt records which.
+  // The two constants are what PR-F froze; a mismatch means this account was compiled
+  // against a different vault and its bridge circuits would be refused at the first call.
+  const artefacts: any = fingerprintDeployArtefacts();
+  check(artefacts.vault?.fingerprint === 'a67f1747badb69e1905db106e9cd3d83b1aa62e27a7a1bd4b8842d77933a2603',
+    "the vault artefacts are the build PR-F froze");
+  check(artefacts.signetSigner?.fingerprint === 'bf411f56679715c938191d185684c4a4690e6346ef04acae6d483d8f81487b2c',
+    'the singleton artefacts are the 0.34.0 rebuild PR-F froze');
   steps.s4 = {
     accountContractAddress: account.address,
     deviceAddress: device.addressHex,
     waveOne: waves.waveOne,
     waveTwo: waves.waveTwo,
     deploySeconds,
-    vaultArtefactFingerprint: 'a67f1747badb69e1905db106e9cd3d83b1aa62e27a7a1bd4b8842d77933a2603',
-    signetArtefactFingerprint: 'bf411f56679715c938191d185684c4a4690e6346ef04acae6d483d8f81487b2c',
+    vaultArtefactFingerprint: artefacts.vault?.fingerprint,
+    signetArtefactFingerprint: artefacts.signetSigner?.fingerprint,
   };
   save();
 
