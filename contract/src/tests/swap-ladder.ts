@@ -42,7 +42,7 @@ import { coinPublicKeyBytes } from '../node/wallet.js';
 import { zkConfigPath } from '../node/wallet.js';
 import { Contract } from '../wallet/contract.js';
 import { makeWitnesses, emptyCoinStore } from '../wallet/witnesses.js';
-import { CustodyAccount } from '../wallet/account.js';
+import { CustodyAccount, accountConstructorArgs } from '../wallet/account.js';
 import { deployAccountInWaves } from '../wallet/wave-deploy.js';
 import { EvmDevice } from '../wallet/signer.js';
 import { generateEncKeyPair, openInboxEntry, sealInboxEntry, type EncKeyPair } from '../wallet/inbox.js';
@@ -300,11 +300,17 @@ async function main(): Promise<void> {
   const privateStateId = `swap-ladder-${Date.now()}`;
   const address = await deployAccountInWaves(maker.providers, compiled, {
     firstArm: 'evm',
-    // The constructor took three arguments when this suite was written; PR-G's bridge added two
-    // more (the vault as a callable reference and as the raw address a shielded send targets). An
-    // offer never reaches the vault and the constructor only stores the values, so the ladder binds
-    // the zero address — `src/tests/bridge-e2e.ts` is where a real binding is exercised.
-    args: [boot, encKeys.publicKey, evmDomainSalt, { bytes: new Uint8Array(32) }, { bytes: new Uint8Array(32) }],
+    // The constructor took three arguments when this suite was written; PR-G's bridge added
+    // two more (the vault as a callable reference and as the raw address a shielded send
+    // targets). An offer never reaches the vault and the constructor only stores the values,
+    // so the ladder binds the zero address — `src/tests/bridge-e2e.ts` is where a real
+    // binding is exercised. Assembled through PR-C's helper, which is the one place that
+    // knows the argument list, so the next constructor change reaches every deploy path.
+    args: accountConstructorArgs({
+      bootCommitment: boot,
+      encryptionPublicKey: encKeys.publicKey,
+      evmDomainSalt,
+    }),
     privateStateId,
     initialPrivateState: emptyCoinStore(encKeys.secretKey),
     // The ladder's operations, named explicitly: five in wave 1, none in wave 2 — the second

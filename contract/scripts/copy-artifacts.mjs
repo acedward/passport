@@ -46,7 +46,12 @@ for (const managed of managedRoots) {
     if (!existsSync(from)) continue;
     const to = path.join(root, 'dist', path.relative(root, managed), name, 'contract');
     mkdirSync(to, { recursive: true });
-    cpSync(from, to, { recursive: true });
+    // `dereference` because PR-G's callee bundles (Erc20Vault, SignetSigner) are
+    // directories of SYMLINKS into the vault package's own `managed/` — one build of the
+    // vault on disk, not two (scripts/link-callees.sh). Without it `cpSync` copies the
+    // links themselves and a published `dist` points at paths that exist only on the
+    // machine that built it.
+    cpSync(from, to, { recursive: true, dereference: true, force: true });
     console.log(`  ✓ ${path.relative(root, from)} → ${path.relative(root, to)}`);
     copied += 1;
   }

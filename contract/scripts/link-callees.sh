@@ -25,13 +25,26 @@ vault_managed="$here/contracts/erc20-vault/managed"
 
 mkdir -p "$managed"
 
+# WHY A DIRECTORY OF LINKS RATHER THAN A LINKED DIRECTORY. `nodeZkConfigRegistry` — the
+# provider that lets a caller's prover reach its CALLEE's keys — walks the artefact root
+# with `readdir({withFileTypes: true})` and keeps only entries whose `isDirectory()` is
+# true. A symlink's Dirent answers `isSymbolicLink()`, not `isDirectory()`, so a bundle
+# linked as one directory is INVISIBLE to it: the compile succeeds, the deploy succeeds,
+# and the first call fails with `ZKArtifactNotFoundError: No ZK artifact bundle matches the
+# deployed verifier key` — which reads like a stale build and is not one. Measured on the
+# G4 stack, 2026-09-16. The bundle CHECK one level down (`isArtifactBundle`) uses `fs.stat`,
+# which does follow symlinks, so a real directory whose children are links is seen.
 for name in Erc20Vault SignetSigner; do
-  if [[ ! -d "$vault_managed/$name" ]]; then
-    echo "error: $vault_managed/$name is missing — compile the vault first:" >&2
+  src="$vault_managed/$name"
+  if [[ ! -d "$src" ]]; then
+    echo "error: $src is missing — compile the vault first:" >&2
     echo "       (cd contracts/erc20-vault && npm install && npm run compile)" >&2
     exit 66
   fi
   rm -rf "$managed/$name"
-  ln -s "../erc20-vault/managed/$name" "$managed/$name"
-  echo "linked contracts/managed/$name -> ../erc20-vault/managed/$name"
+  mkdir -p "$managed/$name"
+  for child in "$src"/*; do
+    ln -s "$child" "$managed/$name/$(basename "$child")"
+  done
+  echo "linked contracts/managed/$name/{$(ls "$src" | tr '\n' ',' | sed 's/,$//')} -> $src"
 done

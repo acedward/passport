@@ -399,7 +399,12 @@ async function main(): Promise<void> {
   if (wStart.change === null) throw new Error('S8 needs the change coin S7 left behind');
   const rStart = await withCandidateIndex(wStart.change, withdrawCandidates, (nonce) =>
     bridge.startWithdraw(device, destination, REFUND_AMOUNT, { ...DEFAULT_EVM_GAS, nonce }), vaultNonce2);
-  // Never broadcast: the MPC observes nothing and attests the fixed 5-byte marker.
+  // Never broadcast — AND burn the nonce the MPC signed for, with `anvil_setNonce`. That
+  // second half is what makes the attestation possible: the responder waits until the signed
+  // transaction can no longer be mined, and a transaction whose nonce has been overtaken
+  // never can. Without it the request simply stays open and the poll times out, which is
+  // exactly what the first G4 run did (PR-F's F4 hit the same wall on the deposit side).
+  await evm.provider.send('anvil_setNonce', [vaultEvmAddress, `0x${(vaultNonce2 + 2n).toString(16)}`]);
   const rRelay = await bridge.relay('withdraw', rStart.requestId, vaultEvmAddress, { doNotBroadcast: true });
   check(rRelay.kind === 'never-executed', 'the MPC attested the never-executed marker');
   const rPlanned = await bridge.plannedCoin('withdraw', rStart.requestId, randomNonce());
@@ -411,9 +416,44 @@ async function main(): Promise<void> {
   steps.s8 = {
     requestId: rStart.requestId,
     startTxId: rStart.txId,
+    howForced: `not broadcast, and the vault's derived account nonce advanced past ${String(vaultNonce2)} with anvil_setNonce`,
     attested: rRelay.kind,
     refundTxId: rSettle.txId,
     refundedValue: rSettle.coin ? String(rSettle.coin.value) : null,
+    entryMatchesCoin: rSettle.entryMatchesCoin,
+  };
+  save();
+
+  // ---- S8b — a deposit the ERC20 executed and REFUSED -----------------------------------
+  step('S8b  a deposit whose ERC20 transfer returns false: the request closes, nothing is minted');
+  const falseBridge = new AccountBridge(account, {
+    vaultAddress: vault.address, signetContractAddress: singleton.address,
+    mpcRootPublicKey: mpcRootPublic, erc20: falseErc20, evmRpcUrl: EVM_RPC_URL,
+  }, encKeys.publicKey);
+  const falseDepositAddress = falseBridge.depositAddress();
+  await mintToken(evm, falseErc20, falseDepositAddress, DEPOSIT_AMOUNT);
+  await fundEth(evm, falseDepositAddress, ONE_ETH);
+  const falseNonce = BigInt(await evm.provider.getTransactionCount(falseDepositAddress, 'latest'));
+  const inboxBefore = (await account.ledgerState()).inbox_count;
+  const fStart = await falseBridge.startDeposit(device, DEPOSIT_AMOUNT, { ...DEFAULT_EVM_GAS, nonce: falseNonce });
+  const fRelay = await falseBridge.relay('deposit', fStart.requestId, falseDepositAddress);
+  check(fRelay.kind === 'returned-false', `the MPC attested the false return (got ${fRelay.kind})`);
+  const fSettle = await falseBridge.completeDeposit(fStart.requestId, fRelay,
+    await falseBridge.plannedCoin('deposit', fStart.requestId, randomNonce()));
+  const afterFalse = await account.ledgerState();
+  check(fSettle.coin === null, 'nothing was minted');
+  check(afterFalse.inbox_count === inboxBefore, 'and no inbox entry was filed');
+  steps.s8b = {
+    erc20: falseErc20,
+    depositEvmAddress: falseDepositAddress,
+    requestId: fStart.requestId,
+    startTxId: fStart.txId,
+    evmTxHash: fRelay.evmTxHash,
+    evmStatus: fRelay.evmStatus,
+    attested: fRelay.kind,
+    settleTxId: fSettle.txId,
+    minted: fSettle.coin === null ? 'none' : String(fSettle.coin.value),
+    inboxCountUnchanged: afterFalse.inbox_count === inboxBefore,
   };
   save();
 
