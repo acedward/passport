@@ -101,7 +101,7 @@ import { accountEncKey, depositAsThirdParty } from '../wallet/deposit.js';
 import { inboxWalk } from '../wallet/discovery.js';
 import { bytesToHex, hexToBytes } from '../wallet/hex.js';
 import { emptyCoinStore, makeWitnesses, withCoin, withoutCoin, type CoinStorePrivateState } from '../wallet/witnesses.js';
-import { candidateIndices, mtIndexForSingleOutput } from '../wallet/capture.js';
+import { candidateIndices, mtIndexForSingleOutput, indexerUrl } from '../wallet/capture.js';
 import {
   coinPublicKeyBytes, createProviders, createWallet, managedPath, syncWallet,
 } from '../node/wallet.js';
@@ -355,6 +355,21 @@ function evidence(name: string, body: Record<string, unknown>): void {
   const existing = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
   writeFileSync(file, `${JSON.stringify({ ...existing, ...body, writtenUtc: new Date().toISOString() }, null, 2)}\n`);
   console.log(`  evidence → ${file}`);
+}
+
+// Q68: a coin whose tree position we cannot read is a coin we cannot spend, and the driver
+// used to record index 0 silently when the indexer was unreachable, surfacing one step later
+// as an unsatisfiable spend witness. Now the settle itself fails, naming the endpoint.
+async function treePositionOrFail(txId: string): Promise<{ cands: bigint[]; mt: { mtIndex: bigint; position: Record<string, unknown> } }> {
+  const errs: string[] = [];
+  const cands = (await candidateIndices(txId).catch((e) => { errs.push(String(e?.message ?? e)); return { candidates: [] as bigint[] }; })).candidates;
+  const mt = await mtIndexForSingleOutput(txId).catch((e) => { errs.push(String(e?.message ?? e)); return undefined; });
+  if (mt) return { cands, mt };
+  if (cands.length > 0) return { cands, mt: { mtIndex: cands[0], position: {} } };
+  throw new Error(
+    `cannot read the commitment-tree position of tx ${txId} from the indexer at ${indexerUrl()} `
+    + `(set INDEXER_URL or MIDNIGHT_NETWORK); the coin exists on chain but would be unspendable `
+    + `if recorded blindly (Q68). Errors: ${errs.join(' | ') || 'none'}`);
 }
 
 function step(name: string): void { console.log(`\n=== ${name} ===`); }
@@ -1200,8 +1215,7 @@ async function s3Complete(): Promise<void> {
   // The tree position, so `held_coin` can spend it.
   let mtIndex = s.deposit.mtIndex ?? '0';
   if (!alreadySettled) {
-    const cands = (await candidateIndices(settle.txId).catch(() => ({ candidates: [] as bigint[] }))).candidates;
-    const mt = await mtIndexForSingleOutput(settle.txId).catch(async () => ({ mtIndex: cands[0] ?? 0n, position: {} }));
+    const { cands, mt } = await treePositionOrFail(settle.txId);
     await rememberCoin(s, account, settle.coin!, mt.mtIndex, cands);
     mtIndex = String(mt.mtIndex);
     s.deposit.settleTxId = settle.txId;
@@ -1420,8 +1434,7 @@ async function s6(): Promise<void> {
   // the viewing key can recover it. Recorded here because a reader of the balances otherwise
   // cannot account for the difference.
   const displaced = s.coinStore?.coins[bytesToHex(colour)];
-  const cands = (await candidateIndices(dep.txId).catch(() => ({ candidates: [] as bigint[] }))).candidates;
-  const mt = await mtIndexForSingleOutput(dep.txId).catch(async () => ({ mtIndex: cands[0] ?? 0n, position: {} }));
+  const { cands, mt } = await treePositionOrFail(dep.txId);
   await rememberCoin(s, account, coin, mt.mtIndex, cands);
 
   evidence('s6-test3-leg2', {
@@ -1591,8 +1604,7 @@ async function s7Complete(): Promise<void> {
   const ok2c = check(!successful || destAfter - destBefore === 0n,
     'and nothing moved on the EVM side during the settle itself — the transfer executed at the relay');
   if (settle.coin) {
-    const cands = (await candidateIndices(settle.txId).catch(() => ({ candidates: [] as bigint[] }))).candidates;
-    const mt = await mtIndexForSingleOutput(settle.txId).catch(async () => ({ mtIndex: cands[0] ?? 0n, position: {} }));
+    const { cands, mt } = await treePositionOrFail(settle.txId);
     await rememberCoin(s, account, settle.coin, mt.mtIndex, cands);
   }
   s.withdraw.settleTxId = settle.txId;
