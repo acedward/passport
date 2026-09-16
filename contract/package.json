@@ -8,6 +8,8 @@
     "compile": "compact compile +0.34.0 --feature-zkir-v3 contracts/account.compact contracts/managed/account && compact compile +0.34.0 --feature-zkir-v3 contracts/control.compact contracts/managed/control && compact compile +0.34.0 --feature-zkir-v3 contracts/faucet.compact contracts/managed/faucet",
     "build": "tsc",
     "measure-k": "node scripts/measure-k.mjs",
+    "fixtures:evm": "tsx src/tests/fixtures/generate-evm-v1.ts",
+    "test:eip712-evm": "tsx src/tests/eip712-evm-offline.ts",
     "test:unit": "tsx src/tests/unit-offline.ts",
     "test:crossimpl-offline": "tsx src/tests/crossimpl-offline.ts",
     "test:auth-crossimpl": "tsx src/tests/auth-crossimpl.ts",
@@ -24,6 +26,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "ethers": "6.17.0",
     "@types/ws": "^8.18.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
@@ -45,6 +48,7 @@
     "@midnightntwrk/wallet-sdk-shielded": "4.0.0-beta.2",
     "@midnightntwrk/wallet-sdk-unshielded-wallet": "4.0.0-beta.2",
     "@noble/curves": "2.2.0",
+    "@noble/hashes": "2.2.0",
     "rxjs": "^7.8.2",
     "ws": "^8.19.0"
   }
