@@ -1,0 +1,22 @@
+{
+  "testId": "PRB-B1-EIP712",
+  "name": "swap-eip712-offline",
+  "description": "The byte contract's eighth type reproduced by ethers alone and by the contract's own pure circuits, over the whole frozen vector set",
+  "verdict": "PASS",
+  "note": "AUTH-EIP712-PASSPORT-EVM-V1/FIXTURES-2, 16 vectors, type hash 0x34626793abd7c67d21e1a61a99f1cfff4f82ae0e2325a6ba9dfdc4ff12d668ae, 416-byte preimage. Three implementations agree: our codec (which wrote the file), ethers 6.17.0, and the compiled circuit.",
+  "details": {
+    "fixture": "/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/contract/src/tests/fixtures/passport-evm-v1-swap.json",
+    "version": "AUTH-EIP712-PASSPORT-EVM-V1/FIXTURES-2",
+    "vectorCount": 16,
+    "typeHash": "0x34626793abd7c67d21e1a61a99f1cfff4f82ae0e2325a6ba9dfdc4ff12d668ae",
+    "encodeType": "OpenSwapShielded(bytes32 account,address owner,uint64 authNonce,bytes32 giveColor,uint128 giveAmount,uint8 recipientKind,bytes32 recipient,bytes32 wantNonce,bytes32 wantColor,uint128 wantAmount,uint64 validUntil,bytes32 challenge)",
+    "reproducedByEthers": 16,
+    "reproducedByCircuit": 16
+  },
+  "ranAt": "2026-09-16T06:00:49.136Z",
+  "stack": {
+    "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
+    "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",
+    "proofServer": "midnightntwrk/proof-server:9.0.0-rc.6"
+  }
+}
