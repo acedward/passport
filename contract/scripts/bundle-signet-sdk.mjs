@@ -18,7 +18,10 @@
 // all — not by `import`, not by `require.resolve`, and `./package.json` is not exported
 // either, so the package's own directory cannot be located that way. Checked, not assumed.
 //
-// WHAT THIS DOES. Copies the SDK's `dist/` to the one path the emitted shim looks for. It
+// WHAT THIS DOES. Copies the SDK's `dist/` to the one path the emitted shim looks for. The
+// vault's own COMPILED CONTRACT modules, which the shim and the bridge client also import,
+// are copied by `copy-artifacts.mjs`, which walks every `managed/` tree in the repository —
+// so this script has exactly one job. It
 // is a BUNDLING step, not a vendoring one: the source is whatever version is installed, so
 // a dependency bump carries through with no edit here. The copied files' own imports are
 // package specifiers (`@noble/curves`, `ethers`, `@sig-net/midnight-serde`, the compact
@@ -60,24 +63,3 @@ console.log(
   `  ✓ @sig-net/midnight/dist → ${path.relative(root, target)} `
   + `(${files.length} modules, ${(bytes / 1024).toFixed(0)} KiB)`,
 );
-
-// The second half of the same problem. `copy-artifacts.mjs` puts every compiled contract
-// under `dist/contracts/managed/`, which is where the ACCOUNT's emitted code looks for it.
-// The vault package's own emitted code (`dist/contracts/erc20-vault/src/index.js`, reached
-// from the bridge client) looks one directory further in — `../managed/Erc20Vault/contract`
-// — because that is where it sits in the source tree. Same generated modules, a second
-// path: about a megabyte each, and without them `./bridge` still cannot load.
-// `SignetCircuits` is the third: the SDK shim serves `pureCircuits` from OUR 0.34.0 rebuild
-// of the package's own `circuits.compact` (question Q25), and that is a compiled module too.
-const vaultManaged = path.join(root, 'contracts', 'erc20-vault', 'managed');
-for (const name of ['Erc20Vault', 'SignetSigner', 'SignetCircuits']) {
-  const from = path.join(vaultManaged, name, 'contract');
-  if (!existsSync(from)) {
-    console.warn(`! ${path.relative(root, from)} does not exist — compile the vault package`);
-    continue;
-  }
-  const to = path.join(root, 'dist', 'contracts', 'erc20-vault', 'managed', name, 'contract');
-  mkdirSync(to, { recursive: true });
-  cpSync(from, to, { recursive: true, dereference: true, force: true });
-  console.log(`  ✓ ${name}/contract → ${path.relative(root, to)}`);
-}
