@@ -216,6 +216,8 @@ the main branch; until it lands, the summary above is the citable form.
 | `contracts/faucet.compact` | Token origins on localnet (test scaffolding). |
 | `docs/AUTH-EIP712-PASSPORT-EVM-V1.md` | The `evm` arm's frozen byte contract: what a wallet signs, with type hashes, transport rules and a KAT. |
 | `src/wallet/` | Client library: per-arm signers, the EIP-712 codec and signature transport, InboxEntry v1 codec, coin store witness, discovery walk, capture, account wrapper, wave deployment. |
+| `src/wallet/bridge.ts` | The ERC20 bridge client: deposit-address derivation, the two starts, the relayer loop, the three settles, and the circuit lists a bridge account deploys with. |
+| `contracts/erc20-vault/` | The witness-free ERC20 vault fork the bridge calls (its own package, its own README). |
 | `src/tests/` | Conformance suites (see the map below). |
 | `src/tests/fixtures/` | `passport-evm-v1.json`, the 63 frozen EIP-712 vectors, and the deterministic generator that writes it. |
 | `scripts/measure-k.mjs` | (k, rows) per compiled circuit, through the pinned `zkir-v3`. Measurement only. |
@@ -745,6 +747,96 @@ That the client-side fee computation accepts a set the node refuses is an
 upstream-report item in its own right: the client number is a lower bound,
 because the node prices the balanced transaction (deploy plus funding offer
 plus dust actions) and the client prices the deploy alone.
+
+## The ERC20 bridge: shielded tokens from an EVM chain
+
+An account can hold an ERC20 from an Ethereum chain as an ordinary shielded coin, by
+cross-contract call to the witness-free vault fork in `contracts/erc20-vault/` (project
+00034 PR-F), which reaches Sig Network's Signet MPC through their singleton contract. The
+account is the transaction ROOT of every call in both directions:
+
+```
+account (per user)  --C2C-->  ERC20 vault (one per stack/chain)  --C2C-->  Signet singleton
+      ^                              |
+      |  receiveShielded(minted)     |  mintShieldedToken(..., recipient = the account)
+      +------------------------------+
+```
+
+Five circuits, two device-gated and three permissionless:
+
+| Circuit | Gate | k | rows | What it does |
+|---|---|---|---|---|
+| `bridge_deposit_start_with_evm` | device (EIP-712 `BridgeDepositStart`) | 18 | 197,103 | asks the MPC to sweep the ERC20 from the user's derived deposit address into the vault |
+| `bridge_deposit_complete` | the MPC's attestation, verified inside the vault | 13 | 7,310 | the vault mints, this account claims the coin and files its inbox entry |
+| `bridge_withdraw_start_with_evm` | device (EIP-712 `BridgeWithdrawStart`) | 18 | 235,386 | sends the coin to the vault, which claims it and asks the MPC for `transfer(dest, amount)` |
+| `bridge_withdraw_complete` | the attestation | 13 | 7,310 | closes the request, or claims the re-mint of a transfer that returned false |
+| `bridge_withdraw_refund` | the attestation | 13 | 7,259 | claims the re-mint of a transfer that never executed |
+
+**Why the asymmetry.** A start is gated because the EVM transaction parameters it signs
+spend GAS from an MPC-derived Ethereum account — the user's own deposit address on the way
+in, the vault's on the way out — and a relayer free to choose them could drain it. The
+bridged VALUE needs no signature to be safe: the recipient is pinned to `kernel.self()`
+inside the circuit and no argument can move it. A settle is therefore permissionless, which
+is what lets a relayer finish a round trip its owner started.
+
+**Two Midnight transactions per direction, and that cannot be collapsed.** Nothing on
+Midnight can wait for an Ethereum transaction inside one proof. Between the two, the
+request is visible in the vault's public ledger state (`AccountBridge.pendingRequests`), and
+a console should show the pending state there.
+
+### The rules a caller must respect
+
+1. **Deploy the vault first, and freeze it.** The compiler embeds a fingerprint of every
+   callee circuit's verifier key in this contract's own operations, and the runtime compares
+   it against the deployed vault (`ContractInterfaceMismatchError`). A vault redeploy with
+   different keys orphans the bridge circuits of every account already compiled against it.
+   The order is vault → `initialise` → accounts, and every account deploy receipt records the
+   vault's address and artefact fingerprint (`contracts/erc20-vault/deploy/artefacts.ts`).
+2. **The vault's own Ethereum account needs ETH.** A withdrawal is paid out of the vault's
+   derived address (`AccountBridge.vaultEvmAddress()`), and the MPC signs a transaction from
+   it; with no gas there, nothing executes and every withdrawal ends in the refund path.
+3. **The surrendered coin is locked, not burned.** The vault claims a withdrawn coin and
+   creates no output, because a callee may not pay a wallet key — see the vault's README and
+   question Q24. The economics are a burn's; an explorer shows the vault holding the value.
+4. **A bridge account carries five more operations, and they ride wave 2.** Wave 1 stays at
+   the eight the node accepts; `bridgeWaves()` in `src/wallet/bridge.ts` produces the split
+   and `contractForBridgeAccount()` the matching client contract.
+
+### The relayer
+
+Between a start and its settle, somebody has to put the MPC's signed transaction on the
+Ethereum chain. That somebody is untrusted: it can censor a request, and it cannot forge
+one, because the settle circuits verify the attestation in-circuit against the response key
+the vault pinned at `initialise`. `AccountBridge.relay()` is the whole loop — poll the
+singleton's events for a signature that recovers to the expected derived sender, broadcast,
+then poll until an attestation verifies over a recomputed output — and it is
+`contracts/erc20-vault/src/relayer.ts`, shared with the vault's own end-to-end driver.
+
+### The one argument the signature does not cover
+
+`bridge_withdraw_start_with_evm` takes a `change_entry`, and the challenge deliberately does
+not bind it (question Q41). The nonce the standard library gives the change coin of a
+`sendShielded` is not derivable before the call, so a client learns it by executing the call
+locally first — with the signature it already holds, which is only possible while the entry
+is unbound. A caller that will not do that passes 192 zero bytes and re-files later with
+`append_inbox_with_evm`. A wrong entry strands DISCOVERY of the change coin; the coin itself
+is created and spendable either way.
+
+### Running it
+
+```sh
+# offline: the whole three-contract tree in the compact-runtime simulator
+npm run test:bridge-offline
+
+# on a localnet with the fakenet MPC responder and a local EVM chain
+./run-g4.sh all          # compile + up + e2e + down  (claim the host's stack first)
+```
+
+`npm run test:bridge-offline` runs the account, the vault and the singleton in-process:
+both round trips, both refund paths and the negatives, with no node and no proving. It also
+links the two packages' Compact runtimes (`scripts/link-runtime.sh`), without which a
+cross-contract call in the simulator fails on WASM class identity rather than on anything
+about the contracts.
 
 ## Client-library notes
 
