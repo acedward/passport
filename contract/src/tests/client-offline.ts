@@ -30,7 +30,7 @@
 // Run: npm run test:client-offline
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,7 +64,19 @@ import {
   serializeSignature,
   signDigest,
 } from '../wallet/evm-signature.js';
-import { generateEncKeyPair, openInboxEntry, sealInboxEntry, ENTRY_SIZE } from '../wallet/inbox.js';
+import {
+  generateEncKeyPair,
+  openInboxEntry,
+  sealInboxEntry,
+  ENTRY_SIZE,
+  ENTRY_VERSION,
+  ENTRY_SUITE,
+} from '../wallet/inbox.js';
+import {
+  ENTRY_SIZE as PORTABLE_ENTRY_SIZE,
+  ENTRY_VERSION as PORTABLE_ENTRY_VERSION,
+  ENTRY_SUITE as PORTABLE_ENTRY_SUITE,
+} from '../wallet/entry-format.js';
 import {
   depositAsThirdParty,
   generateEncKeyPairPortable,
@@ -92,6 +104,31 @@ function check(label: string, ok: boolean, detail = ''): void {
 
 function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/** Every LOCAL module reachable from `entry` that imports a `node:` builtin.
+ *  Package imports are not followed: a dependency's browser build is the
+ *  bundler's business, and this is about OUR modules. */
+function nodeBuiltinsReachableFrom(entry: string): string[] {
+  const seen = new Set<string>();
+  const offenders: string[] = [];
+  const walk = (file: string): void => {
+    if (seen.has(file) || !existsSync(file)) return;
+    seen.add(file);
+    const source = readFileSync(file, 'utf8');
+    for (const m of source.matchAll(/from\s+['"]([^'"]+)['"]/g)) {
+      const spec = m[1]!;
+      if (spec.startsWith('node:')) {
+        const rel = path.relative(path.resolve(here, '..', '..'), file);
+        if (!offenders.includes(`${rel} → ${spec}`)) offenders.push(`${rel} → ${spec}`);
+        continue;
+      }
+      if (!spec.startsWith('.')) continue;
+      walk(path.resolve(path.dirname(file), spec));
+    }
+  };
+  walk(entry);
+  return offenders;
 }
 
 async function throws(label: string, fn: () => unknown | Promise<unknown>): Promise<void> {
@@ -444,6 +481,42 @@ async function main(): Promise<void> {
       evmDomainSalt: salt,
     }),
   );
+
+  // ── 4d. The browser entry point ───────────────────────────────────────────
+  step('4d. the browser entry point pulls in no Node built-in');
+
+  check(
+    'the portable codec\'s constants still agree with Passport\'s inbox.ts',
+    ENTRY_SIZE === PORTABLE_ENTRY_SIZE
+    && ENTRY_VERSION === PORTABLE_ENTRY_VERSION
+    && ENTRY_SUITE === PORTABLE_ENTRY_SUITE,
+    `${ENTRY_SIZE}/${ENTRY_VERSION}/${ENTRY_SUITE} vs ${PORTABLE_ENTRY_SIZE}/${PORTABLE_ENTRY_VERSION}/${PORTABLE_ENTRY_SUITE}`,
+  );
+
+  // A page cannot import a module that imports `node:crypto` — a bundler's
+  // browser shim throws on the first property access, which is how the C2
+  // smoke found that `src/index.ts` is not loadable in a browser. So the whole
+  // import graph of the browser entry is walked here, on every run.
+  const distBrowser = path.resolve(here, '..', '..', 'dist', 'src', 'browser.js');
+  if (!existsSync(distBrowser)) {
+    console.log('  – dist/src/browser.js is absent (run `npm run build`) — graph check skipped');
+  } else {
+    const offenders = nodeBuiltinsReachableFrom(distBrowser);
+    check(
+      'no module reachable from dist/src/browser.js imports a node: builtin',
+      offenders.length === 0,
+      offenders.join(', '),
+    );
+    const fullEntry = path.resolve(here, '..', '..', 'dist', 'src', 'index.js');
+    const rootOffenders = existsSync(fullEntry) ? nodeBuiltinsReachableFrom(fullEntry) : [];
+    check(
+      'the FULL entry point does pull them in — which is why the browser one exists',
+      rootOffenders.length > 0,
+      'src/index.ts re-exports Passport\'s node:crypto inbox codec; if this ever stops '
+      + 'being true, the two entry points can be merged',
+    );
+    details.browserEntry = { offenders, rootOffenders };
+  }
 
   // ── 5. Network configuration ──────────────────────────────────────────────
   step('5. the network configuration selects endpoints and the network id');

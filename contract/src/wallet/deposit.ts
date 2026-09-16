@@ -28,7 +28,11 @@ import { x25519 } from '@noble/curves/ed25519.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 
-import { ENTRY_SIZE, ENTRY_VERSION, ENTRY_SUITE, type PlainCoin } from './inbox.js';
+// NOT from `./inbox.js`: that module imports `node:crypto` at module scope, and
+// a bundler's browser shim for it throws on the first property access — so a
+// page cannot import even a constant from it. `entry-format.ts` holds the three
+// container constants, and the offline suite asserts the two agree.
+import { ENTRY_SIZE, ENTRY_VERSION, ENTRY_SUITE, type PlainCoin } from './entry-format.js';
 import type { Ledger } from './contract.js';
 
 const PLAINTEXT_SIZE = 80;
@@ -219,4 +223,26 @@ export async function depositAsThirdParty(
     entry,
   );
   return { txId, entry };
+}
+
+/**
+ * The MIP-0012 §6.5 inbox walk, with the portable codec.
+ *
+ * `discovery.ts#inboxWalk` is the reference version and is unchanged; it opens
+ * entries with `node:crypto`, so a browser cannot use it. This is the same
+ * walk: enumerate `inbox[0 .. inbox_count)`, open what opens, SKIP what does
+ * not (unknown version or suite, failed authentication, a poisoned entry), and
+ * rebuild the coin store from chain data alone.
+ */
+export async function inboxWalkPortable(
+  ledgerState: Ledger,
+  encSecretKey: Uint8Array,
+): Promise<Array<PlainCoin & { inboxIndex: bigint }>> {
+  const out: Array<PlainCoin & { inboxIndex: bigint }> = [];
+  for (let i = 0n; i < ledgerState.inbox_count; i++) {
+    if (!ledgerState.inbox.member(i)) continue;
+    const coin = await openEntryPortable(encSecretKey, Uint8Array.from(ledgerState.inbox.lookup(i)));
+    if (coin) out.push({ ...coin, inboxIndex: i });
+  }
+  return out;
 }

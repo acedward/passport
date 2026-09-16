@@ -591,6 +591,45 @@ export class EvmDevice {
     return new EvmDevice(eip1193Backend(provider, address));
   }
 
+  /**
+   * A device known only by its ADDRESS and its public POINT — no signer.
+   *
+   * It is enough to DEPLOY and ACTIVATE an account: the boot commitment binds
+   * the address, and `activate_initial_device_with_evm` is permissionless and
+   * carries a point and no signature. It is not enough to authorise anything,
+   * and `sign` says so rather than failing later with a signature nobody made.
+   *
+   * The case this exists for is the split a browser forces (project 00034,
+   * Q43): the page holds the wallet and recovers its own point, while the
+   * process that pays the deploy fee holds neither. The same shape covers a
+   * hardware wallet behind another service, and a relay deploying an account
+   * for a user who is not online.
+   */
+  static fromPublicPoint(
+    address: Uint8Array | string,
+    point: { x: bigint; y: bigint },
+  ): EvmDevice {
+    const bytes = typeof address === 'string' ? fromHex(address.toLowerCase(), 20) : Uint8Array.from(address);
+    const device = new EvmDevice({
+      address: bytes,
+      publicPoint: () => ({ x: point.x, y: point.y, identity: false }),
+      async signTypedData() {
+        throw new Error(
+          'this evm device carries a public point only — the key that signs for '
+          + `${toHex(bytes)} lives elsewhere (a browser wallet, a hardware device, another process)`,
+        );
+      },
+    });
+    // Checked HERE, synchronously, not at activation: an account deployed
+    // against a mismatched point cannot be activated by anybody, and the
+    // caller that passed the wrong point is the one who can still fix it.
+    const derived = toHex(ethereumAddress({ x: point.x, y: point.y, identity: false }));
+    if (derived !== toHex(bytes)) {
+      throw new Error(`the point given for ${toHex(bytes)} belongs to ${derived}`);
+    }
+    return device;
+  }
+
   get addressHex(): string {
     return toHex(this.address);
   }

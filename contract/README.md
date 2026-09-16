@@ -215,8 +215,14 @@ the main branch; until it lands, the summary above is the citable form.
 | `contracts/control.compact` | Public-map control for the observer leak audit (test scaffolding, **not** part of the standard). |
 | `contracts/faucet.compact` | Token origins on localnet (test scaffolding). |
 | `docs/AUTH-EIP712-PASSPORT-EVM-V1.md` | The `evm` arm's frozen byte contract: what a wallet signs, with type hashes, transport rules and a KAT. |
+| `docs/OPEN-SWAP-OFFERS.md` | Open ZSwap offers: the two shapes, `valid_until`, the one-live-offer limitation, the envelope and the taker's gates. |
+| `docs/CLIENT-API.md` | The client's API mapped one-to-one to the AA console's jobs (register, deposit, withdraw, offer, bridge), and the console jobs that have no counterpart. |
 | `src/wallet/` | Client library: per-arm signers, the EIP-712 codec and signature transport, InboxEntry v1 codec, coin store witness, discovery walk, capture, account wrapper, wave deployment. |
 | `src/wallet/bridge.ts` | The ERC20 bridge client: deposit-address derivation, the two starts, the relayer loop, the three settles, and the circuit lists a bridge account deploys with. |
+| `src/wallet/deposit.ts` | Third-party deposits, and the portable (browser-safe) InboxEntry codec — `@noble` + WebCrypto instead of `node:crypto`. |
+| `src/browser.ts`, `src/index.ts` | The package's two entry points: the browser-safe surface, and the full one (which pulls in `node:crypto` through the reference inbox codec). |
+| `src/node/` | Node-only plumbing: wallet, providers and network configs (`local`, `stagenet`), and the roster/account-address JSON store. |
+| `browser-smoke/` | A headless-Chromium smoke: the built library, an injected EIP-1193 wallet, and register → deposit → withdraw against a localnet. Not published. |
 | `contracts/erc20-vault/` | The witness-free ERC20 vault fork the bridge calls (its own package, its own README). |
 | `src/tests/` | Conformance suites (see the map below). |
 | `src/tests/fixtures/` | `passport-evm-v1.json`, the 63 frozen EIP-712 vectors, and the deterministic generator that writes it. |
@@ -839,6 +845,77 @@ cross-contract call in the simulator fails on WASM class identity rather than on
 about the contracts.
 
 ## Client-library notes
+
+### Using the package
+
+Two entry points, and the difference is not cosmetic:
+
+```ts
+import { EvmDevice, deployEvmAccount, depositAsThirdParty } from 'midnight-account-custody';
+import { CONFIG, createWallet, createProviders } from 'midnight-account-custody/node';
+import { saveAccount, loadAccountRoster } from 'midnight-account-custody/node/roster';
+import { buildOpenSwapOffer, encodeEnvelope } from 'midnight-account-custody/offer';
+```
+
+* **`.`** is the full surface. In a browser a bundler resolves it to
+  **`./browser`** through the `browser` condition, because the full one
+  re-exports Passport's reference InboxEntry codec (`src/wallet/inbox.ts`) and
+  its `discovery.ts` walk, both of which import `node:crypto` — and a bundler's
+  browser shim for that module throws on the first property access. The browser
+  entry exports the same 192-byte container through `sealEntryPortable` /
+  `openEntryPortable` / `inboxWalkPortable` (`@noble` + WebCrypto), and the
+  offline suite walks the import graph on every run so the split cannot rot.
+* **`./node`** is the wallet, the providers and the network configuration; it is
+  Node-only by construction (wallet SDK, `ws`, `node:fs`).
+* **`./node/roster`** persists what the chain does not hold: the account
+  ADDRESS (a Passport account is its own contract, so nothing enumerates
+  accounts by owner) and the S11 use counters.
+* **`./offer`** is the open-swap builder and the 00006 envelope.
+
+`docs/CLIENT-API.md` maps every function to the job it performs for the AA
+console, and lists the console jobs that have no counterpart here.
+
+### Networks
+
+`MIDNIGHT_NETWORK` selects `local` (the compose file's ports) or `stagenet`
+(the public indexer and RPC, with proving still LOCAL — there is no hosted
+proof server). Every endpoint is overridable per service — `INDEXER_URL`,
+`INDEXER_WS_URL`, `MIDNIGHT_NODE_URL`, `MIDNIGHT_PROOF_SERVER_URL` — as is the
+network id itself (`MIDNIGHT_NETWORK_ID`), and `MIDNIGHT_MANAGED_PATH` points a
+long run at an immutable snapshot of `contracts/managed` so a concurrent
+recompile cannot kill it mid-proof.
+
+### Depositing into somebody else's account
+
+`depositAsThirdParty(account, coin)` is the permissionless half of MIP-0012
+§6.2 as one call: it reads the account's advertised `enc_key` off the chain,
+seals the coin description into a 192-byte entry for it, and calls
+`deposit_shielded`. The depositor needs nothing secret and learns nothing; the
+owner finds the coin by walking the inbox. This is how a console funds a user's
+account, and how a second wallet pays one.
+
+### Paying somebody who is not paying the fee
+
+`withdrawShielded` covers the ordinary case, because midnight-js attaches the
+coin's ciphertext for the balancing wallet automatically. A THIRD-PARTY
+recipient needs their encryption key mapped explicitly, which `callTx` cannot
+carry — `withdrawShieldedToWallet(device, coinPk, colour, amount, keys)` does it
+through `createUnprovenCallTx` + prove + balance + submit. Implemented in
+PR-C/C1 and **not yet exercised on-node**; see the questions file (Q42).
+
+### In a browser
+
+`browser-smoke/` is a page that imports the BUILT library, injects a
+deterministic EIP-1193 wallet, and runs register → deposit → withdraw against a
+localnet under headless Chromium. It measured the split a browser forces today:
+the page does every client-side step (the challenge, the EIP-712 message, the
+wallet prompt, the signature, the point recovery, the inbox entry, the circuit
+arguments), and a sidecar pays the DUST fee and submits, because a page holds no
+Midnight wallet. One EIP-191 prompt at enrolment and one typed-data prompt per
+call is the whole wallet interaction — measured, `["eth_requestAccounts",
+"personal_sign", "eth_signTypedData_v4"]` for a full deploy-deposit-withdraw
+session.
+
 
 - **The `evm` arm's client is `EvmDevice`** (`src/wallet/signer.ts`). It is
   built from a raw key (offline checks), an ethers wallet (suites) or an

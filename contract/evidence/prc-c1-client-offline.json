@@ -6,8 +6,8 @@
   "note": "No node, indexer or proof server; the account runs in the compact-runtime simulator.",
   "details": {
     "eip1193": {
-      "digest": "0xadb3d4f43117f17560a26d343e523a459c2b9b0278f614604687dbb699c928a9",
-      "owner": "0x2be39fd6a35b4dfd91926be2caca8204b565a9dd",
+      "digest": "0xe310a1fbbf8c348b7c89afa6adac17d9507a479a967e71aa6e8650cd8fb6ac69",
+      "owner": "0x6f698601a7c9e7c6e2bb340300e5600bab536734",
       "primaryType": "AppendInbox",
       "walletCalls": [
         "personal_sign",
@@ -18,6 +18,13 @@
       "inboxCount": "2",
       "recoveredValue": "250",
       "entriesOpened": 2
+    },
+    "browserEntry": {
+      "offenders": [],
+      "rootOffenders": [
+        "dist/src/wallet/inbox.js → node:crypto",
+        "dist/src/wallet/inbox.js → node:buffer"
+      ]
     },
     "networks": {
       "local": {
@@ -43,7 +50,7 @@
       }
     }
   },
-  "ranAt": "2026-09-16T06:41:48.622Z",
+  "ranAt": "2026-09-16T07:30:21.703Z",
   "stack": {
     "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
     "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",
