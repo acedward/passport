@@ -108,6 +108,34 @@ equality on every run.
 When there is no change, the client still has to pass 192 bytes. It passes an **all-zero container** —
 indistinguishable from ciphertext to an observer, and never appended.
 
+## Which segment the legs are in
+
+**Not segment 0, usually — and a taker does not need it to be.** Measured on a ledger-9 localnet
+(project 00034, Q39).
+
+midnight-js splits a circuit's transcript into a guaranteed half and a fallible half and places each
+coin by which half its operation is in. A **gated** circuit writes ledger state in the seam — the
+consumed device entry, its successor, `auth_nonce`, `round` — before any value moves, because
+MIP-0013 verifies before it releases. So an offer's legs are in the call's own fallible segment, whose
+id is random per transaction, and the guaranteed segment carries nothing but dust. It is not even
+constant: in one ladder run the open offer's legs were fallible and the named offer's were in
+segment 0.
+
+Project 00006 required segment 0 and failed closed otherwise. The rule here is what a taker actually
+needs instead:
+
+- **all the legs in ONE segment**, whichever it is — balancing is per (token, segment), so the thing
+  to prevent is a deficit in one segment with its matching surplus in another, which no taker could
+  settle. That still fails closed, on both sides.
+- **the terms declare that segment** (`legSegment`), so the JSON and the bytes are checked against
+  each other rather than either being trusted alone.
+
+The pinned `WalletFacade` balances a fallible-segment deficit without complaint and the node accepts
+the result — both settled ladder transactions are fallible-or-not depending on the shape. And being
+fallible is better than merely tolerable: a fallible segment rolls back atomically if the call fails,
+so a failed offer cannot take the taker's coins or spend the maker's. The taker's only exposure is
+the dust it paid.
+
 ## The artefact and its envelope
 
 `src/wallet/offer.ts` exports the envelope, ported from project 00006:
@@ -131,7 +159,7 @@ four gates, then `balanceUnboundTransaction` → `signRecipe` → `finalizeRecip
 |---|---|---|
 | 1. envelope | the content address recomputed from the payload | offline |
 | 2. expiry | the declared TTL against the local clock | offline |
-| 3. fundability | the **deserialised transaction's** own imbalances against the declared terms: exactly one non-dust deficit equal to the declared want, a surplus exactly equal to the declared give for an open offer and none for a named one, and nothing at all outside segment 0 | offline |
+| 3. fundability | the **deserialised transaction's** own imbalances against the declared terms: all the legs in one segment, that segment the one the terms declare, exactly one non-dust deficit equal to the declared want, and a surplus exactly equal to the declared give for an open offer (none for a named one) | offline |
 | 4. pre-submit | the **merged** transaction carries no remaining non-dust deficit | before submission |
 
 Gate 3 is the one that matters: the terms are JSON the maker wrote, while the imbalances are what the
@@ -158,6 +186,10 @@ Treat that as a hard constraint on the console, the client and the bridge work, 
 
 ## Running it
 
+Both shapes settled on a ledger-9 localnet in PR-B/B3, each in one transaction submitted by a wallet
+with no maker key: `0001504e5f…` (open), `00b50511d9…` (named), then `00b9f53635…` spending the coin
+the account received. Evidence: `evidence/prb-b3-swap-ladder.json`.
+
 ```sh
 # Offline — no localnet needed
 npm run test:swap-primitives     # FR-008: the zswap transcription equals the stdlib's own claims
@@ -170,4 +202,7 @@ npm run test:swap-offer          # the envelope and the taker's gates, against m
 export WALLET_SEED=…            # the maker
 export WALLET_SEED_SECONDARY=…  # the taker: a separate wallet with no maker key
 npm run test:swap-ladder
+
+# The measurement behind the segment rule, kept reproducible
+npm run probe:swap-placement
 ```
