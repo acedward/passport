@@ -63,6 +63,15 @@ FAKENET_INDEXER_URL="${FAKENET_INDEXER_URL:-https://indexer.stagenet.shielded.to
 FAKENET_INDEXER_WS_URL="${FAKENET_INDEXER_WS_URL:-wss://indexer.stagenet.shielded.tools/api/v3/graphql/ws}"
 FAKENET_NODE_URL="${FAKENET_NODE_URL:-https://rpc.stagenet.shielded.tools}"
 
+# The DRIVER's own indexer URL for commitment-tree lookups. `src/wallet/capture.ts` reads
+# INDEXER_URL and otherwise defaults to http://localhost:8088 — and both of its callers are
+# wrapped in a `.catch(...)` that falls back to mt_index 0, so leaving it unset does not fail
+# loudly: it silently records a WRONG tree position for a freshly bridged coin, and the spend
+# that follows dies at proving time with "invalid index into sparse merkle tree: 0". Measured
+# the hard way at F5 (question Q68). `src/node/wallet.ts` honours the same variable, and this
+# is the same stagenet indexer it would use anyway.
+export INDEXER_URL="${INDEXER_URL:-https://indexer.stagenet.shielded.tools/api/v4/graphql}"
+
 # Sig Network's deployed singleton — the one nobody can redeploy for us, whose verifier keys
 # S0 re-checked byte for byte against our 0.34.0 rebuild (question Q20).
 export MIDNIGHT_SIGNET_CONTRACT_ADDRESS="${MIDNIGHT_SIGNET_CONTRACT_ADDRESS:-1df4ce25fc9f9c03dc6f4d0eb12ddf3d0db094995d4c70aca1142eebb3b77a5d}"
