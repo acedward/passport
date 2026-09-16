@@ -96,7 +96,8 @@ import {
   randomNonce, vaultColour, vaultEvmAddressFor, type BridgeConfig,
 } from '../wallet/bridge.js';
 import { EvmDevice } from '../wallet/signer.js';
-import { generateEncKeyPair, sealInboxEntry } from '../wallet/inbox.js';
+import { generateEncKeyPair } from '../wallet/inbox.js';
+import { accountEncKey, depositAsThirdParty } from '../wallet/deposit.js';
 import { inboxWalk } from '../wallet/discovery.js';
 import { bytesToHex, hexToBytes } from '../wallet/hex.js';
 import { emptyCoinStore, makeWitnesses, withCoin, withoutCoin, type CoinStorePrivateState } from '../wallet/witnesses.js';
@@ -1323,11 +1324,21 @@ async function s6(): Promise<void> {
   const account = await CustodyAccount.connect(providers, compiledAccount(), s.account!.address);
   const nonce = new Uint8Array(randomBytes(32));
   const coin = { nonce, color: colour, value: TEST3_AMOUNT };
-  const entry = sealInboxEntry(hexToBytes(s.account!.encPublicHex), coin);
 
+  // The THIRD-PARTY path, and it matters that it is that one: `depositAsThirdParty` reads
+  // the account's advertised `enc_key` off its own ledger state and seals the coin
+  // description to it with the PORTABLE codec, so the depositor needs nothing secret and
+  // learns nothing — which is the actual situation wallet 2 is in. Sealing with the state
+  // file's copy of the key instead would prove the account can be funded by somebody who
+  // already has the owner's key, which is not the claim. It is also a drift check between
+  // the two codec implementations: this seals with `deposit.ts` (no `node:crypto`) and the
+  // owner opens with `inbox.ts` (the reference) below.
   const inboxBefore = Number((await account.ledgerState()).inbox_count);
+  const advertised = await accountEncKey(account);
+  const ok0b = check(bytesToHex(advertised) === s.account!.encPublicHex,
+    "the account's advertised enc_key is the one it was deployed with");
   const t0 = Date.now();
-  const dep = await account.depositShielded(coin, entry);
+  const dep = await depositAsThirdParty(account, coin);
   const seconds = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`  deposit ${dep.txId} (${seconds}s)`);
 
@@ -1359,7 +1370,9 @@ async function s6(): Promise<void> {
     displacedFromTheSingleValuedStore: displaced
       ? { value: displaced.value, note: "S5's change coin; still the account's, still described by the inbox entry S5 filed, but no longer the coin `held_coin` serves for this colour" }
       : null,
-    allChecksPassed: ok0 && ok1 && ok2,
+    mechanism: 'depositAsThirdParty (src/wallet/deposit.ts): the enc_key is read off the account\'s OWN ledger state and the entry is sealed with the PORTABLE codec; the owner opens it below with the reference codec (inbox.ts), which is also a drift check between the two implementations',
+    advertisedEncKeyMatches: ok0b,
+    allChecksPassed: ok0 && ok0b && ok1 && ok2,
     writtenUtc: nowUtc(),
   });
 }
