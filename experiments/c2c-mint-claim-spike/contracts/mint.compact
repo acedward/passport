@@ -1,0 +1,44 @@
+pragma language_version 0.26;
+
+// Mint — the minting CALLEE of the Gate 0 G1 pair (project 00034, spec FR-023(b)).
+//
+// Stands in for Sig Network's ERC20 vault: on a completed deposit the vault mints a
+// shielded coin of the bridged colour addressed to the Passport account, and the account
+// claims it with receiveShielded in the SAME transaction. Nothing anywhere has exercised
+// mintShieldedToken inside a CALLEE addressed to the ROOT — Passport P7 proved only the
+// send-plus-claim direction, and on the 0.33 line a callee had no Zswap local state at all
+// (LFDT-Minokawa/compact#658). This contract isolates that one question.
+//
+// Witness-free by necessity: compact-runtime refuses witnesses in non-root contracts.
+//
+// Compile FIRST (before Root2).
+
+import CompactStandardLibrary;
+
+export ledger mints: Counter;
+export ledger minted_total: Uint<128>;
+
+constructor() {
+  minted_total = 0 as Uint<128>;
+}
+
+// Mint `amount` of this contract's own colour (tokenType(domain, kernel.self())) to
+// `recipient`. When the recipient is another CONTRACT the minted output is not credited on
+// its own: a recipient circuit must claim it in the same transaction or the transaction
+// does not balance. When it is a user coin public key it is an ordinary Zswap output.
+export circuit mint_to(
+  domain: Bytes<32>,
+  amount: Uint<64>,
+  nonce: Bytes<32>,
+  recipient: Either<ZswapCoinPublicKey, ContractAddress>
+): ShieldedCoinInfo {
+  const coin = mintShieldedToken(
+    disclose(domain),
+    disclose(amount),
+    disclose(nonce),
+    disclose(recipient)
+  );
+  mints.increment(1);
+  minted_total = ((minted_total + disclose(amount)) as Uint<128>);
+  return coin;
+}

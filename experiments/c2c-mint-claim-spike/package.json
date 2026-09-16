@@ -1,0 +1,52 @@
+{
+  "name": "gate0-c2c-mint-claim-spike",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Project 00034 Gate 0: does a depth-2 cross-contract chain (root -> callee -> Signet singleton) land in one transaction, and can a callee mintShieldedToken to the root which claims it with receiveShielded in the same transaction? Throwaway spike; pins copied from passport/experiments/cross-contract-calls.",
+  "scripts": {
+    "link:signet": "mkdir -p contracts/managed && rm -rf contracts/managed/SignetSigner && cp -RL node_modules/@sig-net/midnight-contract/dist/managed contracts/managed/SignetSigner",
+    "compile:mid": "COMPACT_PATH=node_modules compact compile +0.34.0 --feature-zkir-v3 --compact-path node_modules:contracts/managed contracts/mid.compact contracts/managed/Mid",
+    "compile:root": "compact compile +0.34.0 --feature-zkir-v3 --compact-path node_modules:contracts/managed contracts/root.compact contracts/managed/Root",
+    "compile:mint": "compact compile +0.34.0 --feature-zkir-v3 --compact-path node_modules:contracts/managed contracts/mint.compact contracts/managed/Mint",
+    "compile:root2": "compact compile +0.34.0 --feature-zkir-v3 --compact-path node_modules:contracts/managed contracts/root2.compact contracts/managed/Root2",
+    "compile": "npm run link:signet && npm run compile:mid && npm run compile:root && npm run compile:mint && npm run compile:root2",
+    "typecheck": "tsc --noEmit",
+    "g0": "tsx src/tests/g0-depth2-chain.ts",
+    "g0n": "tsx src/tests/g0n-cycle-negative.ts",
+    "g1": "tsx src/tests/g1-mint-in-callee.ts",
+    "g1n": "tsx src/tests/g1n-negatives.ts",
+    "g1b": "tsx src/tests/g1b-send-claim-onward.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@midnight-ntwrk/compact-js": "2.5.5-rc.8",
+    "@midnight-ntwrk/compact-runtime": "0.19.0",
+    "@midnight-ntwrk/midnight-js-contracts": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-level-private-state-provider": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-network-id": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-types": "5.0.0-beta.7",
+    "@midnightntwrk/ledger-v9": "1.0.0-rc.3",
+    "@midnightntwrk/wallet-sdk-dust-wallet": "5.0.0-beta.2",
+    "@midnightntwrk/wallet-sdk-facade": "5.0.0-beta.2",
+    "@midnightntwrk/wallet-sdk-hd": "3.1.0-beta.1",
+    "@midnightntwrk/wallet-sdk-shielded": "4.0.0-beta.2",
+    "@midnightntwrk/wallet-sdk-unshielded-wallet": "4.0.0-beta.2",
+    "@noble/curves": "2.2.0",
+    "@sig-net/midnight": "0.22.0-rc.1",
+    "@sig-net/midnight-contract": "0.22.0-rc.1",
+    "rxjs": "^7.8.2",
+    "ws": "^8.19.0"
+  },
+  "overrides": {
+    "@midnight-ntwrk/compact-runtime": "0.19.0"
+  }
+}

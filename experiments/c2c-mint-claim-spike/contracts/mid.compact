@@ -1,0 +1,159 @@
+pragma language_version 0.26;
+
+// Mid — the middle CALLEE of the Gate 0 chain (project 00034, spec FR-023).
+//
+// The bridge design (plans/00034-sub-sig-net-vault-bridge-brief.md) needs a
+// two-level call chain: the Passport account (root) calls the ERC20 vault
+// (callee), which calls Sig Network's Signet singleton (callee of the callee).
+// No probe in either repository has exercised depth 2, so Mid stands in for
+// the vault: witness-free by necessity (compact-runtime refuses witnesses in
+// non-root contracts), holding a SignBidirectionalEventMap of its own and
+// notifying the singleton exactly as sig-net's own test-caller-contract does
+// (packages/test-caller-contract/src/test-caller-contract.compact @ 79ce225,
+// circuit submitSignatureRequest — copied here, trimmed to one request shape
+// and with the deployer/initialise/verify machinery dropped: Gate 0 needs no
+// MPC, no EVM and no attestation, only the CALL).
+//
+// G1b additionally needs the withdraw shape: the root sends a shielded coin to
+// this contract, this contract claims it AND makes its own onward call, all in
+// one transaction. take_and_request is that circuit. As in the Passport P7
+// Till, the claimed coin is retained in a PUBLIC ledger cell — a witness-free
+// callee has no private state, which is a disclosure cost the vault design
+// must price in.
+//
+// Compile FIRST (before Root): the caller resolves the declared contract type
+// name `Mid` to contracts/managed/Mid on the compact path.
+
+import CompactStandardLibrary;
+
+// Resolved through COMPACT_PATH=node_modules, exactly as sig-net's own
+// contracts import it.
+import "@sig-net/midnight/src/Signet";
+
+// Ledger layout: field numbers are declaration order and stay fixed. The
+// notification payload names the ledger-tree path of signBidirectionalEventMap,
+// so its index is part of the wire contract with the MPC — the harness asserts
+// the constant below against managed/Mid/compiler/contract-info.json rather
+// than trusting this comment (brief A.5 / spec FR-020).
+
+// field 0: log of every submitted request id, newest first.
+export ledger requestLog: List<Bytes<32>>;
+
+// field 1: request counter keeping otherwise identical submits distinct.
+export ledger signetRequestNonce: Counter;
+
+// field 2: the Signet singleton, sealed at deploy. request() cross-contract
+// calls it to emit the notification event the MPC polls.
+sealed ledger signetSigner: SignetSigner;
+
+// field 3: the request map the MPC would read requests back from.
+export ledger signBidirectionalEventMap: SignBidirectionalEventMap<EvmType2TxParams<1, 0, 0>, 34, 34>;
+
+// field 4: how many requests this contract has notified.
+export ledger requests: Counter;
+
+// ── G1b: shielded custody in a witness-free callee (the P7 Till shape) ──────
+
+// field 5: the claimed coin itself (contract-owned, public cell).
+export ledger held: QualifiedShieldedCoinInfo;
+// field 6
+export ledger held_has_coin: Boolean;
+// field 7
+export ledger shielded_received: Uint<128>;
+// field 8
+export ledger shielded_claims: Counter;
+
+constructor(signetContract: SignetSigner) {
+  signetSigner = disclose(signetContract);
+  held_has_coin = false;
+  shielded_received = 0 as Uint<128>;
+}
+
+// The request payload every circuit below notifies about. Contract-fixed and
+// never broadcast: Gate 0 signs nothing and talks to no EVM chain. Only the
+// shape matters — it must be a well-formed SignBidirectionalEvent so the call
+// into the singleton is the real one.
+circuit buildAndNotify(evmNonce: Uint<64>, keyVersion: Uint<8>): [] {
+  const calldata = EvmCalldata<1> {
+    selector: Bytes [0xca, 0x11, 0xab, 0x1e],
+    noWords: 1 as Uint<16>,
+    words: [pad(32, "gate0:fixed-word")]
+  };
+
+  // Declaration order (canonical EIP-1559), which is also the request-id hash order.
+  const txParams = EvmType2TxParams<1, 0, 0> {
+    chainId: 31337 as Uint<64>,
+    nonce: evmNonce,
+    maxPriorityFeePerGas: 1000000000 as Uint<128>, // 1 gwei
+    maxFeePerGas: 30000000000 as Uint<128>,        // 30 gwei
+    gasLimit: 100000 as Uint<64>,
+    to: pad(20, "gate0-probe-to"),
+    value: 0 as Uint<128>,
+    calldata: some<EvmCalldata<1>>(calldata),
+    accessListEntryCount: 0,
+    accessList: []
+  };
+
+  const schema = "[{\"name\":\"success\",\"type\":\"bool\"}]" as Bytes<34>;
+  const requestNonce = signetRequestNonce as Uint<64>;
+  const request = constructSignBidirectionalEvent<EvmType2TxParams<1, 0, 0>, 34, 34>(
+    kernel.self(),
+    requestNonce,
+    keyVersion,
+    pad(32, "gate0-path"),
+    MPCSignatureAlgorithm.ecdsa,
+    MPCDestination.unused,
+    pad(64, ""),
+    TxParamType.evmType2,
+    txParams,
+    ethereumCaip2Id(),
+    schema,
+    schema
+  );
+  const requestId = disclose(calculateRequestId<EvmType2TxParams<1, 0, 0>, 34, 34>(request));
+
+  assert(!signBidirectionalEventMap.member(requestId), "Request already exists");
+  signetRequestNonce.increment(1);
+  signBidirectionalEventMap.insert(requestId, disclose(request));
+  requestLog.pushFront(requestId as Bytes<32>);
+  requests.increment(1);
+
+  // signBidirectionalEventMap sits at flat field 3, so the path is [3] at
+  // depth 1 (verified against contract-info.json by the harness).
+  signetSigner.signBidirectional(
+    requestId,
+    constructSignBidirectionalEventNotificationV1(
+      kernel.self(),
+      1 as Uint<8>,
+      [3, 0, 0, 0] as Vector<4, Uint<8>>,
+    ),
+  );
+}
+
+// G0: the middle link of the chain. Called BY Root, calls the singleton.
+export circuit request(evmNonce: Uint<64>, keyVersion: Uint<8>): [] {
+  buildAndNotify(evmNonce, keyVersion);
+}
+
+// G1b: claim the coin the root sent in this same transaction AND make the
+// onward call. This is the withdraw shape of spec FR-027 reduced to its
+// mechanism: value in, notification out, one transaction, depth 2.
+export circuit take_and_request(
+  coin: ShieldedCoinInfo,
+  evmNonce: Uint<64>,
+  keyVersion: Uint<8>
+): [] {
+  const c = disclose(coin);
+  receiveShielded(c);
+  if (!held_has_coin) {
+    held.writeCoin(c, right<ZswapCoinPublicKey, ContractAddress>(kernel.self()));
+    held_has_coin = true;
+  } else {
+    const merged = mergeCoinImmediate(held, c);
+    held.writeCoin(merged, right<ZswapCoinPublicKey, ContractAddress>(kernel.self()));
+  }
+  shielded_received = ((shielded_received + c.value) as Uint<128>);
+  shielded_claims.increment(1);
+
+  buildAndNotify(evmNonce, keyVersion);
+}
