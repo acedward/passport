@@ -282,8 +282,23 @@ interface State {
   deposit?: {
     requestId?: string; startTxId?: string; relay?: unknown; settleTxId?: string; mtIndex?: string;
     attempts?: { requestId: string; startTxId: string; startedUtc: string; signed: boolean | null }[];
+    /** The vault's ERC20 balance BEFORE the relayer broadcast the sweep — the same baseline
+     *  question the withdraw side has. `>= amount` is not an assertion on a vault that has
+     *  ever held anything else, which on stagenet it will have. */
+    vaultErc20Before?: string;
   };
-  withdraw?: { requestId?: string; startTxId?: string; relay?: unknown; settleTxId?: string };
+  withdraw?: {
+    requestId?: string; startTxId?: string; relay?: unknown; settleTxId?: string;
+    /** The destination's and the vault's ERC20 balances as they were BEFORE the relayer
+     *  broadcast anything. The settle's own before/after window is the wrong baseline: the
+     *  ERC20 `transfer` executes during the RELAY, one command earlier, so by the time the
+     *  settle runs the destination is already credited and the settle-window delta is zero
+     *  on a perfectly successful withdrawal. Measured on the S-L rehearsal, where it failed
+     *  a correct withdrawal; the same would have happened on stagenet. */
+    destinationErc20Before?: string;
+    vaultErc20Before?: string;
+    destination?: string;
+  };
   wallet2?: { coinPublicKey: string; encryptionPublicKey: string };
 }
 
@@ -392,7 +407,15 @@ async function wallet(seedVar: string, label: string) {
  * amounts can be generous where the stagenet ones are capped.
  */
 function evmChain(): { provider: ethers.JsonRpcProvider; funder: ethers.Wallet } {
-  const provider = new ethers.JsonRpcProvider(EVM_RPC, undefined, { staticNetwork: true });
+  // `cacheTimeout: -1` on the local profile, and it is load-bearing rather than tidy-up.
+  // ethers caches EVERY `_perform` for 250 ms by default, which is invisible on a public
+  // chain where nothing changes inside a quarter second — but `anvil_setBalance` changes
+  // state with no transaction and no new block, so a read-after-write inside that window
+  // returns the PRE-write balance. Measured: `s7-gas` funded the vault's account with
+  // 0.002 ETH, the chain held it, and the driver's own read-back said 0 and failed its
+  // check. The public RPC keeps the cache, where it is rate-limit protection.
+  const provider = new ethers.JsonRpcProvider(EVM_RPC, undefined,
+    LOCAL ? { staticNetwork: true, cacheTimeout: -1 } : { staticNetwork: true });
   const key = LOCAL ? ANVIL_DEV_KEY : process.env.SEPOLIA_FUNDER_KEY;
   if (!key) throw new Error('SEPOLIA_FUNDER_KEY is required');
   return { provider, funder: new ethers.Wallet(key, provider) };
@@ -976,7 +999,10 @@ async function s3Start(retry = false): Promise<void> {
     ? [{ requestId: s.deposit.requestId, startTxId: s.deposit.startTxId!, startedUtc: 'see s3-deposit.json', signed: false }]
     : []);
   attempts.push({ requestId: start.requestId, startTxId: start.txId, startedUtc: nowUtc(), signed: null });
-  s.deposit = { requestId: start.requestId, startTxId: start.txId, attempts };
+  s.deposit = {
+    requestId: start.requestId, startTxId: start.txId, attempts,
+    vaultErc20Before: String(vaultUsdcBefore),
+  };
   saveState(s);
   evidence('s3-deposit', {
     startTxId: start.txId, requestId: start.requestId, startSeconds: seconds,
@@ -1107,23 +1133,49 @@ function deserialiseRelay(r: unknown): any {
   return walk(r);
 }
 
+/**
+ * A settle that has already landed can be RE-READ, but only deliberately and only into its
+ * own file.
+ *
+ * Re-deriving a verdict from the chain is honest exactly once: while the step in question is
+ * still the LAST thing that happened. Run it later and the chain has moved on — measured on
+ * the S-L rehearsal, where re-reading the deposit after the withdrawal had already taken
+ * 0.25 out of the vault reported the deposit as failing and, worse, overwrote the true
+ * settle-time numbers with the current ones. So: opt in with `PRS_REDERIVE=1`, and the
+ * result is written to `<step>-rederived.json`, never over the record of what was measured
+ * at the time.
+ */
+const REDERIVE = process.env.PRS_REDERIVE === '1';
+
 async function s3Complete(): Promise<void> {
   const s = loadState();
   if (!s.deposit?.relay) throw new Error('run s3-relay first');
-  if (s.deposit.settleTxId) { console.log(`already settled: ${s.deposit.settleTxId}`); return; }
-  step('S3.5  Midnight tx 2: bridge_deposit_complete (the vault mints, the account claims)');
+  if (s.deposit.settleTxId && !REDERIVE) {
+    console.log(`already settled: ${s.deposit.settleTxId} (PRS_REDERIVE=1 re-reads the chain into a separate file)`);
+    return;
+  }
+  const alreadySettled = Boolean(s.deposit.settleTxId);
+  step(alreadySettled
+    ? 'S3.5  already settled — re-reading the chain and re-deriving the verdict (nothing is submitted)'
+    : 'S3.5  Midnight tx 2: bridge_deposit_complete (the vault mints, the account claims)');
   const w = await wallet(WALLET1_SEED_VAR, 'wallet 1');
   const providers = await createProviders(w);
   const { account, bridge } = await connectAccount(s, providers);
   const relayResult = deserialiseRelay(s.deposit.relay);
 
   const { provider } = evmChain();
+  // Same baseline rule as the withdraw side: the sweep executes during the RELAY, so the
+  // settle's own window shows nothing moving, and `>= amount` would pass vacuously on a
+  // vault that has held anything before.
+  const vaultBaseline = BigInt(s.deposit.vaultErc20Before ?? '0');
   const vaultBefore = await erc20Balance(provider, s.vault!.vaultEvmAddress);
 
-  const planned = await bridge.plannedCoin('deposit', s.deposit.requestId!, randomNonce());
   const t0 = Date.now();
-  const settle = await bridge.completeDeposit(s.deposit.requestId!, relayResult, planned);
-  const seconds = ((Date.now() - t0) / 1000).toFixed(1);
+  const settle = alreadySettled
+    ? { txId: s.deposit.settleTxId!, coin: null as any, entryMatchesCoin: true }
+    : await bridge.completeDeposit(s.deposit.requestId!, relayResult,
+      await bridge.plannedCoin('deposit', s.deposit.requestId!, randomNonce()));
+  const seconds = alreadySettled ? '0.0' : ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`  settle tx ${settle.txId} (${seconds}s)`);
 
   const vaultAfter = await erc20Balance(provider, s.vault!.vaultEvmAddress);
@@ -1132,11 +1184,11 @@ async function s3Complete(): Promise<void> {
 
   const l: any = await account.ledgerState();
   const colour = vaultColour(s.vault!.address, erc20Address());
-  const ok1 = check(settle.coin !== null, 'the settle claimed a coin');
+  const ok1 = check(alreadySettled || settle.coin !== null, 'the settle claimed a coin');
   const ok2 = check(settle.entryMatchesCoin, 'the coin the circuit returned is the coin the inbox entry describes');
-  const ok3 = check(vaultAfter - vaultBefore === DEPOSIT_AMOUNT || vaultAfter >= DEPOSIT_AMOUNT,
-    "the vault's Ethereum account holds the deposited USDC");
-  const ok4 = check(depositAfter === 0n, "the deposit address's USDC is zero");
+  const ok3 = check(vaultAfter - vaultBaseline === DEPOSIT_AMOUNT,
+    `the vault's Ethereum account gained exactly the deposit (against the pre-relay baseline ${vaultBaseline})`);
+  const ok4 = check(depositAfter === 0n, "the deposit address's balance of the token is zero");
   const ok5 = check(String(l.inbox_count) === '1', 'inbox_count is 1');
 
   // S3.6 — the inbox walk with the account's own encryption secret.
@@ -1146,19 +1198,32 @@ async function s3Complete(): Promise<void> {
     'the inbox entry decrypts to the bridged coin');
 
   // The tree position, so `held_coin` can spend it.
-  const cands = (await candidateIndices(settle.txId).catch(() => ({ candidates: [] as bigint[] }))).candidates;
-  const mt = await mtIndexForSingleOutput(settle.txId).catch(async () => ({ mtIndex: cands[0] ?? 0n, position: {} }));
-  await rememberCoin(s, account, settle.coin!, mt.mtIndex, cands);
-  s.deposit.settleTxId = settle.txId;
-  s.deposit.mtIndex = String(mt.mtIndex);
-  saveState(s);
+  let mtIndex = s.deposit.mtIndex ?? '0';
+  if (!alreadySettled) {
+    const cands = (await candidateIndices(settle.txId).catch(() => ({ candidates: [] as bigint[] }))).candidates;
+    const mt = await mtIndexForSingleOutput(settle.txId).catch(async () => ({ mtIndex: cands[0] ?? 0n, position: {} }));
+    await rememberCoin(s, account, settle.coin!, mt.mtIndex, cands);
+    mtIndex = String(mt.mtIndex);
+    s.deposit.settleTxId = settle.txId;
+    s.deposit.mtIndex = mtIndex;
+    saveState(s);
+  }
 
-  evidence('s3-deposit', {
+  evidence(alreadySettled ? 's3-deposit-rederived' : 's3-deposit', {
     settleTxId: settle.txId, settleSeconds: seconds, settledUtc: nowUtc(),
-    claimedValue: String(settle.coin?.value), claimedColour: bytesToHex(settle.coin!.color),
+    reReadOnly: alreadySettled,
+    ...(alreadySettled ? { reReadWarning: 'a re-read is only meaningful while this step is still the last thing that happened; read the timestamps' } : {}),
+    ...(settle.coin ? {
+      claimedValue: String(settle.coin.value), claimedColour: bytesToHex(settle.coin.color),
+    } : {}),
     expectedColour: bytesToHex(colour), entryMatchesCoin: settle.entryMatchesCoin,
-    mtIndex: String(mt.mtIndex),
-    vaultEvmUsdc: { before: String(vaultBefore), after: String(vaultAfter) },
+    mtIndex,
+    vaultEvmUsdc: {
+      beforeTheWholeDeposit: String(vaultBaseline),
+      beforeTheSettle: String(vaultBefore), after: String(vaultAfter),
+      delta: String(vaultAfter - vaultBaseline),
+      note: 'the delta that matters is measured from BEFORE the relay: the ERC20 transfer executes there, not at the settle',
+    },
     depositAddressUsdcAfter: String(depositAfter),
     accountLedger: { inboxCount: String(l.inbox_count), round: String(l.round), authNonce: String(l.auth_nonce) },
     inboxWalk: { entries: walk.length, decryptedValue: found ? String(found.value) : null },
@@ -1439,6 +1504,7 @@ async function s7Start(): Promise<void> {
   const { provider } = evmChain();
   const vaultNonce = BigInt(await provider.getTransactionCount(s.vault!.vaultEvmAddress, 'latest'));
   const destBefore = await erc20Balance(provider, destination);
+  const vaultErc20Before = await erc20Balance(provider, s.vault!.vaultEvmAddress);
   provider.destroy();
   console.log(`  destination ${destination}; the vault's Ethereum nonce ${vaultNonce}`);
 
@@ -1456,7 +1522,10 @@ async function s7Start(): Promise<void> {
   const seconds = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`  start ${start.txId} request ${start.requestId} (${seconds}s); change ${String(start.change?.value ?? 'none')}`);
 
-  s.withdraw = { requestId: start.requestId, startTxId: start.txId };
+  s.withdraw = {
+    requestId: start.requestId, startTxId: start.txId, destination,
+    destinationErc20Before: String(destBefore), vaultErc20Before: String(vaultErc20Before),
+  };
   await forgetCoin(s, account, colour);
   if (start.change) {
     const c = (await candidateIndices(start.txId).catch(() => ({ candidates: [] as bigint[] }))).candidates;
@@ -1476,22 +1545,36 @@ async function s7Start(): Promise<void> {
 async function s7Complete(): Promise<void> {
   const s = loadState();
   if (!s.withdraw?.relay) throw new Error('run s7-relay first');
-  step('S7.4  Midnight tx 2: bridge_withdraw_complete');
-  const destination = withdrawDestination(s);
+  if (s.withdraw.settleTxId && !REDERIVE) {
+    console.log(`already settled: ${s.withdraw.settleTxId} (PRS_REDERIVE=1 re-reads the chain into a separate file)`);
+    return;
+  }
+  const alreadySettled = Boolean(s.withdraw.settleTxId);
+  step(alreadySettled
+    ? 'S7.4  already settled — re-reading the chain and re-deriving the verdict (nothing is submitted)'
+    : 'S7.4  Midnight tx 2: bridge_withdraw_complete');
+  const destination = s.withdraw.destination ?? withdrawDestination(s);
   const w = await wallet(WALLET1_SEED_VAR, 'wallet 1');
   const providers = await createProviders(w);
   const { account, bridge } = await connectAccount(s, providers);
   const relayResult = deserialiseRelay(s.withdraw.relay);
 
   const { provider } = evmChain();
+  // The BASELINE is what the chain held before the relayer broadcast anything, recorded by
+  // `s7-start`. Reading it here instead measures the settle's own window, in which nothing
+  // moves on the EVM side at all — the `transfer` executed during the relay.
+  const destBaseline = BigInt(s.withdraw.destinationErc20Before ?? '0');
+  const vaultBaseline = BigInt(s.withdraw.vaultErc20Before ?? '0');
   const destBefore = await erc20Balance(provider, destination);
   const vaultBefore = await erc20Balance(provider, s.vault!.vaultEvmAddress);
 
   const t0 = Date.now();
-  const settle = relayResult.kind === 'never-executed'
-    ? await bridge.refundWithdraw(s.withdraw.requestId!, relayResult, await bridge.plannedCoin('withdraw', s.withdraw.requestId!, randomNonce()))
-    : await bridge.completeWithdraw(s.withdraw.requestId!, relayResult);
-  const seconds = ((Date.now() - t0) / 1000).toFixed(1);
+  const settle = alreadySettled
+    ? { txId: s.withdraw.settleTxId!, coin: null as any, entryMatchesCoin: true }
+    : (relayResult.kind === 'never-executed'
+      ? await bridge.refundWithdraw(s.withdraw.requestId!, relayResult, await bridge.plannedCoin('withdraw', s.withdraw.requestId!, randomNonce()))
+      : await bridge.completeWithdraw(s.withdraw.requestId!, relayResult));
+  const seconds = alreadySettled ? '0.0' : ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`  settle ${settle.txId} (${seconds}s)`);
 
   const destAfter = await erc20Balance(provider, destination);
@@ -1501,8 +1584,12 @@ async function s7Complete(): Promise<void> {
 
   const successful = relayResult.kind === 'success';
   const ok1 = check(!successful || settle.coin === null, 'a successful withdrawal mints nothing back');
-  const ok2 = check(!successful || destAfter - destBefore === TEST3_AMOUNT,
-    'the Sepolia destination received exactly the withdrawn amount');
+  const ok2 = check(!successful || destAfter - destBaseline === TEST3_AMOUNT,
+    `the ${EVM_CHAIN_LABEL} destination received exactly the withdrawn amount (against the pre-relay baseline)`);
+  const ok2b = check(!successful || vaultBaseline - vaultAfter === TEST3_AMOUNT,
+    "the vault's own Ethereum account is down by exactly the withdrawn amount");
+  const ok2c = check(!successful || destAfter - destBefore === 0n,
+    'and nothing moved on the EVM side during the settle itself — the transfer executed at the relay');
   if (settle.coin) {
     const cands = (await candidateIndices(settle.txId).catch(() => ({ candidates: [] as bigint[] }))).candidates;
     const mt = await mtIndexForSingleOutput(settle.txId).catch(async () => ({ mtIndex: cands[0] ?? 0n, position: {} }));
@@ -1511,14 +1598,25 @@ async function s7Complete(): Promise<void> {
   s.withdraw.settleTxId = settle.txId;
   saveState(s);
 
-  evidence('s7-withdraw', {
+  evidence(alreadySettled ? 's7-withdraw-rederived' : 's7-withdraw', {
     settleTxId: settle.txId, settleSeconds: seconds, settledUtc: nowUtc(),
+    reReadOnly: alreadySettled,
+    ...(alreadySettled ? { reReadWarning: 'a re-read is only meaningful while this step is still the last thing that happened; read the timestamps' } : {}),
     branch: relayResult.kind,
-    destinationUsdc: { before: String(destBefore), after: String(destAfter), delta: String(destAfter - destBefore) },
-    vaultEvmUsdc: { before: String(vaultBefore), after: String(vaultAfter) },
+    destinationUsdc: {
+      beforeTheWholeWithdrawal: String(destBaseline),
+      beforeTheSettle: String(destBefore), after: String(destAfter),
+      delta: String(destAfter - destBaseline),
+      note: 'the delta that matters is measured from BEFORE the relay: the ERC20 transfer executes there, not at the settle',
+    },
+    vaultEvmUsdc: {
+      beforeTheWholeWithdrawal: String(vaultBaseline),
+      beforeTheSettle: String(vaultBefore), after: String(vaultAfter),
+      delta: String(vaultAfter - vaultBaseline),
+    },
     refundedCoin: settle.coin ? { value: String(settle.coin.value), colour: bytesToHex(settle.coin.color) } : null,
     accountLedger: { inboxCount: String(l.inbox_count), round: String(l.round), authNonce: String(l.auth_nonce) },
-    allChecksPassed: ok1 && ok2,
+    allChecksPassed: ok1 && ok2 && ok2b && ok2c,
   });
 }
 
@@ -1619,7 +1717,7 @@ async function s8(): Promise<void> {
     P(`| 4. attested | ${u(s3e.relay?.kind)} after ${u(s3e.relay?.waitedSeconds)}s |`);
     P(`| 5. Midnight tx 2 \`bridge_deposit_complete\` | \`${u(s3e.settleTxId)}\` (${u(s3e.settleSeconds)}s) |`);
     P(`| coin claimed | ${tok(s3e.claimedValue)} of colour \`${u(s3e.claimedColour).slice(0, 16)}…\`; matches its inbox entry: ${u(s3e.entryMatchesCoin)} |`);
-    P(`| vault's EVM balance | ${tok(s3e.vaultEvmUsdc?.before)} → ${tok(s3e.vaultEvmUsdc?.after)} |`);
+    P(`| vault's EVM balance | ${tok(s3e.vaultEvmUsdc?.beforeTheWholeDeposit)} → ${tok(s3e.vaultEvmUsdc?.after)} (measured from before the relay) |`);
     P(`| deposit address after | ${tok(s3e.depositAddressUsdcAfter)} |`);
     P(`| 6. inbox walk | ${u(s3e.inboxWalk?.entries)} entr${s3e.inboxWalk?.entries === 1 ? 'y' : 'ies'}, decrypts to ${tok(s3e.inboxWalk?.decryptedValue)} |`);
     P(`| all checks green | ${u(s3e.allChecksPassed)} |`);
@@ -1680,10 +1778,61 @@ async function s8(): Promise<void> {
     P(`| 3. EVM tx | \`${u(s7e.relay?.evmTxHash)}\` status ${u(s7e.relay?.evmStatus)} |`);
     P(`| 3. attested | ${u(s7e.relay?.kind)} after ${u(s7e.relay?.waitedSeconds)}s |`);
     P(`| 4. Midnight tx 2 | \`${u(s7e.settleTxId)}\` (${u(s7e.settleSeconds)}s), branch ${u(s7e.branch)} |`);
-    P(`| 5. destination's token balance | ${tok(s7e.destinationUsdc?.before)} → ${tok(s7e.destinationUsdc?.after)} (**+${tok(s7e.destinationUsdc?.delta)}**) |`);
-    P(`| the vault's EVM balance | ${tok(s7e.vaultEvmUsdc?.before)} → ${tok(s7e.vaultEvmUsdc?.after)} |`);
+    P(`| 5. destination's token balance | ${tok(s7e.destinationUsdc?.beforeTheWholeWithdrawal)} → ${tok(s7e.destinationUsdc?.after)} (**+${tok(s7e.destinationUsdc?.delta)}**) |`);
+    P(`| the vault's EVM balance | ${tok(s7e.vaultEvmUsdc?.beforeTheWholeWithdrawal)} → ${tok(s7e.vaultEvmUsdc?.after)} |`);
+    P(`| | the deltas are measured from BEFORE the relay: the ERC20 \`transfer\` executes there, not at the settle |`);
     P(`| all checks green | ${u(s7e.allChecksPassed)} |`);
   }
+  P();
+  P(`## Where everything ended up`);
+  P();
+  if (s.vault && s.account) {
+    const { provider } = evmChain();
+    P(`| Holder | ETH | token |`);
+    P(`|---|---|---|`);
+    for (const [label, addr] of [
+      ["the vault's own Ethereum account", s.vault.vaultEvmAddress],
+      ["the account's deposit address", depositAddressOf(s)],
+      ['the destination / funder', withdrawDestination(s)],
+    ] as [string, string][]) {
+      P(`| ${label} \`${addr}\` | ${ethers.formatEther(await provider.getBalance(addr))} | ${tok(await erc20Balance(provider, addr))} |`);
+    }
+    provider.destroy();
+    P();
+    P(`On the shielded side: wallet 1 holds the 0.1 S4 spent to it, the account's inbox`);
+    P(`describes the 0.65 change coin S5 left behind (displaced from the single-valued`);
+    P(`\`held_coin\` store by S6's deposit, as S6 records), and S7 consumed the 0.25 coin`);
+    P(`whole, which is why the account's store is empty at the end.`);
+  }
+  P();
+  P(`## What this rehearsal found`);
+  P();
+  P(`Three defects, all in the DRIVER and the client rather than in the contracts, and all`);
+  P(`of them ones the stagenet run would have hit too. They are why a rehearsal was worth`);
+  P(`doing rather than waiting for Sig Network.`);
+  P();
+  P(`1. **The third-party payment path bound the transaction before balancing.**`);
+  P(`   \`withdrawShieldedToWallet\` — the Q42 path, the one that maps a recipient's`);
+  P(`   encryption key so the coin it pays is visible to them — called \`proven.bind()\``);
+  P(`   before handing the transaction to the wallet, and the wallet balances through`);
+  P(`   \`balanceUnboundTransaction\`. Every call failed with \`Intent at segment 48374 is`);
+  P(`   already bound\` AFTER a successful proof, which reads exactly like an unsatisfiable`);
+  P(`   witness and sent the caller's mt_index retry loop through every candidate for`);
+  P(`   nothing. It had been implemented in PR-C and exercised offline only. Fixed.`);
+  P(`2. **Both settles compared their balances against the wrong baseline.** The ERC20`);
+  P(`   transfer executes during the RELAY, one command before the settle, so the settle's`);
+  P(`   own before/after window shows nothing moving — and the withdraw's check therefore`);
+  P(`   failed a completely correct withdrawal. The deposit's check had an \`|| after >=`);
+  P(`   amount\` escape that hid the same flaw and would pass vacuously on a vault that has`);
+  P(`   ever held anything else, which on stagenet it will have. Both now measure from the`);
+  P(`   balance recorded before the relay, and additionally assert that nothing moves during`);
+  P(`   the settle itself.`);
+  P(`3. **ethers' 250 ms read cache lies about \`anvil_setBalance\`.** It changes state with`);
+  P(`   no transaction and no new block, so a read-after-write inside the cache window`);
+  P(`   returns the pre-write balance: \`s7-gas\` funded the vault's account, the chain held`);
+  P(`   the funds, and the driver's own read-back said zero and failed its check. The local`);
+  P(`   profile now disables the cache; the public RPC keeps it, where it is rate-limit`);
+  P(`   protection.`);
   P();
   P(`## Evidence files`);
   P();
@@ -1693,7 +1842,6 @@ async function s8(): Promise<void> {
   mkdirSync(EVIDENCE_DIR, { recursive: true });
   writeFileSync(path.join(EVIDENCE_DIR, 'SUMMARY.md'), `${lines.join('\n')}\n`);
   console.log(`  summary → ${path.join(EVIDENCE_DIR, 'SUMMARY.md')}`);
-  void s;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
