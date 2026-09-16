@@ -61,7 +61,32 @@ import {
   type OfferCallArgs,
   type OpenSwapOffer,
 } from '../wallet/offer.js';
-import { takeOffer, assertFundable, OfferTermsMismatchError } from './swap-taker.js';
+import { takeOffer, type TakeResult } from './swap-taker.js';
+
+/**
+ * Settle with a bounded retry.
+ *
+ * A failure at the SETTLEMENT stage can be the taker's dust budget rather than anything about the
+ * offer: dust regenerates over time from registered NIGHT, so the same artefact becomes settleable a
+ * minute later. Every other stage is a real refusal and is returned immediately — retrying a
+ * fundability refusal would be retrying a correct decision.
+ */
+async function settleWithRetry(
+  taker: any,
+  envelope: string,
+  label: string,
+  attempts = 3,
+): Promise<TakeResult> {
+  let last: TakeResult | null = null;
+  for (let i = 0; i < attempts; i += 1) {
+    const res = await takeOffer(taker, ledgerLib, envelope, { label: i ? `${label}#${i + 1}` : label });
+    if (res.ok || res.stage !== 'settlement') return res;
+    last = res;
+    console.log(`  (settlement attempt ${i + 1} failed; waiting 30 s for the taker's dust to regenerate)`);
+    await sleep(30_000);
+  }
+  return last!;
+}
 
 // ── The ladder's operation set ───────────────────────────────────────────────
 //
@@ -204,7 +229,7 @@ async function proveOffer(
   compiled: any,
   coin: { nonce: Uint8Array; color: Uint8Array; value: bigint },
   candidates: bigint[],
-  opts: Parameters<typeof offerCall>[1] extends never ? never : Omit<Parameters<typeof offerCall>[1], 'coin'>,
+  opts: Omit<Parameters<typeof offerCall>[1], 'coin'>,
   recipientKeys?: { coinPublicKey: unknown; encryptionPublicKey: unknown },
 ): Promise<{ offer: OpenSwapOffer; call: OfferCallArgs; change: { nonce: Uint8Array; color: Uint8Array; value: bigint } | null; mtIndex: bigint; attempts: string[] }> {
   const attempts: string[] = [];
@@ -286,7 +311,7 @@ async function main(): Promise<void> {
   const activated = await waitForLedger(() => account.ledgerState(), 'the EVM device is live', (l) => l.booted);
   check(activated.device_count === 1n, 'the account has exactly one device, the Ethereum key');
   check(hex(activated.evm_domain_salt) === hex(evmDomainSalt), 'the sealed EIP-712 domain salt reads back');
-  account.registerDevice(device.pk);
+  account.registerDeviceOf(device);
   details.owner = device.addressHex;
 
   // ── funding ────────────────────────────────────────────────────────────────
@@ -345,7 +370,7 @@ async function main(): Promise<void> {
   console.log(`  envelope → ${openEnvelope}`);
 
   step('the taker — a wallet with no maker key — settles it in ONE transaction');
-  const take2 = await takeOffer(taker.walletCtx as any, ledgerLib, openEnvelope, { label: 'offer-2' });
+  const take2 = await settleWithRetry(taker.walletCtx as any, openEnvelope, 'offer-2');
   check(take2.ok, `the open offer settled — ${take2.txId ?? take2.error}`, take2.error);
   hashes.offer2Settlement = take2.txId ?? '';
   details.offer2Take = {
@@ -444,7 +469,7 @@ async function main(): Promise<void> {
     const namedEnvelope = writeEnvelope(
       path.join(evidenceDir, 'prb-offer1-named.offer'), named.offer.terms, named.offer.bytes,
     );
-    const take1 = await takeOffer(taker.walletCtx as any, ledgerLib, namedEnvelope, { label: 'offer-1' });
+    const take1 = await settleWithRetry(taker.walletCtx as any, namedEnvelope, 'offer-1');
     check(take1.ok, `the named offer settled — ${take1.txId ?? take1.error}`, take1.error);
     hashes.offer1Settlement = take1.txId ?? '';
     details.offer1Take = { stage: take1.stage, txId: take1.txId, fundability: take1.fundability, merged: take1.merged };
