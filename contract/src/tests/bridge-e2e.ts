@@ -109,8 +109,14 @@ function compose(...args: string[]): string {
 }
 
 /** A witness-free contract (the vault, the singleton) deployed with the ACCOUNT package's
- *  providers, so one wallet and one proof provider serve the whole run. */
-async function deployWitnessFree(providers: any, name: string, module: any, args: unknown[] = []) {
+ *  wallet, so one funding wallet serves the whole run.
+ *
+ *  Its own providers, though: the LEAF `zkConfigProvider` resolves verifier keys by circuit
+ *  id inside ONE bundle, so deploying the vault through the account's providers would look
+ *  `startDeposit` up in the account's directory and fail. The proof provider's registry is
+ *  the artefact ROOT either way, which is what makes the cross-contract call provable. */
+async function deployWitnessFree(walletCtx: any, name: string, module: any, args: unknown[] = []) {
+  const providers = await createProviders(walletCtx, path.join(managedPath, name));
   const compiled = CompiledContract.make(name, module.Contract).pipe(
     CompiledContract.withVacantWitnesses,
     CompiledContract.withCompiledFileAssets(path.join(managedPath, name)),
@@ -137,6 +143,38 @@ async function deployWitnessFree(providers: any, name: string, module: any, args
   };
 }
 
+/**
+ * Spend a coin whose commitment-tree position the client does not know for certain.
+ *
+ * A transaction with several shielded outputs gives the indexer's `startIndex…endIndex`
+ * range, and the client cannot tell which of them is its coin. Trying them is SAFE, and this
+ * is the MIP-0012 INV-5 argument: a wrong `mt_index` makes the witness unsatisfiable at
+ * PROVING time, so no transaction is ever built, nothing is submitted, and the device entry
+ * is not consumed — the attempt costs time and nothing else.
+ */
+async function withCandidateIndex<T>(
+  coin: { nonce: Uint8Array; color: Uint8Array; value: bigint },
+  candidates: readonly bigint[],
+  attempt: (evmNonce: bigint) => Promise<T>,
+  evmNonce: bigint,
+): Promise<T> {
+  let last: unknown;
+  for (const mtIndex of candidates.length > 0 ? candidates : [0n]) {
+    await bridgeRef!.captureCoin(coin as never, mtIndex);
+    try {
+      return await attempt(evmNonce);
+    } catch (e) {
+      last = e;
+      console.log(`  (mt_index ${String(mtIndex)} did not satisfy the witness; trying the next)`);
+    }
+  }
+  throw last ?? new Error('no candidate tree position satisfied the witness');
+}
+
+/** Set once `AccountBridge` exists; `withCandidateIndex` is declared above `main` for
+ *  readability and needs it. */
+let bridgeRef: AccountBridge | undefined;
+
 async function main(): Promise<void> {
   // ---- S1 — the EVM side ------------------------------------------------------------
   step('S1  anvil: compile and deploy the test tokens');
@@ -162,7 +200,7 @@ async function main(): Promise<void> {
   const mpcRootPublic = normaliseSecp256k1PublicKey(
     formatSecp256k1PublicKey(secp256k1PublicKeyOf(mpcRootSecret)),
   );
-  const singleton = await deployWitnessFree(providers, 'SignetSigner', SignetModule);
+  const singleton = await deployWitnessFree(walletCtx, 'SignetSigner', SignetModule);
   console.log(`singleton ${singleton.address}`);
 
   // 0x-prefixed: the responder validates MPC_ROOT_KEY as a hex PRIVATE KEY (PR-F's finding).
@@ -182,7 +220,7 @@ async function main(): Promise<void> {
   // ---- S3 — the vault ----------------------------------------------------------------
   step('S3  deploy and initialise the vault');
   const deployerSecret = new Uint8Array(randomBytes(32));
-  const vault = await deployWitnessFree(providers, 'Erc20Vault', VaultModule, [
+  const vault = await deployWitnessFree(walletCtx, 'Erc20Vault', VaultModule, [
     secp256k1PublicKeyOf(deployerSecret),
     { bytes: encodeContractAddress(singleton.address) },
   ]);
@@ -248,6 +286,7 @@ async function main(): Promise<void> {
     erc20,
     evmRpcUrl: EVM_RPC_URL,
   }, encKeys.publicKey);
+  bridgeRef = bridge;
   const colour = vaultColour(vault.address, erc20);
 
   // ---- S5 — the deposit round trip ---------------------------------------------------
@@ -306,24 +345,12 @@ async function main(): Promise<void> {
   const spend = await account.withdrawShielded(device, payee, colour, SPEND_AMOUNT);
   check(spend.change !== null, 'the spend left change with the account');
   console.log(`  spend ${spend.txId}, change ${String(spend.change?.value)}`);
-  const changeIndices = await candidateIndices(spend.txId);
-  // The change is one of the transaction's outputs; an incorrect qualified description
-  // yields an unsatisfiable witness at proving time, never a mis-spend (MIP-0012 INV-5).
-  let captured = false;
-  for (const candidate of changeIndices.candidates) {
-    await bridge.captureCoin(spend.change!, candidate);
-    try {
-      const probe = await account.ledgerState();
-      void probe;
-      captured = true;
-      break;
-    } catch { /* try the next candidate */ }
-  }
+  const spendCandidates = (await candidateIndices(spend.txId)).candidates;
   steps.s6 = {
     spendTxId: spend.txId,
     spentValue: SPEND_AMOUNT.toString(),
     changeValue: String(spend.change?.value),
-    capturedChange: captured,
+    mtIndexCandidates: spendCandidates.map(String),
   };
   save();
 
@@ -332,9 +359,8 @@ async function main(): Promise<void> {
   const destination = evm.deployerAddress;
   const destBefore = await tokenBalance(evm, erc20, destination);
   const vaultNonce = BigInt(await evm.provider.getTransactionCount(vaultEvmAddress, 'latest'));
-  const wStart = await bridge.startWithdraw(device, destination, WITHDRAW_AMOUNT, {
-    ...DEFAULT_EVM_GAS, nonce: vaultNonce,
-  });
+  const wStart = await withCandidateIndex(spend.change!, spendCandidates, (nonce) =>
+    bridge.startWithdraw(device, destination, WITHDRAW_AMOUNT, { ...DEFAULT_EVM_GAS, nonce }), vaultNonce);
   console.log(`  start ${wStart.txId} request ${wStart.requestId}`);
   const wRelay = await bridge.relay('withdraw', wStart.requestId, vaultEvmAddress);
   check(wRelay.kind === 'success', 'the MPC attested the ERC20 transfer out');
@@ -343,10 +369,9 @@ async function main(): Promise<void> {
   check(wSettle.coin === null, 'a successful withdrawal mints nothing back');
   check(destAfter - destBefore === WITHDRAW_AMOUNT, 'the destination received exactly the withdrawn amount');
   console.log(`  settle ${wSettle.txId}; destination +${String(destAfter - destBefore)}`);
-  if (wStart.change !== null) {
-    const wChange = await candidateIndices(wStart.txId);
-    await bridge.captureCoin(wStart.change, wChange.candidates[0]!);
-  }
+  const withdrawCandidates = wStart.change === null
+    ? []
+    : (await candidateIndices(wStart.txId)).candidates;
   steps.s7 = {
     requestId: wStart.requestId,
     startTxId: wStart.txId,
@@ -362,9 +387,9 @@ async function main(): Promise<void> {
   // ---- S8 — the refund path ------------------------------------------------------------
   step('S8  refund: a withdrawal whose Ethereum leg never executes');
   const vaultNonce2 = BigInt(await evm.provider.getTransactionCount(vaultEvmAddress, 'latest'));
-  const rStart = await bridge.startWithdraw(device, destination, REFUND_AMOUNT, {
-    ...DEFAULT_EVM_GAS, nonce: vaultNonce2,
-  });
+  if (wStart.change === null) throw new Error('S8 needs the change coin S7 left behind');
+  const rStart = await withCandidateIndex(wStart.change, withdrawCandidates, (nonce) =>
+    bridge.startWithdraw(device, destination, REFUND_AMOUNT, { ...DEFAULT_EVM_GAS, nonce }), vaultNonce2);
   // Never broadcast: the MPC observes nothing and attests the fixed 5-byte marker.
   const rRelay = await bridge.relay('withdraw', rStart.requestId, vaultEvmAddress, { doNotBroadcast: true });
   check(rRelay.kind === 'never-executed', 'the MPC attested the never-executed marker');
@@ -398,9 +423,13 @@ async function main(): Promise<void> {
     );
   });
   await mustFail('a tampered attestation', async () => {
-    const tampered = JSON.parse(JSON.stringify(relay.event, (_k, v) => v)) as any;
-    const sig = tampered?.signature ?? tampered;
-    if (sig?.s) sig.s = new Uint8Array(randomBytes(32));
+    // One byte of `s` flipped: the same event in every other respect, which is what makes
+    // it a test of the in-circuit verification rather than of the decoder.
+    const e = relay.event as any;
+    const tampered = {
+      ...e,
+      signature: { ...e.signature, s: Uint8Array.from(e.signature.s).map((b: number, i: number) => (i === 0 ? b ^ 0x01 : b)) },
+    };
     return account.callTx.bridge_deposit_complete(
       hexToBytes(start.requestId), tampered, relay.serializedOutput, randomNonce(), new Uint8Array(192),
     );
