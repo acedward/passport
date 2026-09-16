@@ -1,6 +1,6 @@
 # The client API, and what the AA console needs from it
 
-Status: PR-C/C0, 2026-09-16. Project 00034 (`plans/00034-sub-c-client.md`), spec FR-011, FR-024,
+Status: PR-C, 2026-09-16 (written in C0; the entry points and the measurements folded in after C1, C2 and C5). Project 00034 (`plans/00034-sub-c-client.md`), spec FR-011, FR-024,
 SC-006.
 
 This document is the contract between **this package's TypeScript client** (`contract/src/wallet/*`,
@@ -25,7 +25,8 @@ by those sub-plans and is integrated here, not written here.
 
 ## 1. The import surface
 
-One package, one entry point (`src/index.ts`, published through `package.json#exports`):
+One package. The names below come from `src/index.ts`; the table underneath says which subpath a
+consumer actually imports them from:
 
 ```ts
 import {
@@ -51,10 +52,19 @@ import {
 } from 'midnight-account-custody';
 ```
 
-`src/node/*` is a **separate entry point** (`midnight-account-custody/node`): it imports `ws`, the
-wallet SDK and `node:fs`, and a browser must not pull it in. Everything under `src/wallet/` except
-`inbox.ts` and `offer.ts`'s envelope file helpers runs unchanged in a browser
-(`src/wallet/deposit.ts` (C1) is the portable inbox codec: `@noble` + WebCrypto, no `node:crypto`).
+The `exports` map, and why there is more than one entry point (measured in C2, not assumed):
+
+| subpath | what it is |
+|---|---|
+| `.` | the full surface. **A bundler resolves it to `./browser`** through the `browser` condition |
+| `./browser` | the browser-safe surface. The full one re-exports Passport's `inbox.ts` and `discovery.ts`, which import `node:crypto` at module scope — and a bundler's browser shim for that module **throws on the first property access**, so a page cannot import them at all. The browser entry replaces them with `sealEntryPortable` / `openEntryPortable` / `inboxWalkPortable` (`@noble` + WebCrypto) |
+| `./node` | the wallet, the providers and the network configuration (wallet SDK, `ws`, `node:fs`) |
+| `./node/roster` | the account-address and S11-counter JSON store |
+| `./offer` | PR-B's open-swap builder and the 00006 envelope |
+| *(no `./bridge` yet)* | PR-G's `src/wallet/bridge.ts` works from source but cannot be loaded from `dist`: the vault's SDK shim imports `@sig-net/midnight` by relative FILE path (Q25), which does not survive a build. Recorded as **Q47** |
+
+`npm run test:client-offline` walks the import graph of both entry points on every run, so the split
+cannot rot silently.
 
 ---
 
@@ -346,4 +356,19 @@ Recorded in `plans/00034-passport-evm-account-zswap-questions.md`:
   `additionalCoinEncPublicKeyMappings`, which `callTx` cannot carry, so it needs the manual
   build/prove/balance/submit path.
 - **Q43** — where the browser smoke's **fee payment** comes from (a browser has no Midnight wallet
-  in this package).
+  in this package). Resolved in C2: the page does every client-side step, a sidecar pays and submits.
+- **Q47** — the bridge client cannot be published from `dist/` while the vault's SDK shim imports by
+  file path (found in C5, owned by PR-F/PR-G).
+
+## 6. What C2 measured
+
+The page in `contract/browser-smoke/` ran register → deposit → withdraw against a localnet under
+headless Chromium, and the numbers are the ones an integrator needs:
+
+- **three wallet calls for the whole session**: `eth_requestAccounts`, one `personal_sign` (the
+  device's enrolment, once in its life), one `eth_signTypedData_v4` (the withdrawal);
+- **register is two transactions and ~62 s** of proving on this host, and the account id — the
+  contract address — exists only afterwards;
+- deposit ~65 s, `withdraw_shielded_with_evm` ~55 s;
+- **in-worker WASM proving was not attempted**: the proving payload carries the prover key, ~570 MB
+  for a k=18 circuit on this arm, so a page would fetch and upload that per proof.

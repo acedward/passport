@@ -22,23 +22,34 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const managed = path.join(root, 'contracts', 'managed');
-const target = path.join(root, 'dist', 'contracts', 'managed');
 
-if (!existsSync(managed)) {
-  console.warn(`! ${path.relative(root, managed)} does not exist — run \`npm run compile\` before packaging`);
+// Every `managed/` tree the emitted code can import: this package's own, and
+// each sibling contract package's (the ERC20 vault fork keeps its artefacts
+// beside its own sources, and `src/wallet/bridge.ts` imports them).
+const managedRoots = [
+  path.join(root, 'contracts', 'managed'),
+  ...readdirSync(path.join(root, 'contracts'), { withFileTypes: true })
+    .filter((e) => e.isDirectory() && e.name !== 'managed')
+    .map((e) => path.join(root, 'contracts', e.name, 'managed'))
+    .filter((p) => existsSync(p)),
+];
+
+if (!existsSync(managedRoots[0])) {
+  console.warn(`! ${path.relative(root, managedRoots[0])} does not exist — run \`npm run compile\` before packaging`);
   process.exit(0);
 }
 
 let copied = 0;
-for (const name of readdirSync(managed)) {
-  const from = path.join(managed, name, 'contract');
-  if (!existsSync(from)) continue;
-  const to = path.join(target, name, 'contract');
-  mkdirSync(to, { recursive: true });
-  cpSync(from, to, { recursive: true });
-  console.log(`  ✓ ${name}/contract → ${path.relative(root, to)}`);
-  copied += 1;
+for (const managed of managedRoots) {
+  for (const name of readdirSync(managed)) {
+    const from = path.join(managed, name, 'contract');
+    if (!existsSync(from)) continue;
+    const to = path.join(root, 'dist', path.relative(root, managed), name, 'contract');
+    mkdirSync(to, { recursive: true });
+    cpSync(from, to, { recursive: true });
+    console.log(`  ✓ ${path.relative(root, from)} → ${path.relative(root, to)}`);
+    copied += 1;
+  }
 }
 
 if (copied === 0) {
