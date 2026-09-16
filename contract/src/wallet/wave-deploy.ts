@@ -140,6 +140,33 @@ const defaultSecondWaveArms = (arm: Arm): Arm[] => {
  */
 export const EVM_GATED_IN_WAVE_ONE = 5;
 
+/**
+ * The split this produces for an EVM-only account, spelled out because it is
+ * what an operator has to reason about between the two transactions (the
+ * account is live and usable after wave 1, with two operations missing):
+ *
+ *   wave 1 (8 operations, the measured ceiling)
+ *     deposit_unshielded, deposit_shielded          — permissionless, every account
+ *     activate_initial_device_with_evm              — the bootstrap
+ *     withdraw_unshielded_with_evm
+ *     append_inbox_with_evm
+ *     withdraw_shielded_with_evm
+ *     withdraw_shielded_to_contract_with_evm
+ *     rotate_enc_key_with_evm
+ *
+ *   wave 2 (the maintenance update that also retires the authority)
+ *     add_device_with_evm
+ *     remove_device_with_evm
+ *
+ * The order is `GATED_BASES`, and the two that overflow are the device-lifecycle
+ * pair on purpose: everything an account needs to receive, spend and re-key is
+ * live after wave 1, and only enrolling or removing a device waits for wave 2.
+ * A deployer that wants another split names `waveOneCircuits`/`waveTwoCircuits`
+ * explicitly; a deployer that wants a second arm on the account passes
+ * `armsInWaveTwo` and the update carries both sets (measured: an evm-born
+ * account with the jubjub arm added in wave 2 inserts 10 verifier keys).
+ */
+
 /** The circuits each wave carries when the caller names none. */
 export function defaultWaves(firstArm: Arm): { waveOne: string[]; waveTwo: string[] } {
   if (firstArm !== 'evm') {

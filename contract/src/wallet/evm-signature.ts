@@ -121,6 +121,20 @@ export function ethereumAddress(point: EvmPoint): Uint8Array {
   return keccak(concat(x, y)).slice(12);
 }
 
+/** The affine point behind an uncompressed SEC1 encoding (`0x04 || x || y`),
+ *  which is the form an ethers wallet publishes as `signingKey.publicKey` and
+ *  the only form that carries both coordinates without a decompression step. */
+export function pointFromUncompressed(encoded: Uint8Array): EvmPoint {
+  if (encoded.length !== 65 || encoded[0] !== 0x04) {
+    throw new RangeError('an uncompressed public key is 65 bytes starting with 0x04');
+  }
+  return {
+    x: beScalar(encoded.slice(1, 33)),
+    y: beScalar(encoded.slice(33, 65)),
+    identity: false,
+  };
+}
+
 export function publicPointForPrivateKey(privateKey: Uint8Array): EvmPoint {
   const encoded = secp256k1.getPublicKey(privateKey, false);
   return {

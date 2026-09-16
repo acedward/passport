@@ -1,6 +1,7 @@
 // Device signers — one per authorisation arm of the contract (see the
 // contract header: arm `jubjub` is the normative MIP-0013 scheme, arm
-// `k256` the interim ECDSA stand-in for the planned secp256r1 passkey arm).
+// `k256` the interim ECDSA stand-in for the planned secp256r1 passkey arm,
+// arm `evm` an ordinary Ethereum EOA signing EIP-712 typed data).
 //
 // Common to both arms: a device holds an independent keypair (sk, pk =
 // sk·G) on its arm's curve; keys are never derived from one another or
@@ -28,6 +29,19 @@
 // preimage either. The signer emits low-S signatures (the @noble/curves
 // default); the circuit deliberately accepts both S forms (see the
 // malleability note in the contract header).
+//
+// Arm evm — the same curve and the same in-circuit verify, but the key lives
+// in a wallet the user already has and the message is EIP-712 typed data
+// (`docs/AUTH-EIP712-PASSPORT-EVM-V1.md`). The device does NOT sign the
+// challenge: the challenge is one field of a per-operation EIP-712 struct, and
+// the wallet signs keccak256(0x1901 || domainSeparator || structHash). The
+// readable action fields let the wallet show the operation; the challenge binds
+// the same arguments a second time together with the witness values the wallet
+// cannot see (AUTH-10). `EvmDevice` below is the whole client half of that arm:
+// it builds the typed data from the frozen type strings, hands it to a backend
+// (an ethers wallet in tests, an EIP-1193 provider in a browser, a raw key in
+// offline checks), normalises S, and learns the device's public point by
+// recovering it from the device's own first signature.
 
 import { randomBytes } from 'node:crypto';
 import { secp256k1 } from '@noble/curves/secp256k1.js';
@@ -38,6 +52,29 @@ import {
   type Secp256k1Point,
   type QualifiedCoin,
 } from './contract.js';
+import {
+  buildTypedData,
+  computeDigest,
+  concat,
+  fromHex,
+  keccak,
+  toHex,
+  utf8,
+  type EvmMessage,
+  type EvmOp,
+  type TypedDataV4,
+} from './eip712.js';
+import {
+  ethereumAddress,
+  lowS,
+  parseSignature,
+  pointFromUncompressed,
+  publicPointForPrivateKey,
+  recoverPoint,
+  serializeSignature,
+  signDigest,
+  type EvmPoint,
+} from './evm-signature.js';
 
 /** The authorisation arms the contract exports circuits for. */
 export type Arm = 'jubjub' | 'k256' | 'evm';
@@ -47,6 +84,10 @@ export interface CallContext {
   contractAddress: Uint8Array;
   /** The auth_nonce the call will execute against (pre-increment, AUTH-2). */
   authNonce: bigint;
+  /** The account's sealed `evm_domain_salt`, read from ledger state. Only the
+   *  `evm` arm needs it — it is the EIP-712 domain's `salt` field — so the
+   *  other two arms leave it unset. */
+  evmDomainSalt?: Uint8Array;
 }
 
 const addr = (ctx: CallContext) => ({ bytes: ctx.contractAddress });
@@ -341,24 +382,526 @@ export const k256Challenges = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Arm evm
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The authorising material an evm-arm gated circuit consumes:
+ *  `(…args, pk, use_counter, sig)`. There is no envelope id — an EIP-712
+ *  digest is already a complete, unambiguous envelope, so this arm has nothing
+ *  to equivocate over (byte contract, "Signature transport"). */
+export interface EvmAuthorisation {
+  arm: 'evm';
+  pk: Secp256k1Point;
+  /** The device's current use counter — the rolling-entry position
+   *  (AUTH-9). Not part of the challenge; bound by entry consumption. */
+  use_counter: bigint;
+  sig: EcdsaSignature;
+  /** Exactly what the wallet was shown and signed, kept on the authorisation
+   *  so a conformance test, a relayer or an audit log can replay the approval
+   *  rather than reconstruct it. Neither field is a circuit argument. */
+  typedData: TypedDataV4;
+  digest: Uint8Array;
+}
+
+/** What a backend is asked to sign. */
+export interface EvmSignRequest {
+  /** The exact JSON `eth_signTypedData_v4` takes. */
+  typedData: TypedDataV4;
+  /** The digest OUR codec derives from that typed data. A wallet backend
+   *  ignores it and computes its own from `typedData`; a raw-key backend signs
+   *  it directly. If the two ever disagreed, the point recovered from the
+   *  returned signature would be a different point whose Ethereum address is
+   *  not the device's, and `EvmDevice.sign` throws there — so a codec drift
+   *  cannot silently produce a call the circuit will refuse. */
+  digest: Uint8Array;
+}
+
+/** Where an `evm` device's key actually lives. Three are supplied below: a raw
+ *  private key (offline checks), an ethers-like wallet (suites) and an EIP-1193
+ *  provider (browser). Anything else that can sign typed data plugs in here. */
+export interface EvmSigningBackend {
+  /** The 20-byte address this backend signs as — the device's identity. */
+  readonly address: Uint8Array;
+  /** Sign EIP-712 typed data; returns the 65-byte `r || s || v` wallet form. */
+  signTypedData(request: EvmSignRequest): Promise<Uint8Array>;
+  /** The public point, when the backend can produce it without a signature
+   *  (a raw key, or an ethers wallet, which publishes its verifying key). */
+  publicPoint?(): Promise<EvmPoint> | EvmPoint;
+  /** EIP-191 `personal_sign`. Used ONLY to learn the public point of a device
+   *  that has never authorised anything — see `EvmDevice.enrol`. */
+  personalSign?(message: string): Promise<Uint8Array>;
+}
+
+/** `keccak256("\x19Ethereum Signed Message:\n" || len || message)` — the EIP-191
+ *  digest `personal_sign` covers. It is NOT part of the byte contract: no
+ *  circuit ever verifies it, and a signature over it authorises nothing. */
+export function eip191Digest(message: string): Uint8Array {
+  const body = utf8(message);
+  return keccak(concat(utf8(`Ethereum Signed Message:\n${body.length}`), body));
+}
+
+/** A test/offline backend holding the key in memory. */
+export function privateKeyBackend(privateKey: Uint8Array): EvmSigningBackend {
+  const point = publicPointForPrivateKey(privateKey);
+  return {
+    address: ethereumAddress(point),
+    async signTypedData({ digest }) {
+      return serializeSignature(signDigest(privateKey, digest));
+    },
+    publicPoint: () => point,
+    async personalSign(message) {
+      return serializeSignature(signDigest(privateKey, eip191Digest(message)));
+    },
+  };
+}
+
+/** The shape of an ethers `Wallet` this client uses. Duck-typed on purpose:
+ *  ethers stays a devDependency and never enters the library's import graph. */
+export interface EthersLikeWallet {
+  address: string;
+  signTypedData(domain: unknown, types: unknown, value: unknown): Promise<string>;
+  signMessage?(message: string): Promise<string>;
+  signingKey?: { publicKey: string };
+}
+
+export function ethersWalletBackend(wallet: EthersLikeWallet): EvmSigningBackend {
+  const publicKey = wallet.signingKey?.publicKey;
+  return {
+    address: fromHex(wallet.address.toLowerCase(), 20),
+    async signTypedData({ typedData }) {
+      // ethers derives the domain type from which domain fields are present
+      // and rejects an explicit EIP712Domain entry.
+      const { EIP712Domain: _domain, ...types } = typedData.types as Record<string, unknown>;
+      const signature = await wallet.signTypedData(typedData.domain, types, typedData.message);
+      return fromHex(signature.toLowerCase(), 65);
+    },
+    publicPoint: publicKey
+      ? () => pointFromUncompressed(fromHex(publicKey.toLowerCase(), 65))
+      : undefined,
+    personalSign: wallet.signMessage
+      ? async (message) => fromHex((await wallet.signMessage!(message)).toLowerCase(), 65)
+      : undefined,
+  };
+}
+
+/** The browser wallet surface (MetaMask and every EIP-1193 provider). */
+export interface Eip1193Provider {
+  request(args: { method: string; params?: unknown[] }): Promise<unknown>;
+}
+
+export function eip1193Backend(
+  provider: Eip1193Provider,
+  address: Uint8Array | string,
+): EvmSigningBackend {
+  const bytes = typeof address === 'string' ? fromHex(address.toLowerCase(), 20) : Uint8Array.from(address);
+  const account = toHex(bytes);
+  return {
+    address: bytes,
+    async signTypedData({ typedData }) {
+      // The v4 method takes the typed data as a STRING; MetaMask rejects an
+      // object. `EIP712Domain` stays in `types` here — the RPC requires it.
+      const signature = await provider.request({
+        method: 'eth_signTypedData_v4',
+        params: [account, JSON.stringify(typedData)],
+      });
+      return fromHex(String(signature).toLowerCase(), 65);
+    },
+    async personalSign(message) {
+      const signature = await provider.request({
+        method: 'personal_sign',
+        params: [toHex(utf8(message)), account],
+      });
+      return fromHex(String(signature).toLowerCase(), 65);
+    },
+  };
+}
+
+/**
+ * An `evm` device: an ordinary Ethereum EOA enrolled on a Passport account.
+ *
+ * The identity is the 20-byte address, not the curve point (FR-003), and every
+ * derivation this client performs — the device entry, the boot commitment, the
+ * challenge core, the EIP-712 `owner` field — takes the address. The POINT is
+ * needed exactly once per call, as the `pk` circuit argument, and by then the
+ * device has just produced a signature over a digest this client computed, so
+ * the point is RECOVERED from that signature and cached. A browser wallet never
+ * has to expose a public key, and no extra prompt is needed for a call.
+ *
+ * The one moment that order does not cover is `activate_initial_device_with_evm`,
+ * which is permissionless: it carries a point and no signature, so a device that
+ * has never signed anything must reveal its point some other way. `enrol()` does
+ * that — from the backend directly where it can (raw key, ethers wallet), else
+ * with one EIP-191 `personal_sign` whose text says plainly that it authorises
+ * nothing. See the questions file (Q29) for why that is one prompt and not a
+ * new EIP-712 type.
+ */
+export class EvmDevice {
+  readonly arm = 'evm' as const;
+  /** The device's 20-byte Ethereum address — its enrolled identity. */
+  readonly address: Uint8Array;
+  private point: Secp256k1Point | null = null;
+
+  constructor(readonly backend: EvmSigningBackend) {
+    this.address = Uint8Array.from(backend.address);
+    if (this.address.length !== 20) {
+      throw new RangeError(`an evm device address is 20 bytes, got ${this.address.length}`);
+    }
+  }
+
+  static fromBackend(backend: EvmSigningBackend): EvmDevice {
+    return new EvmDevice(backend);
+  }
+
+  /** A device holding a raw key — offline checks and suites. */
+  static fromPrivateKey(privateKey: Uint8Array): EvmDevice {
+    return new EvmDevice(privateKeyBackend(privateKey));
+  }
+
+  /** A fresh in-memory device (a uniform scalar in [1, n), as the k256 arm). */
+  static generate(): EvmDevice {
+    return EvmDevice.fromPrivateKey(scalarToBytesBE(randomSecp256k1Scalar()));
+  }
+
+  /** A device behind an ethers wallet. */
+  static fromEthersWallet(wallet: EthersLikeWallet): EvmDevice {
+    return new EvmDevice(ethersWalletBackend(wallet));
+  }
+
+  /** A device behind a browser wallet (`eth_signTypedData_v4`). */
+  static fromEip1193(provider: Eip1193Provider, address: Uint8Array | string): EvmDevice {
+    return new EvmDevice(eip1193Backend(provider, address));
+  }
+
+  get addressHex(): string {
+    return toHex(this.address);
+  }
+
+  /** The device's public point, once known. Throws before the device has
+   *  either signed once or been enrolled — which is a client-order bug, never
+   *  a wallet failure, so it fails loudly rather than prompting. */
+  get pk(): Secp256k1Point {
+    if (!this.point) {
+      throw new Error(
+        'this evm device\'s public point is not known yet: call `await device.enrol()` '
+        + '(one EIP-191 signature, or none at all for a backend that publishes its key), '
+        + 'or read it after the device\'s first authorisation',
+      );
+    }
+    return this.point;
+  }
+
+  /** The cached point, or null — for code that must not trigger the throw. */
+  get knownPublicPoint(): Secp256k1Point | null {
+    return this.point;
+  }
+
+  /** The text a device signs to reveal its public key. It names no operation,
+   *  carries no challenge and no nonce, and the contract never sees it. */
+  static enrolmentMessage(label = 'a Midnight Passport account'): string {
+    return (
+      'Midnight Passport: reveal this wallet\'s public key.\n'
+      + `Purpose: enrol this wallet as a device of ${label}.\n`
+      + 'This signature authorises nothing and moves no funds.'
+    );
+  }
+
+  /**
+   * Learn (and cache) the device's public point. Idempotent, and free for a
+   * backend that publishes its verifying key; otherwise one `personal_sign`.
+   * The recovered point is checked against the device's address, so a backend
+   * that signs as somebody else is caught here rather than on-chain.
+   */
+  async enrol(label?: string): Promise<Secp256k1Point> {
+    if (this.point) return this.point;
+    if (this.backend.publicPoint) {
+      return this.adopt(await this.backend.publicPoint(), 'the backend\'s published public key');
+    }
+    if (!this.backend.personalSign) {
+      throw new Error(
+        'this backend can neither publish its public key nor sign an EIP-191 message, '
+        + 'so the device cannot be activated before its first authorisation',
+      );
+    }
+    const message = EvmDevice.enrolmentMessage(label);
+    const signature = lowS(parseSignature(await this.backend.personalSign(message)));
+    return this.adopt(recoverPoint(eip191Digest(message), signature), 'the enrolment signature');
+  }
+
+  /** The device's rolling entry at a given account/epoch/counter (§3). Bound to
+   *  the ADDRESS, so it is computable before the point is known. */
+  entryAt(contractAddress: Uint8Array, epoch: bigint, counter: bigint): Uint8Array {
+    return pureCircuits.derive_device_entry_with_evm(
+      { bytes: contractAddress }, this.address, epoch, counter,
+    );
+  }
+
+  /** The MIP-0013 §3 boot commitment for this device's arm. */
+  bootCommitment(salt: Uint8Array): Uint8Array {
+    return pureCircuits.derive_boot_commitment_with_evm(salt, this.address);
+  }
+
+  /**
+   * Authorise one gated call: build the challenge, wrap it in the operation's
+   * EIP-712 struct, have the wallet sign the digest, normalise S, and recover
+   * the point the circuit will be handed.
+   *
+   * The client normalises to low-S so one call has one canonical wire form; the
+   * CONTRACT accepts both, and the consumed single-use entry — not a
+   * canonicality rule — is what makes the malleated twin inert (SIG-4).
+   */
+  async sign(ctx: CallContext, request: AuthRequest, useCounter: bigint): Promise<EvmAuthorisation> {
+    const salt = requireEvmDomainSalt(ctx);
+    const challenge = evmChallengeFor(ctx, this.address, request);
+    const { op, message } = evmTypedMessage(ctx, this.address, request, challenge);
+    const typedData = buildTypedData(ctx.contractAddress, salt, op, message);
+    const { digest } = computeDigest(ctx.contractAddress, salt, op, message);
+    const signature = lowS(parseSignature(await this.backend.signTypedData({ typedData, digest })));
+    const pk = this.adopt(recoverPoint(digest, signature), 'the authorisation signature');
+    return {
+      arm: 'evm',
+      pk,
+      use_counter: useCounter,
+      sig: { r: signature.r, s: signature.s },
+      typedData,
+      digest,
+    };
+  }
+
+  /** Accept a point as this device's, having checked it hashes to the enrolled
+   *  address — the client-side mirror of the seam's own membership check. */
+  private adopt(point: EvmPoint | Secp256k1Point, source: string): Secp256k1Point {
+    const candidate: EvmPoint = { x: point.x, y: point.y, identity: false };
+    const derived = toHex(ethereumAddress(candidate));
+    if (derived !== this.addressHex) {
+      throw new Error(
+        `${source} belongs to ${derived}, not to this device (${this.addressHex})`,
+      );
+    }
+    if (this.point && (this.point.x !== candidate.x || this.point.y !== candidate.y)) {
+      throw new Error('this device produced two different public points');
+    }
+    this.point = candidate;
+    return this.point;
+  }
+}
+
+// Per-circuit challenge cores, arm evm. Preimage:
+// [DST_CIRCUIT, self, address, ...args, ...witness_values, auth_nonce] — the
+// k256 arm's preimage with the key encoded as the device's 20-byte Ethereum
+// address, and the same AUTH-10 witness pinning. Recomputed through the
+// contract's own exported pure circuits, so wallet and circuit cannot disagree.
+//
+// This is NOT what the device signs on this arm: the challenge is one field of
+// the EIP-712 struct whose digest is signed (`evmTypedMessage` below).
+
+export const evmChallenges = {
+  withdrawUnshielded: (ctx: CallContext, address: Uint8Array, color: Uint8Array, amount: bigint, recipient: Uint8Array): Uint8Array =>
+    pureCircuits.challenge_withdraw_unshielded_with_evm(
+      addr(ctx), address, color, amount, { bytes: recipient }, ctx.authNonce,
+    ),
+
+  withdrawShielded: (ctx: CallContext, address: Uint8Array, recipient: Uint8Array, color: Uint8Array, amount: bigint, coin: QualifiedCoin): Uint8Array =>
+    pureCircuits.challenge_withdraw_shielded_with_evm(
+      addr(ctx), address, { bytes: recipient }, color, amount, coin, ctx.authNonce,
+    ),
+
+  withdrawShieldedToContract: (ctx: CallContext, address: Uint8Array, recipient: Uint8Array, color: Uint8Array, amount: bigint, coin: QualifiedCoin): Uint8Array =>
+    pureCircuits.challenge_withdraw_shielded_to_contract_with_evm(
+      addr(ctx), address, { bytes: recipient }, color, amount, coin, ctx.authNonce,
+    ),
+
+  appendInbox: (ctx: CallContext, address: Uint8Array, entry: Uint8Array): Uint8Array =>
+    pureCircuits.challenge_append_inbox_with_evm(addr(ctx), address, entry, ctx.authNonce),
+
+  rotateEncKey: (ctx: CallContext, address: Uint8Array, newKey: Uint8Array): Uint8Array =>
+    pureCircuits.challenge_rotate_enc_key_with_evm(addr(ctx), address, newKey, ctx.authNonce),
+
+  addDevice: (ctx: CallContext, address: Uint8Array, newEntry: Uint8Array): Uint8Array =>
+    pureCircuits.challenge_add_device_with_evm(addr(ctx), address, newEntry, ctx.authNonce),
+
+  removeDevice: (ctx: CallContext, address: Uint8Array, entry: Uint8Array): Uint8Array =>
+    pureCircuits.challenge_remove_device_with_evm(addr(ctx), address, entry, ctx.authNonce),
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Arm-generic surface
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type AnyDevice = JubjubDevice | K256Device;
-export type Authorisation = JubjubAuthorisation | K256Authorisation;
+export type AnyDevice = JubjubDevice | K256Device | EvmDevice;
+export type Authorisation = JubjubAuthorisation | K256Authorisation | EvmAuthorisation;
+
+/**
+ * One gated operation and its arguments, arm-independent.
+ *
+ * Every arm derives its own challenge from the SAME request, and the `evm` arm
+ * additionally derives its EIP-712 message from it, which is how the readable
+ * fields a wallet displays and the challenge the circuit binds are guaranteed
+ * to describe one call: they are two projections of one object, written once,
+ * a few lines apart.
+ */
+export type AuthRequest =
+  | { op: 'withdrawUnshielded'; color: Uint8Array; amount: bigint; recipient: Uint8Array }
+  | { op: 'withdrawShielded'; recipient: Uint8Array; color: Uint8Array; amount: bigint; coin: QualifiedCoin }
+  | { op: 'withdrawShieldedToContract'; recipient: Uint8Array; color: Uint8Array; amount: bigint; coin: QualifiedCoin }
+  | { op: 'appendInbox'; entry: Uint8Array }
+  | { op: 'rotateEncKey'; newKey: Uint8Array }
+  | { op: 'addDevice'; newEntry: Uint8Array }
+  | { op: 'removeDevice'; entry: Uint8Array };
+
+/** The jubjub arm's challenge builder for a request. */
+export function jubjubChallengeFor(ctx: CallContext, pk: JubjubPoint, r: AuthRequest): ChallengeBuilder {
+  switch (r.op) {
+    case 'withdrawUnshielded': return jubjubChallenges.withdrawUnshielded(ctx, pk, r.color, r.amount, r.recipient);
+    case 'withdrawShielded': return jubjubChallenges.withdrawShielded(ctx, pk, r.recipient, r.color, r.amount, r.coin);
+    case 'withdrawShieldedToContract': return jubjubChallenges.withdrawShieldedToContract(ctx, pk, r.recipient, r.color, r.amount, r.coin);
+    case 'appendInbox': return jubjubChallenges.appendInbox(ctx, pk, r.entry);
+    case 'rotateEncKey': return jubjubChallenges.rotateEncKey(ctx, pk, r.newKey);
+    case 'addDevice': return jubjubChallenges.addDevice(ctx, pk, r.newEntry);
+    case 'removeDevice': return jubjubChallenges.removeDevice(ctx, pk, r.entry);
+  }
+}
+
+/** The k256 arm's challenge for a request. */
+export function k256ChallengeFor(ctx: CallContext, pk: Secp256k1Point, r: AuthRequest): Uint8Array {
+  switch (r.op) {
+    case 'withdrawUnshielded': return k256Challenges.withdrawUnshielded(ctx, pk, r.color, r.amount, r.recipient);
+    case 'withdrawShielded': return k256Challenges.withdrawShielded(ctx, pk, r.recipient, r.color, r.amount, r.coin);
+    case 'withdrawShieldedToContract': return k256Challenges.withdrawShieldedToContract(ctx, pk, r.recipient, r.color, r.amount, r.coin);
+    case 'appendInbox': return k256Challenges.appendInbox(ctx, pk, r.entry);
+    case 'rotateEncKey': return k256Challenges.rotateEncKey(ctx, pk, r.newKey);
+    case 'addDevice': return k256Challenges.addDevice(ctx, pk, r.newEntry);
+    case 'removeDevice': return k256Challenges.removeDevice(ctx, pk, r.entry);
+  }
+}
+
+/** The evm arm's challenge for a request (the address is the key encoding). */
+export function evmChallengeFor(ctx: CallContext, address: Uint8Array, r: AuthRequest): Uint8Array {
+  switch (r.op) {
+    case 'withdrawUnshielded': return evmChallenges.withdrawUnshielded(ctx, address, r.color, r.amount, r.recipient);
+    case 'withdrawShielded': return evmChallenges.withdrawShielded(ctx, address, r.recipient, r.color, r.amount, r.coin);
+    case 'withdrawShieldedToContract': return evmChallenges.withdrawShieldedToContract(ctx, address, r.recipient, r.color, r.amount, r.coin);
+    case 'appendInbox': return evmChallenges.appendInbox(ctx, address, r.entry);
+    case 'rotateEncKey': return evmChallenges.rotateEncKey(ctx, address, r.newKey);
+    case 'addDevice': return evmChallenges.addDevice(ctx, address, r.newEntry);
+    case 'removeDevice': return evmChallenges.removeDevice(ctx, address, r.entry);
+  }
+}
+
+/** The account's EIP-712 domain salt, or a clear failure. An `evm` call cannot
+ *  be built without it: the salt is half the domain separator. */
+export function requireEvmDomainSalt(ctx: CallContext): Uint8Array {
+  if (!ctx.evmDomainSalt) {
+    throw new Error(
+      'the evm arm needs the account\'s sealed evm_domain_salt in the call context '
+      + '(CustodyAccount.callContext reads it from ledger state)',
+    );
+  }
+  return ctx.evmDomainSalt;
+}
+
+/**
+ * The EIP-712 primary type and message for a request — the readable half of an
+ * `evm` authorisation, in the frozen field names of
+ * `docs/AUTH-EIP712-PASSPORT-EVM-V1.md`.
+ *
+ * Every message carries the frame `account, owner, authNonce, …, challenge`.
+ * The three withdraw types show colour, amount and recipient; `AppendInbox`
+ * shows the entry's keccak (the entry is ciphertext, so nothing readable is
+ * lost, and every field stays one word). The witness values a wallet cannot see
+ * are absent by construction and bound through `challenge` instead.
+ */
+export function evmTypedMessage(
+  ctx: CallContext,
+  address: Uint8Array,
+  r: AuthRequest,
+  challenge: Uint8Array,
+): { op: EvmOp; message: EvmMessage } {
+  const frame = {
+    account: ctx.contractAddress,
+    owner: address,
+    authNonce: ctx.authNonce,
+    challenge,
+  };
+  switch (r.op) {
+    case 'withdrawUnshielded':
+      return { op: 'WithdrawUnshielded', message: { ...frame, color: r.color, amount: r.amount, recipient: r.recipient } };
+    case 'withdrawShielded':
+      return { op: 'WithdrawShielded', message: { ...frame, color: r.color, amount: r.amount, recipientCoinPublicKey: r.recipient } };
+    case 'withdrawShieldedToContract':
+      return { op: 'WithdrawShieldedToContract', message: { ...frame, color: r.color, amount: r.amount, recipientContract: r.recipient } };
+    case 'appendInbox':
+      return { op: 'AppendInbox', message: { ...frame, entryHash: keccak(r.entry) } };
+    case 'rotateEncKey':
+      return { op: 'RotateEncKey', message: { ...frame, newKey: r.newKey } };
+    case 'addDevice':
+      return { op: 'AddDevice', message: { ...frame, newEntry: r.newEntry } };
+    case 'removeDevice':
+      return { op: 'RemoveDevice', message: { ...frame, entry: r.entry } };
+  }
+}
+
+/**
+ * Authorise a gated call with any device of any arm.
+ *
+ * This is the one place that knows how each arm turns a request into an
+ * authorisation, so the account wrapper (and any other client) stays
+ * arm-generic. It is async because a wallet signature is: the jubjub and k256
+ * arms resolve immediately.
+ */
+export async function authorise(
+  device: AnyDevice,
+  ctx: CallContext,
+  request: AuthRequest,
+  useCounter: bigint,
+): Promise<Authorisation> {
+  switch (device.arm) {
+    case 'jubjub':
+      return device.sign(jubjubChallengeFor(ctx, device.pk, request), useCounter);
+    case 'k256':
+      return device.sign(k256ChallengeFor(ctx, device.pk, request), useCounter);
+    case 'evm':
+      return device.sign(ctx, request, useCounter);
+  }
+}
 
 /** The trailing circuit arguments an Authorisation expands to, in the
  *  order the arm's gated circuits declare them. */
 export function authArgs(a: Authorisation): unknown[] {
-  return a.arm === 'jubjub'
-    ? [a.pk, a.use_counter, a.sig_r, a.sig_s, a.grind_nonce]
-    : [a.pk, a.use_counter, a.sig, a.envelope];
+  switch (a.arm) {
+    case 'jubjub': return [a.pk, a.use_counter, a.sig_r, a.sig_s, a.grind_nonce];
+    case 'k256': return [a.pk, a.use_counter, a.sig, a.envelope];
+    case 'evm': return [a.pk, a.use_counter, a.sig];
+  }
 }
 
 /** The arguments `activate_initial_device_with_<arm>` declares. The k256 arm
  *  carries the device's envelope id (it is bound into the boot commitment the
  *  activation must reproduce); jubjub and evm do not — an EIP-712 digest is
- *  already a complete envelope, so the evm arm has no id to equivocate. */
+ *  already a complete envelope, so the evm arm has no id to equivocate.
+ *
+ *  Every arm passes the POINT, activation included, even though the `evm` arm
+ *  enrols an address: the activation is permissionless and carries no
+ *  signature, so it is the only call whose point cannot be recovered from one.
+ *  `ensureEnrolled` is therefore called before it. */
 export function activationArgs(device: AnyDevice, salt: Uint8Array): unknown[] {
   return device.arm === 'k256' ? [device.pk, salt, device.envelope] : [device.pk, salt];
+}
+
+/** Make sure a device's public point is known. The jubjub and k256 arms always
+ *  know theirs; an `evm` device learns it here (free for a backend that
+ *  publishes its key, one EIP-191 signature otherwise). Idempotent. */
+export async function ensureEnrolled(device: AnyDevice): Promise<void> {
+  if (device.arm === 'evm' && device.knownPublicPoint === null) await device.enrol();
+}
+
+/** The roster key of a public point (MIP-0013 S11 client state). */
+export function pointRosterKey(pk: { x: bigint; y: bigint }): string {
+  return `${pk.x.toString(16)}:${pk.y.toString(16)}`;
+}
+
+/** The roster key of a device. An `evm` device is keyed by its ADDRESS, which
+ *  is the identity the ledger holds and the only one known before the device
+ *  has signed; the other arms are keyed by their point, unchanged. */
+export function deviceRosterKey(device: AnyDevice): string {
+  return device.arm === 'evm' ? `evm:${device.addressHex}` : pointRosterKey(device.pk);
 }

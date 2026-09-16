@@ -2,20 +2,25 @@
 // contract (MIP-0012 asset surface + MIP-0013 authorisation seam).
 //
 // The contract exports every gated operation once per authorisation arm
-// (`<operation>_with_jubjub`, `<operation>_with_k256`); this client is
-// arm-generic: a call takes any device, builds the challenge with that
-// device's arm's builders, and targets the arm's circuit. Every authorised
-// call follows the same shape: read the live auth_nonce, resolve the
-// device's current use counter (the rolling-entry position, AUTH-9),
-// collect the witness values the call will consume (AUTH-10), build the
-// per-circuit challenge, have the device sign it, and pass the arm's
-// authorising material as the circuit's trailing arguments. Low-level
-// `*WithAuth` variants accept a pre-built Authorisation so conformance
-// tests can inject faults (wrong s, stale nonce, wrong counter, replays).
+// (`<operation>_with_jubjub`, `<operation>_with_k256`, `<operation>_with_evm`);
+// this client is arm-generic: a call takes any device, describes itself as one
+// arm-independent `AuthRequest`, and `authorise` (signer.ts) turns that into
+// the arm's own challenge — and, on the `evm` arm, into the EIP-712 message the
+// wallet displays. Every authorised call follows the same shape: read the live
+// auth_nonce (and the account's evm_domain_salt, which the `evm` arm's domain
+// needs), resolve the device's current use counter (the rolling-entry position,
+// AUTH-9), collect the witness values the call will consume (AUTH-10), build
+// the request, have the device sign it, and pass the arm's authorising material
+// as the circuit's trailing arguments. Low-level `*WithAuth` variants accept a
+// pre-built Authorisation so conformance tests can inject faults (wrong s,
+// stale nonce, wrong counter, replays).
 //
-// The client tracks a device roster (pk → use counter) per MIP-0013 S11:
+// The client tracks a device roster (device → use counter) per MIP-0013 S11:
 // counters advance on every successful gated call, and an unknown counter
-// is recovered by rescanning ledger membership of candidate entries.
+// is recovered by rescanning ledger membership of candidate entries. The
+// roster and the counter in it are CLIENT state, not ledger state — the chain
+// holds only the current entry, so a client that loses the counter recovers it
+// by rescan (`resolveUseCounter`) and never by reading it back.
 
 import { findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
 import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
@@ -41,10 +46,12 @@ import {
 } from './witnesses.js';
 import { bytesToHex, hexToBytes } from './hex.js';
 import {
-  jubjubChallenges,
-  k256Challenges,
   authArgs,
   activationArgs,
+  authorise,
+  deviceRosterKey,
+  ensureEnrolled,
+  pointRosterKey,
   type AnyDevice,
   type Arm,
   type Authorisation,
@@ -196,20 +203,27 @@ export class CustodyAccount {
     return {
       address,
       salt,
-      activate: (device, s) => {
+      activate: async (device, s) => {
+        // Activation is permissionless: it carries the POINT and no signature,
+        // so an `evm` device that has never signed must reveal its point first
+        // (free for a backend that publishes its key; one EIP-191 signature
+        // otherwise). Every other call recovers the point from its own
+        // signature and needs nothing here.
+        await ensureEnrolled(device);
         const name = `activate_initial_device_with_${device.arm}`;
         return submitWithDustRetry(name, () => (found as any).callTx[name](...activationArgs(device, s)));
       },
       finish: () => {
         const account = new CustodyAccount(address, addressToBytes(address), providers, privateStateId, found);
-        account.counters.set(pkKey(initialDevice.pk), 0n);
+        account.counters.set(deviceRosterKey(initialDevice), 0n);
         return account;
       },
     };
   }
 
   /** Low-level activation call against a live account (bootstrap probes). */
-  activateInitialDevice(device: AnyDevice, salt: Uint8Array): Promise<unknown> {
+  async activateInitialDevice(device: AnyDevice, salt: Uint8Array): Promise<unknown> {
+    await ensureEnrolled(device);
     const name = `activate_initial_device_with_${device.arm}`;
     return submitWithDustRetry(name, () => this.handle.callTx[name](...activationArgs(device, salt)));
   }
@@ -238,10 +252,18 @@ export class CustodyAccount {
     return ledger(state.data);
   }
 
-  /** The signing context for the next authorised call (MIP-0013 §5.1). */
+  /** The signing context for the next authorised call (MIP-0013 §5.1). The
+   *  `evm` arm's EIP-712 domain also binds the account's sealed
+   *  `evm_domain_salt`, so it is read here rather than passed around: it is
+   *  public, constant for the account's lifetime, and already on the state
+   *  this call reads anyway. */
   async callContext(): Promise<CallContext> {
     const l = await this.ledgerState();
-    return { contractAddress: this.addressBytes, authNonce: l.auth_nonce };
+    return {
+      contractAddress: this.addressBytes,
+      authNonce: l.auth_nonce,
+      evmDomainSalt: l.evm_domain_salt,
+    };
   }
 
   // ── Device roster (MIP-0013 S11) ──────────────────────────────────────────
@@ -255,7 +277,8 @@ export class CustodyAccount {
    */
   async resolveUseCounter(device: AnyDevice): Promise<bigint> {
     const l = await this.ledgerState();
-    const known = this.counters.get(pkKey(device.pk));
+    const key = deviceRosterKey(device);
+    const known = this.counters.get(key);
     if (known !== undefined) {
       const entry = device.entryAt(this.addressBytes, l.device_epoch, known);
       if (l.devices.member(entry)) return known;
@@ -263,20 +286,29 @@ export class CustodyAccount {
     for (let k = known ?? 0n; k < (known ?? 0n) + RESCAN_LIMIT; k++) {
       const entry = device.entryAt(this.addressBytes, l.device_epoch, k);
       if (l.devices.member(entry)) {
-        this.counters.set(pkKey(device.pk), k);
+        this.counters.set(key, k);
         return k;
       }
     }
     throw new Error('device entry not found on-ledger (rescan limit reached) — not a registered device?');
   }
 
-  private advanceCounter(pk: { x: bigint; y: bigint }, used: bigint): void {
-    this.counters.set(pkKey(pk), used + 1n);
+  private advanceCounterOf(device: AnyDevice, used: bigint): void {
+    this.counters.set(deviceRosterKey(device), used + 1n);
   }
 
-  /** Record a freshly registered device (entry at use counter 0). */
+  /** Record a freshly registered device by its public point (entry at use
+   *  counter 0). Kept for callers that hold a point and no device object —
+   *  the cross-implementation suite enrols a Rust-generated key this way. */
   registerDevice(pk: { x: bigint; y: bigint }): void {
-    this.counters.set(pkKey(pk), 0n);
+    this.counters.set(pointRosterKey(pk), 0n);
+  }
+
+  /** Record a freshly registered device (entry at use counter 0), keyed the
+   *  way that device's arm identifies itself — the `evm` arm by its address,
+   *  which is all a client knows before the device has ever signed. */
+  registerDeviceOf(device: AnyDevice): void {
+    this.counters.set(deviceRosterKey(device), 0n);
   }
 
   // ── Wallet-local coin store (MIP-0012 §6.5) ───────────────────────────────
@@ -332,11 +364,9 @@ export class CustodyAccount {
   ): Promise<TxResult> {
     const ctx = await this.callContext();
     const counter = await this.resolveUseCounter(device);
-    const auth = device.arm === 'jubjub'
-      ? device.sign(jubjubChallenges.withdrawUnshielded(ctx, device.pk, color, amount, recipient), counter)
-      : device.sign(k256Challenges.withdrawUnshielded(ctx, device.pk, color, amount, recipient), counter);
+    const auth = await authorise(device, ctx, { op: 'withdrawUnshielded', color, amount, recipient }, counter);
     const r = await this.withdrawUnshieldedWithAuth(color, amount, recipient, auth);
-    this.advanceCounter(device.pk, counter);
+    this.advanceCounterOf(device, counter);
     return r;
   }
 
@@ -351,11 +381,9 @@ export class CustodyAccount {
     // AUTH-10: the approver signs over the exact qualified coin the spend
     // will consume, read from the same store the witness serves.
     const coin = await this.heldCoin(color);
-    const auth = device.arm === 'jubjub'
-      ? device.sign(jubjubChallenges.withdrawShielded(ctx, device.pk, recipient, color, amount, coin), counter)
-      : device.sign(k256Challenges.withdrawShielded(ctx, device.pk, recipient, color, amount, coin), counter);
+    const auth = await authorise(device, ctx, { op: 'withdrawShielded', recipient, color, amount, coin }, counter);
     const r = await this.withdrawShieldedWithAuth(recipient, color, amount, auth);
-    this.advanceCounter(device.pk, counter);
+    this.advanceCounterOf(device, counter);
     return r;
   }
 
@@ -368,33 +396,27 @@ export class CustodyAccount {
     const ctx = await this.callContext();
     const counter = await this.resolveUseCounter(device);
     const coin = await this.heldCoin(color);
-    const auth = device.arm === 'jubjub'
-      ? device.sign(jubjubChallenges.withdrawShieldedToContract(ctx, device.pk, recipient, color, amount, coin), counter)
-      : device.sign(k256Challenges.withdrawShieldedToContract(ctx, device.pk, recipient, color, amount, coin), counter);
+    const auth = await authorise(device, ctx, { op: 'withdrawShieldedToContract', recipient, color, amount, coin }, counter);
     const r = await this.withdrawShieldedToContractWithAuth(recipient, color, amount, auth);
-    this.advanceCounter(device.pk, counter);
+    this.advanceCounterOf(device, counter);
     return r;
   }
 
   async appendInbox(device: AnyDevice, entry: Uint8Array): Promise<TxResult> {
     const ctx = await this.callContext();
     const counter = await this.resolveUseCounter(device);
-    const auth = device.arm === 'jubjub'
-      ? device.sign(jubjubChallenges.appendInbox(ctx, device.pk, entry), counter)
-      : device.sign(k256Challenges.appendInbox(ctx, device.pk, entry), counter);
+    const auth = await authorise(device, ctx, { op: 'appendInbox', entry }, counter);
     const r = await this.appendInboxWithAuth(entry, auth);
-    this.advanceCounter(device.pk, counter);
+    this.advanceCounterOf(device, counter);
     return r;
   }
 
   async rotateEncKey(device: AnyDevice, newKey: Uint8Array): Promise<TxResult> {
     const ctx = await this.callContext();
     const counter = await this.resolveUseCounter(device);
-    const auth = device.arm === 'jubjub'
-      ? device.sign(jubjubChallenges.rotateEncKey(ctx, device.pk, newKey), counter)
-      : device.sign(k256Challenges.rotateEncKey(ctx, device.pk, newKey), counter);
+    const auth = await authorise(device, ctx, { op: 'rotateEncKey', newKey }, counter);
     const r = await this.rotateEncKeyWithAuth(newKey, auth);
-    this.advanceCounter(device.pk, counter);
+    this.advanceCounterOf(device, counter);
     return r;
   }
 
@@ -409,7 +431,7 @@ export class CustodyAccount {
     const l = await this.ledgerState();
     const newEntry = newDevice.entryAt(this.addressBytes, l.device_epoch, 0n);
     const r = await this.addDeviceEntry(device, newEntry);
-    this.registerDevice(newDevice.pk);
+    this.registerDeviceOf(newDevice);
     return r;
   }
 
@@ -418,11 +440,9 @@ export class CustodyAccount {
   async addDeviceEntry(device: AnyDevice, newEntry: Uint8Array): Promise<TxResult> {
     const ctx = await this.callContext();
     const counter = await this.resolveUseCounter(device);
-    const auth = device.arm === 'jubjub'
-      ? device.sign(jubjubChallenges.addDevice(ctx, device.pk, newEntry), counter)
-      : device.sign(k256Challenges.addDevice(ctx, device.pk, newEntry), counter);
+    const auth = await authorise(device, ctx, { op: 'addDevice', newEntry }, counter);
     const r = await this.addDeviceWithAuth(newEntry, auth);
-    this.advanceCounter(device.pk, counter);
+    this.advanceCounterOf(device, counter);
     return r;
   }
 
@@ -439,11 +459,9 @@ export class CustodyAccount {
   async removeDeviceEntry(device: AnyDevice, entry: Uint8Array): Promise<TxResult> {
     const ctx = await this.callContext();
     const counter = await this.resolveUseCounter(device);
-    const auth = device.arm === 'jubjub'
-      ? device.sign(jubjubChallenges.removeDevice(ctx, device.pk, entry), counter)
-      : device.sign(k256Challenges.removeDevice(ctx, device.pk, entry), counter);
+    const auth = await authorise(device, ctx, { op: 'removeDevice', entry }, counter);
     const r = await this.removeDeviceEntryWithAuth(entry, auth);
-    this.advanceCounter(device.pk, counter);
+    this.advanceCounterOf(device, counter);
     return r;
   }
 
@@ -530,9 +548,7 @@ export class CustodyAccount {
   }
 }
 
-function pkKey(pk: { x: bigint; y: bigint }): string {
-  return `${pk.x.toString(16)}:${pk.y.toString(16)}`;
-}
+
 
 // ContractAddress circuit arguments are { bytes: Bytes<32> }; the hex form
 // of a deployed address maps to those bytes directly (validated by the
