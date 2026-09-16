@@ -19,6 +19,7 @@
     "test:swap-eip712": "tsx src/tests/swap-eip712-offline.ts",
     "test:swap-offer": "tsx src/tests/swap-offer-offline.ts",
     "test:swap-ladder": "tsx src/tests/swap-ladder.ts",
+    "test:swap-deploy-budget": "tsx src/tests/swap-deploy-budget.ts",
     "test:unit": "tsx src/tests/unit-offline.ts",
     "test:crossimpl-offline": "tsx src/tests/crossimpl-offline.ts",
     "test:auth-crossimpl": "tsx src/tests/auth-crossimpl.ts",
