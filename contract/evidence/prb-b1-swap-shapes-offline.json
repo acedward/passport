@@ -60,10 +60,10 @@
       "inboxCount": "1"
     },
     "evmArm": {
-      "owner": "b4205aafe80e2a1f4643279778d694a2ee55fdda",
-      "digest": "125a21fca421ed7f8ce43a269ac2bf1d66970bee8b2f01dff4d0cf912e4818e1",
-      "structHash": "b86b9867b3f6df7e8bf67b8bf5d5f578223c052c145c9603587f15ee042c7520",
-      "domainSeparator": "20059d551903dcaee1c5d828cdb4b4073953f78dfce9e06b6f58b0fa8640dbc9",
+      "owner": "9e5b78a64d2b7973b8ec40e2190b8e2cbc49adb2",
+      "digest": "dcce17910516e3ef90fb3def297e251e300f98c52c24121968b02dfd3c7bc512",
+      "structHash": "edcd7c4342e24762594dd960eecac97778ed4846770603624bb21bb327cecc3c",
+      "domainSeparator": "9c3fc5b9fa0cbd14ab901b68691fd8b0d1ab8fe6e1881a1fbe28d7d255f20a8d",
       "typedDataPrimaryType": "OpenSwapShielded",
       "deltas": {
         "shielded:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1": "2",
@@ -79,17 +79,17 @@
       "open offer with a non-zero recipient": "failed assert: open swap recipient must be zero",
       "named offer with a zero recipient": "failed assert: named swap recipient must be nonzero",
       "give more than the held coin holds": "failed assert: held coin is smaller than the give amount",
-      "tampered give amount (signed for 2, called with 3)": "failed assert: invalid signature",
-      "tampered want nonce": "failed assert: invalid signature",
-      "tampered want entry": "range error at account.compact line 1113 char 13: byte vector [208,44,95,43,70,7,70,168,56,211,54,121,160,244,206,246,53,218,102,183,25,239,71,158,167,99,224,30,12,67,202,135] exceeds maximum value 52435875175126190479447740508185965837690552500527637822603658699938581184512 of Field type",
-      "tampered change entry": "failed assert: invalid signature",
-      "tampered valid_until": "range error at account.compact line 1113 char 13: byte vector [79,123,237,88,70,236,25,1,144,229,183,80,227,35,74,161,63,209,171,21,21,28,171,216,239,110,9,235,49,79,29,212] exceeds maximum value 52435875175126190479447740508185965837690552500527637822603658699938581184512 of Field type",
+      "tampered give amount (signed for 2, called with 3)": "range error at account.compact line 1113 char 13: byte vector [106,66,48,136,193,106,64,43,12,48,213,146,244,201,229,102,223,60,243,16,83,49,114,69,204,99,221,164,231,127,27,152] exceeds maximum value 52435875175126190479447740508185965837690552500527637822603658699938581184512 of Field type",
+      "tampered want nonce": "range error at account.compact line 1113 char 13: byte vector [34,105,176,134,105,251,163,107,157,106,235,244,33,128,46,221,15,108,76,208,144,90,194,247,92,131,134,73,188,182,203,127] exceeds maximum value 52435875175126190479447740508185965837690552500527637822603658699938581184512 of Field type",
+      "tampered want entry": "range error at account.compact line 1113 char 13: byte vector [162,190,140,180,230,109,214,12,108,201,79,189,72,170,226,152,43,27,125,104,228,161,175,89,90,248,242,242,255,144,141,160] exceeds maximum value 52435875175126190479447740508185965837690552500527637822603658699938581184512 of Field type",
+      "tampered change entry": "range error at account.compact line 1113 char 13: byte vector [123,217,250,97,113,252,118,34,103,226,75,222,191,160,75,115,113,83,219,51,115,99,177,44,179,15,11,173,11,35,251,211] exceeds maximum value 52435875175126190479447740508185965837690552500527637822603658699938581184512 of Field type",
+      "tampered valid_until": "range error at account.compact line 1113 char 13: byte vector [110,211,90,183,78,87,172,183,115,195,161,71,194,108,67,209,165,145,7,212,195,164,26,13,160,55,136,242,175,5,208,136] exceeds maximum value 52435875175126190479447740508185965837690552500527637822603658699938581184512 of Field type",
       "witness coin of another colour": "failed assert: held coin colour does not match the give colour"
     },
     "replayRefusal": "failed assert: unknown device entry",
     "expiredRefusal": "failed assert: offer authorisation has expired"
   },
-  "ranAt": "2026-09-16T05:55:14.705Z",
+  "ranAt": "2026-09-16T06:07:14.888Z",
   "stack": {
     "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
     "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",

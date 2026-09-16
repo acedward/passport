@@ -625,115 +625,128 @@ export async function buildOpenSwapOffer(spec: OpenSwapOfferSpec): Promise<OpenS
 export { fromHex, toHex, hexToBytes, bytesToHex };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 6. A minimal `evm` device for the offer path
+// 6. Signing an offer with an `evm` device
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// TEMPORARY, and deliberately small. PR-A/A3 is adding the general `EvmDevice` to
-// `src/wallet/signer.ts` in the same clone; this class exists so PR-B's suites can sign an offer
-// before that lands, and it implements only what the seam and the simulator need — the device
-// interface (`arm`, `pk`, `entryAt`, `bootCommitment`) plus the one operation this file is about.
-// When the two lines meet, this collapses into `EvmDevice.sign('OpenSwapShielded', …)` and the
-// duplication goes with it (questions file, Q36).
+// `EvmDevice` (in `signer.ts`) already owns everything about an `evm` device that is not
+// operation-specific: the 20-byte identity, the rolling entry, the boot commitment, the point cache
+// and its address check, and the three backends (raw key, ethers wallet, EIP-1193). What it cannot
+// know is the EIGHTH operation, because its `AuthRequest` union is a closed type in a file this line
+// of work does not own (questions file, Q36).
+//
+// So the offer supplies exactly the missing piece — the typed data and the digest — and hands them to
+// the device's own backend. The device is otherwise driven as it is everywhere else, and when the two
+// lines merge this becomes one more member of that union and one more case in `evmTypedMessage`.
 
-import { publicPointForPrivateKey, addressForPrivateKey, signDigest, type EvmPoint, type ParsedSignature } from './evm-signature.js';
+import { EvmDevice, type CallContext } from './signer.js';
+import {
+  ethereumAddress,
+  lowS,
+  parseSignature,
+  recoverPoint,
+  type EvmPoint,
+} from './evm-signature.js';
 
 export interface OpenSwapAuthorisation {
   arm: 'evm';
-  pk: EvmPoint;
+  pk: { x: bigint; y: bigint; identity: false };
   use_counter: bigint;
   sig: { r: bigint; s: bigint };
-  /** The EIP-712 material the wallet displayed, kept for the evidence files. */
+  /** Exactly what the wallet was shown and signed, kept so an audit log or a conformance test can
+   *  replay the approval rather than reconstruct it. Neither field is a circuit argument. */
   typedData: ReturnType<typeof buildOpenSwapTypedData>;
   hashes: OpenSwapHashes;
 }
 
-export class EvmOfferDevice {
-  readonly arm = 'evm' as const;
-  readonly pk: EvmPoint;
-  readonly address: Uint8Array;
+/** The `OpenSwapShielded` message for one call, built from the same object the challenge is. */
+export function openSwapMessage(
+  accountAddress: Uint8Array,
+  owner: Uint8Array,
+  authNonce: bigint,
+  call: OfferCallArgs,
+  challenge: Uint8Array,
+): OpenSwapMessage {
+  return {
+    account: accountAddress,
+    owner,
+    authNonce,
+    giveColor: call.giveColor,
+    giveAmount: call.giveAmount,
+    recipientKind: call.recipientKind,
+    recipient: call.recipient,
+    wantNonce: call.want.nonce,
+    wantColor: call.want.color,
+    wantAmount: call.want.value,
+    validUntil: call.validUntil,
+    challenge,
+  };
+}
 
-  constructor(readonly privateKey: Uint8Array) {
-    this.pk = publicPointForPrivateKey(privateKey);
-    this.address = addressForPrivateKey(privateKey);
-  }
+/** The offer's challenge core, from the CONTRACT's own pure circuit. */
+export function openSwapChallenge(
+  accountAddress: Uint8Array,
+  owner: Uint8Array,
+  authNonce: bigint,
+  call: OfferCallArgs,
+  coin: QualifiedCoin,
+): Uint8Array {
+  return (pureCircuits as any).challenge_open_swap_shielded_with_evm(
+    { bytes: accountAddress },
+    owner,
+    call.giveColor,
+    call.giveAmount,
+    call.recipientKind,
+    call.recipient,
+    call.want,
+    call.wantEntry,
+    call.changeEntry,
+    call.validUntil,
+    coin,
+    authNonce,
+  ) as Uint8Array;
+}
 
-  static generate(): EvmOfferDevice {
-    return new EvmOfferDevice(new Uint8Array(randomBytes(32)));
+/**
+ * Authorise one offer with an `evm` device: build the challenge, wrap it in `OpenSwapShielded`, have
+ * the wallet sign the digest, normalise S, and recover the point the circuit will be handed.
+ *
+ * The recovered point is checked against the device's enrolled address here, exactly as
+ * `EvmDevice.sign` does for the other seven operations — a backend that signs as somebody else is
+ * caught in the client rather than by a failed proof.
+ */
+export async function signOpenSwapOffer(
+  device: EvmDevice,
+  ctx: CallContext & { evmDomainSalt?: Uint8Array },
+  call: OfferCallArgs,
+  coin: QualifiedCoin,
+  useCounter: bigint,
+): Promise<OpenSwapAuthorisation> {
+  const salt = ctx.evmDomainSalt;
+  if (!salt || salt.length !== 32) {
+    throw new Error("an evm offer needs the account's 32-byte evm_domain_salt in the call context");
   }
-
-  /** The device's rolling entry — keyed by the 20-byte Ethereum address, not by the point. */
-  entryAt(contractAddress: Uint8Array, epoch: bigint, counter: bigint): Uint8Array {
-    return (pureCircuits as any).derive_device_entry_with_evm(
-      { bytes: contractAddress },
-      this.address,
-      epoch,
-      counter,
-    );
+  const challenge = openSwapChallenge(ctx.contractAddress, device.address, ctx.authNonce, call, coin);
+  const message = openSwapMessage(ctx.contractAddress, device.address, ctx.authNonce, call, challenge);
+  const typedData = buildOpenSwapTypedData(salt, message);
+  const hashes = openSwapDigest(salt, message);
+  const signature = lowS(parseSignature(await device.backend.signTypedData({
+    typedData: typedData as any,
+    digest: hashes.digest,
+  })));
+  const point: EvmPoint = recoverPoint(hashes.digest, signature);
+  const derived = toHex(ethereumAddress(point));
+  if (derived !== toHex(device.address)) {
+    throw new Error(`the offer signature belongs to ${derived}, not to this device (${toHex(device.address)})`);
   }
-
-  bootCommitment(salt: Uint8Array): Uint8Array {
-    // The boot commitment binds the 20-byte ADDRESS, not the point — the same identity the EIP-712
-    // `owner` field and the device entry use.
-    return (pureCircuits as any).derive_boot_commitment_with_evm(salt, this.address);
-  }
-
-  /**
-   * Sign an offer. The challenge comes from the CONTRACT's own pure circuit, so the wallet's
-   * readable fields and the circuit's private binding are two projections of one call rather than
-   * two implementations of it.
-   */
-  signOffer(
-    accountAddress: Uint8Array,
-    evmDomainSalt: Uint8Array,
-    authNonce: bigint,
-    useCounter: bigint,
-    call: OfferCallArgs,
-    coin: QualifiedCoin,
-  ): OpenSwapAuthorisation {
-    const challenge = (pureCircuits as any).challenge_open_swap_shielded_with_evm(
-      { bytes: accountAddress },
-      this.address,
-      call.giveColor,
-      call.giveAmount,
-      call.recipientKind,
-      call.recipient,
-      call.want,
-      call.wantEntry,
-      call.changeEntry,
-      call.validUntil,
-      coin,
-      authNonce,
-    ) as Uint8Array;
-    const message: OpenSwapMessage = {
-      account: accountAddress,
-      owner: this.address,
-      authNonce,
-      giveColor: call.giveColor,
-      giveAmount: call.giveAmount,
-      recipientKind: call.recipientKind,
-      recipient: call.recipient,
-      wantNonce: call.want.nonce,
-      wantColor: call.want.color,
-      wantAmount: call.want.value,
-      validUntil: call.validUntil,
-      challenge,
-    };
-    const hashes = openSwapDigest(evmDomainSalt, message);
-    const sig: ParsedSignature = signDigest(this.privateKey, hashes.digest);
-    return {
-      arm: 'evm',
-      pk: this.pk,
-      use_counter: useCounter,
-      sig: { r: sig.r, s: sig.s },
-      typedData: buildOpenSwapTypedData(evmDomainSalt, message),
-      hashes,
-    };
-  }
+  return {
+    arm: 'evm',
+    pk: { x: point.x, y: point.y, identity: false },
+    use_counter: useCounter,
+    sig: { r: signature.r, s: signature.s },
+    typedData,
+    hashes,
+  };
 }
 
 /** The trailing circuit arguments an `evm` offer authorisation expands to. */
-export const offerAuthArgs = (a: OpenSwapAuthorisation): unknown[] => [
-  { x: a.pk.x, y: a.pk.y, identity: false },
-  a.use_counter,
-  a.sig,
-];
+export const offerAuthArgs = (a: OpenSwapAuthorisation): unknown[] => [a.pk, a.use_counter, a.sig];

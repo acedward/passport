@@ -1,0 +1,46 @@
+{
+  "testId": "PRB-B2",
+  "name": "swap-offer-offline",
+  "description": "The offer envelope and the taker's first three gates, checked against the deltas the compiled circuit actually produced for both shapes",
+  "verdict": "PASS",
+  "note": "Offers are built for real in the keyless simulator and their MEASURED imbalances drive the gates. Every tamper — envelope bytes, declared terms, and artefact shapes no taker can settle — is refused offline, before a wallet, a proof server or a node is contacted.",
+  "details": {
+    "openGate": {
+      "deficits": {
+        "0/shielded:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2": "-3"
+      },
+      "surpluses": {
+        "0/shielded:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1": "2"
+      }
+    },
+    "namedGate": {
+      "deficits": {
+        "0/shielded:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2": "-7"
+      },
+      "surpluses": {}
+    },
+    "refusals": {
+      "flippedByte": "offer content address mismatch: terms declare sha256 a38a6d73a21ccf88d781ee61b887d074ec5d579f6eb5d83196faba18d4c5188b, payload hashes to 68e458bfd3ec1f1747133e73f6a0a36368f0e88316408f97dd51b43ef448daeb",
+      "truncated": "offer payload length mismatch: terms declare 512 bytes, envelope carries 504",
+      "magic": "offer envelope magic mismatch: expected \"PASSPORT-OFFER/1\", read \"SOMETHING-ELSE/1\"",
+      "noTermsLine": "offer envelope has no terms line",
+      "badJson": "offer terms are not valid JSON: Expected property name or '}' in JSON at position 1 (line 1 column 2)",
+      "version": "unsupported offer envelope version: 2",
+      "the terms understate what must arrive (want 3 declared as 1)": "offer 9247eb6e3ec74d43… does not match its own terms:\n  - the terms want 1 of b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 but the transaction's deficit at 0/shielded:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2 is -3",
+      "the terms name a want colour the transaction does not ask for": "offer 9247eb6e3ec74d43… does not match its own terms:\n  - the terms want 3 of cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd but the transaction's deficit at 0/shielded:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd is (absent)",
+      "the terms overstate the surplus (give 2 declared as 5)": "offer 9247eb6e3ec74d43… does not match its own terms:\n  - an open offer must leave +5 of a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 at 0/shielded:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1; found 2",
+      "an open offer declared as named (so the surplus should not exist)": "offer 9247eb6e3ec74d43… does not match its own terms:\n  - a named offer pays the give leg to a coin key, so it must leave NO surplus; found {\"0/shielded:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\":\"2\"}",
+      "namedDeclaredOpen": "offer 269ce5e34b0ae3fa… does not match its own terms:\n  - an open offer must leave +4 of a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 at 0/shielded:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1; found (absent)\n  - expected exactly ONE non-dust surplus, found {}",
+      "fallibleSegment": "offer f155337c0d40ba23… does not match its own terms:\n  - segment 1 carries {\"shielded:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\":\"-1\"} — a leg outside the guaranteed section is unsettleable by an independent taker\n  - expected exactly ONE non-dust deficit, found {\"0/shielded:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\":\"-3\",\"1/shielded:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\":\"-1\"}",
+      "twoDeficits": "offer f155337c0d40ba23… does not match its own terms:\n  - expected exactly ONE non-dust deficit, found {\"0/shielded:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\":\"-3\",\"0/shielded:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\":\"-5\"}",
+      "extraSurplus": "offer f155337c0d40ba23… does not match its own terms:\n  - expected exactly ONE non-dust surplus, found {\"0/shielded:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\":\"2\",\"0/shielded:cececececececececececececececececececececececececececececececece\":\"5\"}",
+      "unreadable": "offer f155337c0d40ba23…: imbalances(0) could not be read — imbalance accessor is not bound at these pins. An unreadable imbalance is a refusal."
+    }
+  },
+  "ranAt": "2026-09-16T06:07:21.959Z",
+  "stack": {
+    "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
+    "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",
+    "proofServer": "midnightntwrk/proof-server:9.0.0-rc.6"
+  }
+}

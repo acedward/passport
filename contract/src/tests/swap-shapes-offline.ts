@@ -32,19 +32,18 @@ import {
   zswapDeltas,
   type CallDetail,
 } from './swap-sim.js';
-import { JubjubDevice, jubjubChallenges, authArgs } from '../wallet/signer.js';
+import { EvmDevice, JubjubDevice, authArgs } from '../wallet/signer.js';
 import { pureCircuits } from '../wallet/contract.js';
 import { generateEncKeyPair, openInboxEntry, sealInboxEntry } from '../wallet/inbox.js';
 import {
-  EvmOfferDevice,
   RECIPIENT_NAMED_COIN_KEY,
   RECIPIENT_OPEN,
   expectedPlacement,
   offerAuthArgs,
   offerCircuitArgs,
   offerInboxEntries,
-  openSwapDigest,
   predictChangeCoin,
+  signOpenSwapOffer,
   shieldedLabel,
   type OfferCallArgs,
 } from '../wallet/offer.js';
@@ -354,8 +353,9 @@ async function main(): Promise<void> {
   // ══ The `evm` arm, end to end with a real EIP-712 signature ════════════════
   step('the `evm` arm: an Ethereum key signs OpenSwapShielded and the circuit accepts it');
   {
-    const evm = EvmOfferDevice.generate();
-    const sim = await AccountSim.create(evm as any, { encSecretKey: encKeys.secretKey });
+    const evm = EvmDevice.generate();
+    await evm.enrol();
+    const sim = await AccountSim.create(evm, { encSecretKey: encKeys.secretKey });
     const coin = heldCoin(sim, A, 6n);
     const { call, change } = offerCall(encKeys.publicKey, {
       giveColor: A,
@@ -365,9 +365,13 @@ async function main(): Promise<void> {
       wantAmount: 3n,
       coin: coin.qualified,
     });
-    const counter = sim.useCounter(evm as any);
-    const auth = evm.signOffer(
-      sim.addressBytes, sim.evmDomainSalt, sim.authNonce, counter, call, coin.qualified,
+    const counter = sim.useCounter(evm);
+    const auth = await signOpenSwapOffer(
+      evm,
+      { contractAddress: sim.addressBytes, authNonce: sim.authNonce, evmDomainSalt: sim.evmDomainSalt },
+      call,
+      coin.qualified,
+      counter,
     );
 
     // The client's digest is the CONTRACT's digest — three implementations of the byte contract now
@@ -396,7 +400,7 @@ async function main(): Promise<void> {
     check(typeof oracleStruct === 'string' && oracleStruct.length === 64, 'the struct-hash oracle is callable');
 
     const out = await sim.callDetailed<any>(CIRCUIT_EVM, ...offerCircuitArgs(call), ...offerAuthArgs(auth));
-    sim.advanceCounter(evm as any, counter);
+    sim.advanceCounter(evm, counter);
     eq(deltasHex(out), expectedPlacement('open', hex(A), 2n, hex(B), 3n),
       'the evm arm produces the same offer shape as the jubjub arm');
     check(sim.ledger.inbox_count === 2n, 'both inbox entries appended');
@@ -414,14 +418,20 @@ async function main(): Promise<void> {
     // The wallet prompt and the circuit are the same call: change ONE readable field and the
     // signature no longer authorises anything.
     step('the `evm` arm: tampering after signing');
-    const sim2 = await AccountSim.create(evm as any, { encSecretKey: encKeys.secretKey });
+    const sim2 = await AccountSim.create(evm, { encSecretKey: encKeys.secretKey });
     const coin2 = heldCoin(sim2, A, 6n);
     const { call: call2 } = offerCall(encKeys.publicKey, {
       giveColor: A, giveAmount: 2n, recipientKind: RECIPIENT_OPEN, wantColor: B, wantAmount: 3n,
       coin: coin2.qualified,
     });
-    const c2 = sim2.useCounter(evm as any);
-    const auth2 = evm.signOffer(sim2.addressBytes, sim2.evmDomainSalt, sim2.authNonce, c2, call2, coin2.qualified);
+    const c2 = sim2.useCounter(evm);
+    const auth2 = await signOpenSwapOffer(
+      evm,
+      { contractAddress: sim2.addressBytes, authNonce: sim2.authNonce, evmDomainSalt: sim2.evmDomainSalt },
+      call2,
+      coin2.qualified,
+      c2,
+    );
     const tampered = { ...call2, want: { ...call2.want, value: 1n } };
     const msg = await sim2.expectReject(CIRCUIT_EVM, ...offerCircuitArgs(tampered), ...offerAuthArgs(auth2));
     check(/invalid signature/.test(msg), `a changed want amount is refused: ${msg.slice(0, 60)}`, msg);
