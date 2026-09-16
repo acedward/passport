@@ -202,7 +202,7 @@ export interface SettleOutcome {
   coin: ShieldedCoin | null;
   /** True when the coin the circuit returned is the coin whose description this client
    *  encrypted into the inbox entry. False means the entry is useless for discovery (the
-   *  coin is still claimed); `backfillEntry` repairs it. */
+   *  coin is still claimed); `AccountBridge.backfillEntry` repairs it. */
   entryMatchesCoin: boolean;
 }
 
@@ -339,9 +339,9 @@ export class AccountBridge {
    *   * pass `changeEntry` — a console that has executed the call locally first (the same
    *     signature works for the dry run and the submission, which is exactly why the
    *     challenge does not bind the entry) knows the coin and seals it;
-   *   * pass nothing and call `backfillChangeEntry` afterwards with the returned coin —
-   *     Passport's own INV-4 pattern, one more device signature, and the shape every other
-   *     spend on this contract already uses.
+   *   * pass nothing and call `backfillEntry` afterwards with the returned coin —
+   *     Passport's own INV-4 pattern (`backfillEntry`), one more device signature, and the
+   *     shape every other spend on this contract already uses.
    *
    * Either way the coin exists and is spendable; what is at stake is only whether a client
    * that lost its local store can rediscover it from the chain.
@@ -378,9 +378,15 @@ export class AccountBridge {
     return { txId: txIdOf(r), requestId: await this.latestRequestId('withdraw'), change };
   }
 
-  /** File the inbox entry of a change coin the account already holds, through the account's
-   *  own gated `append_inbox` (INV-4). One device signature; nothing moves. */
-  async backfillChangeEntry(device: AnyDevice, coin: ShieldedCoin): Promise<{ txId: string }> {
+  /**
+   * File the inbox entry of a coin the account already holds, through the account's own
+   * gated `append_inbox` (INV-4). One device signature; nothing moves.
+   *
+   * Two callers: a withdrawal that left change the client could not seal in advance, and a
+   * settle whose `entryMatchesCoin` came back false — the coin is claimed either way, and
+   * this is what makes it discoverable from the chain again.
+   */
+  async backfillEntry(device: AnyDevice, coin: ShieldedCoin): Promise<{ txId: string }> {
     return this.account.appendInbox(device, sealInboxEntry(this.encPublicKey, {
       nonce: coin.nonce, color: coin.color, value: BigInt(coin.value),
     }));
