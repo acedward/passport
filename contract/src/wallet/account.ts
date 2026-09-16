@@ -18,8 +18,19 @@
 // is recovered by rescanning ledger membership of candidate entries.
 
 import { findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
+import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 
 import { deployAccountInWaves } from './wave-deploy.js';
+import { evmDomainSaltFor } from './eip712.js';
+
+/** Deploy-time choices. `evmDomainSalt` is the `evm` arm's EIP-712 domain
+ *  (constructor-sealed); `armsInWaveTwo` overrides which arms the maintenance
+ *  update adds. Both default per the notes at their use sites. */
+export interface DeployOptions {
+  retireAuthority?: boolean;
+  evmDomainSalt?: Uint8Array;
+  armsInWaveTwo?: Arm[];
+}
 
 import { ledger, type Ledger, type ShieldedCoin, type QualifiedCoin } from './contract.js';
 import {
@@ -35,6 +46,7 @@ import {
   authArgs,
   activationArgs,
   type AnyDevice,
+  type Arm,
   type Authorisation,
   type CallContext,
 } from './signer.js';
@@ -119,7 +131,7 @@ export class CustodyAccount {
     initialDevice: AnyDevice,
     encKeys: EncKeyPair,
     /** See wave-deploy's authority note; the default retires it. */
-    opts?: { retireAuthority?: boolean },
+    opts?: DeployOptions,
   ): Promise<CustodyAccount> {
     const dormant = await CustodyAccount.deployDormant(
       providers, compiledContract, initialDevice, encKeys, opts,
@@ -142,7 +154,7 @@ export class CustodyAccount {
     compiledContract: any,
     initialDevice: AnyDevice,
     encKeys: EncKeyPair,
-    opts?: { retireAuthority?: boolean },
+    opts?: DeployOptions,
   ): Promise<{
     address: string;
     salt: Uint8Array;
@@ -162,12 +174,18 @@ export class CustodyAccount {
     // The 18-operation deploy exceeds per-block limits, so the account
     // deploys in waves: the initial device's arm first, the other arm's
     // verifier keys by maintenance update (see wave-deploy.ts).
+    // The `evm` arm's EIP-712 domain salt (sealed at construction). The default
+    // is the network's recommended value; a deployer that wants a per-account
+    // domain passes its own 32 bytes. It is public and carries no secret, and
+    // an account whose devices are all jubjub or k256 never reads it.
+    const evmDomainSalt = opts?.evmDomainSalt ?? evmDomainSaltFor(String(getNetworkId()));
     const address = await deployAccountInWaves(providers, compiledContract, {
       firstArm: initialDevice.arm,
-      args: [boot, encKeys.publicKey],
+      args: [boot, encKeys.publicKey, evmDomainSalt],
       privateStateId,
       initialPrivateState,
       retireAuthority: opts?.retireAuthority,
+      armsInWaveTwo: opts?.armsInWaveTwo,
     });
     const found = await (findDeployedContract as any)(providers, {
       contractAddress: address,

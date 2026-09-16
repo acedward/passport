@@ -10,10 +10,10 @@ import { rawTokenType, encodeRawTokenType } from '@midnightntwrk/ledger-v9';
 
 import * as FaucetModule from '../../contracts/managed/faucet/contract/index.js';
 import * as ControlModule from '../../contracts/managed/control/contract/index.js';
-import { Contract } from '../wallet/contract.js';
+import { contractForArms } from '../wallet/wave-deploy.js';
 import { makeWitnesses } from '../wallet/witnesses.js';
 import { CustodyAccount } from '../wallet/account.js';
-import type { AnyDevice } from '../wallet/signer.js';
+import type { AnyDevice, Arm } from '../wallet/signer.js';
 import type { EncKeyPair } from '../wallet/inbox.js';
 import {
   createWallet,
@@ -28,8 +28,13 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEPLOYMENT_FILE = path.resolve(__dirname, '..', '..', 'deployment.json');
 
-export function compiledAccountContract() {
-  return CompiledContract.make('account', Contract).pipe(
+/** The compiled account contract as a client for an account of `arms`.
+ *
+ *  The default is the pair Passport's own suites deploy. An `evm`-born account
+ *  is `compiledAccountContract(['evm'])`: see `contractForArms` for why the arm
+ *  list is not optional information — no account carries all 26 circuits. */
+export function compiledAccountContract(arms: readonly Arm[] = ['jubjub', 'k256']) {
+  return CompiledContract.make('account', contractForArms(arms)).pipe(
     CompiledContract.withWitnesses(makeWitnesses()),
     CompiledContract.withCompiledFileAssets(zkConfigPath),
   );

@@ -1,0 +1,35 @@
+{
+  "test": "evm-account-deploy",
+  "verdict": "PASS",
+  "note": "An EVM-only account (2 deposits + activation + 7 gated evm operations) deploys in TWO waves — eight operations, then the last two gated circuits in the maintenance update that retires the authority — and is activated by an Ethereum key; the device entry is derived from the 20-byte address. One wave is refused by the node although the fee computation accepts it: see EVM_GATED_IN_WAVE_ONE.",
+  "measuredAt": "2026-09-16T04:56:02.986Z",
+  "details": {
+    "account": "688834392218b1c08184f0035bf1e7ea430440dbf8b1d112580c7e055fc10d11",
+    "deviceAddress": "0x0f114fdd585d4834e06820032985e32c53e4d2a6",
+    "publicPoint": {
+      "x": "0xc7018a19faf69eeabdfce3cd8ca46a89c6ba2850d66c58c3b03866d398f076c6",
+      "y": "0xe5d74584279ccc0ca27bd04c2e535c95537e404560f0bc7173e18e11c52d73f8"
+    },
+    "evmDomainSalt": "0x4c13a637481092ba902a08a2559ef092c28ce21d6e3f980a7578d86cdb003339",
+    "bootCommitment": "0x58e9e24a0ae49ce4e5428ab454eba7d44c9ef169f58525694ef451c91388281d",
+    "deviceEntry": "0x757b7172cc9c119e0313a8ebe9f4381058ffa891e67355c4ea57adceb7fbebf0",
+    "operations": [
+      "deposit_unshielded",
+      "deposit_shielded",
+      "activate_initial_device_with_evm",
+      "withdraw_unshielded_with_evm",
+      "append_inbox_with_evm",
+      "withdraw_shielded_with_evm",
+      "withdraw_shielded_to_contract_with_evm",
+      "rotate_enc_key_with_evm",
+      "add_device_with_evm",
+      "remove_device_with_evm"
+    ],
+    "operationCount": 10,
+    "activationTx": "00a3bac284fdeb468481ea7bf3de44e8e4dee8f6b966c711ba8abf99d45a3414ee",
+    "roundBefore": "0",
+    "roundAfter": "1",
+    "authNonce": "0",
+    "deviceCount": 1
+  }
+}

@@ -1,6 +1,38 @@
 pragma language_version >= 0.17.0;
 
 import CompactStandardLibrary;
+// The `evm` arm's EIP-712 codec: frozen type hashes, domain separator, struct
+// hashes and digests (docs/AUTH-EIP712-PASSPORT-EVM-V1.md). Its exported pure
+// circuits surface on this contract's artifact as free oracles; they emit no
+// proving key. `ByteCodec` is imported by that module and never directly.
+import "./modules/Eip712";
+
+// A name imported from a module does not reach the compiled artifact's surface
+// on its own, so the codec's pure circuits are re-exported here explicitly.
+// They are FREE: `pure` circuits emit no proving key and cost no deploy budget,
+// and every one of them is a function of its arguments alone. A signer, a
+// relayer or an auditor therefore obtains the contract's OWN answer for the
+// domain separator, the struct hash and the digest instead of reimplementing
+// the byte contract (MIP-0013 §2's rule for challenge reproduction, applied to
+// the EIP-712 layer above it).
+export {
+  evm_account_alias,
+  evm_domain_separator_for,
+  evm_struct_hash_withdraw_unshielded,
+  evm_struct_hash_withdraw_shielded,
+  evm_struct_hash_withdraw_shielded_to_contract,
+  evm_struct_hash_append_inbox,
+  evm_struct_hash_rotate_enc_key,
+  evm_struct_hash_add_device,
+  evm_struct_hash_remove_device,
+  evm_digest_withdraw_unshielded,
+  evm_digest_withdraw_shielded,
+  evm_digest_withdraw_shielded_to_contract,
+  evm_digest_append_inbox,
+  evm_digest_rotate_enc_key,
+  evm_digest_add_device,
+  evm_digest_remove_device
+};
 
 // ---------------------------------------------------------------------------
 // Midnight account custody contract — reference implementation.
@@ -110,6 +142,64 @@ import CompactStandardLibrary;
 //     pk, use_counter, sig, envelope). Cost: one extra persistentHash per
 //     k256 authorisation.
 //
+//   arm `evm` — ECDSA over secp256k1 again, but the device is an ORDINARY
+//     ETHEREUM EOA and the message is EIP-712 typed data, so the signature is
+//     one a wallet like MetaMask already knows how to produce. Like `k256` it
+//     is NOT a MIP-0013 conforming scheme (R2 rejects secp256k1 ECDSA for
+//     account authorisation); it is registered locally under the draft
+//     signature-schemes MIP's registry rules — one circuit per scheme, an
+//     arm-marked tag family, no in-circuit scheme conditional (SIG-1..SIG-5) —
+//     and is proposed upstream, not assumed. DST families:
+//     "midnight:account:device:evm:v1", "midnight:account:auth:evm:v1:*",
+//     "midnight:account:boot:evm:v1".
+//
+//     THE DEVICE IS ITS ADDRESS. Entries and boot commitments bind the 20-byte
+//     `secp256k1EthereumAddress(pk)`, not the curve point: it is the identity
+//     the wallet exposes, the identity the signed message carries in its
+//     `owner` field, and the identity a user can read off MetaMask and compare
+//     with the device roster. The seam derives the address from the presented
+//     point, so a point that does not hash to the enrolled address fails the
+//     membership assert before any signature is examined — that derivation IS
+//     the "presented key matches the enrolled device" check. The point at
+//     infinity is refused on the POINT, by the same coordinate guard the k256
+//     arm uses, before any address is derived.
+//
+//     WHAT IS SIGNED. Not the challenge: the challenge is one field of an
+//     EIP-712 struct, and the wallet signs
+//     keccak256(0x1901 || domainSeparator || structHash), which the circuit
+//     recomputes with in-circuit keccak256 before
+//     `secp256k1EcdsaVerify(digest, sig, pk)`. The domain is
+//     EIP712Domain(string name,string version,address verifyingContract,
+//     bytes32 salt) with name "Midnight Passport Account", version "1",
+//     `verifyingContract` the low 20 bytes of keccak256 over this contract's
+//     32-byte address, and `salt` the constructor-sealed `evm_domain_salt` —
+//     EIP-712's `chainId` has no meaning for a Midnight contract, and the salt
+//     takes its place. There is one primary type per gated operation, each
+//     `<Op>(bytes32 account,address owner,uint64 authNonce,<action fields>,
+//     bytes32 challenge)`, so a withdrawal signature can never be read as a
+//     device change: the separation is at the type-hash level.
+//
+//     WHY BOTH. The action fields are readable, so a user approving a
+//     withdrawal sees the colour, the amount and the recipient rather than a
+//     hash; the challenge binds those same arguments a second time TOGETHER
+//     WITH the witness values the wallet cannot see (AUTH-10, e.g. which
+//     qualified coin a shielded withdrawal spends). Readability alone would
+//     leave the private half unbound; the challenge alone would make the wallet
+//     display an opaque 32 bytes. There is no `validUntil`: freshness is
+//     `auth_nonce`, as on the other arms. Malleability is handled exactly as on
+//     `k256` — both S forms verify, the consumed single-use entry makes the
+//     twin inert — with the measured difference that Ethereum tooling (ethers)
+//     refuses to parse a high-S signature at all, so a twin cannot arrive
+//     through a wallet.
+//
+//     The byte contract is frozen, with its type hashes, its known-answer test
+//     and 63 vectors, in docs/AUTH-EIP712-PASSPORT-EVM-V1.md; the codec lives
+//     in contracts/modules/Eip712.compact and is re-exported here as pure
+//     oracles. Cost: the arm's gated circuits are k=18 (147,602-188,532 rows)
+//     against the k256 twins' k=16-17, the premium being roughly 76,500 rows of
+//     in-circuit keccak — about 28,300 of which recompute a domain separator
+//     that is constant for the deployment.
+//
 // Per-arm circuits instead of one circuit with an in-circuit scheme choice:
 // Compact compiles every exported circuit to its own proof, so a proof
 // through a `_with_jubjub` circuit pays only the Schnorr constraints and a
@@ -157,9 +247,15 @@ import CompactStandardLibrary;
 // §2).
 //
 // Toolchain: requires the ZKIR v3 backend (compile with --feature-zkir-v3,
-// Compact toolchain 0.33.0-rc or later; the secp256k1 surface lives in the
-// compiler's zkir-v3-library.compact and is loaded only when the v3 IR is
+// Compact toolchain 0.34.0; the secp256k1 and keccak256 surfaces live in the
+// compiler's zkir-v3-library.compact and are loaded only when the v3 IR is
 // enabled) and a ledger-9 network with a ZKIR-3.0-capable proof server.
+//
+// Deploy: the three arms export 26 impure circuits between them and NO account
+// carries them all — 26 verifier keys price at 82,654 bytes written against a
+// 50,000-byte block budget. Every account deploys the subset its owner's
+// devices need, in waves (src/wallet/wave-deploy.ts), and the client is built
+// for that same subset (contractForArms).
 // ---------------------------------------------------------------------------
 
 // ── Witness (MIP-0012 §6.3): the wallet-local coin store ────────────────────
@@ -235,6 +331,18 @@ export ledger booted: Boolean;
 // per account, so pre-activation state carries no cross-account-stable
 // device value.
 
+export sealed ledger evm_domain_salt: Bytes<32>;
+// The `evm` arm's EIP-712 domain salt (arm `evm` only; the other arms have no
+// notion of it). EIP-712's `chainId` has no meaning for a Midnight contract, so
+// the domain binds this 32-byte network/deployment value in its place — the
+// MIP-0008 CAIP-2 style binding MIP-0013 §5.1 recommends, and the replacement
+// for AA-v3's `deploymentDomain`. Sealed: fixed at construction, because a
+// mutable domain would silently invalidate every signature a wallet has already
+// produced. Deployments on one network SHOULD share it (the recommended value is
+// keccak256("midnight:" || networkId)); its only requirement is that a signature
+// intended for one network cannot be replayed on another, which the account
+// address in the domain alias already enforces between accounts.
+
 // ── Constructor ─────────────────────────────────────────────────────────────
 //
 // MIP-0013 §3 semantics via the boot commitment (see the `boot` cell): the
@@ -243,7 +351,11 @@ export ledger booted: Boolean;
 // activate_initial_device_with_<arm>(pk, salt) immediately after deploy to
 // insert the initial entry at epoch 0 and use counter 0.
 
-constructor(initial_device_boot: Bytes<32>, encryption_key: Bytes<32>) {
+constructor(
+  initial_device_boot: Bytes<32>,
+  encryption_key:      Bytes<32>,
+  evm_domain:          Bytes<32>,
+) {
   round        = 0 as Uint<64>;
   enc_key      = disclose(encryption_key);
   inbox_count  = 0 as Uint<64>;
@@ -253,6 +365,11 @@ constructor(initial_device_boot: Bytes<32>, encryption_key: Bytes<32>) {
   device_epoch = 0 as Uint<32>;
   device_count = 0 as Uint<8>;
   auth_nonce   = 0 as Uint<64>;
+  // Arm `evm` only; the value is public and carries no secret. It cannot be
+  // derived here from the account's own address (kernel.self() is the ZERO
+  // address inside a constructor, the same reason the boot commitment exists),
+  // so the deploying client supplies it.
+  evm_domain_salt = disclose(evm_domain);
 }
 
 // ── Bootstrap (per arm) ─────────────────────────────────────────────────────
@@ -296,6 +413,21 @@ export circuit activate_initial_device_with_k256(
   ));
 }
 
+// Arm evm: the device is an Ethereum EOA, so the committed identity is its
+// 20-byte address rather than a curve point. The public point is still required
+// here, so that the identity check below (and so the whole arm) can refuse the
+// point at infinity, whose address is a perfectly ordinary 20 bytes.
+export circuit activate_initial_device_with_evm(pk: Secp256k1Point, salt: Bytes<32>): [] {
+  assert(!booted, "already activated");
+  require_live_k256_key(pk);
+  const address = secp256k1EthereumAddress(pk);
+  assert(derive_boot_commitment_with_evm(salt, address) == boot,
+         "boot commitment mismatch");
+  do_activate_initial_device(derive_device_entry_with_evm(
+    kernel.self(), address, device_epoch, 0 as Uint<64>
+  ));
+}
+
 // Boot commitments (arm-marked DST_BOOT, zero-padded to 32 bytes; to be
 // registered under the MPS-0027 registry).
 
@@ -320,6 +452,18 @@ export pure circuit derive_boot_commitment_with_k256(
     [pad(32, "midnight:account:boot:k1:v2"), salt,
      secp256k1PointX(pk) as Bytes<32>, secp256k1PointY(pk) as Bytes<32>,
      envelope]
+  );
+}
+
+// Arm evm: DST_BOOT = "midnight:account:boot:evm:v1". The key is bound as its
+// 20-byte Ethereum address — the identity the wallet, the EIP-712 `owner` field
+// and the device entry all agree on.
+export pure circuit derive_boot_commitment_with_evm(
+  salt:    Bytes<32>,
+  address: Bytes<20>,
+): Bytes<32> {
+  return persistentHash<[Bytes<32>, Bytes<32>, Bytes<20>]>(
+    [pad(32, "midnight:account:boot:evm:v1"), salt, address]
   );
 }
 
@@ -370,6 +514,36 @@ export pure circuit derive_device_entry_with_k256(
     [pad(32, "midnight:account:device:k1:v2"), self_addr,
      secp256k1PointX(pk) as Bytes<32>, secp256k1PointY(pk) as Bytes<32>,
      envelope, epoch, counter]
+  );
+}
+
+// Arm evm: DST_DEVICE = "midnight:account:device:evm:v1" zero-padded to
+// 32 bytes. The key is bound as its 20-byte ETHEREUM ADDRESS — the identity an
+// EVM wallet exposes, the identity the EIP-712 `owner` field carries, and the
+// identity a user can read off MetaMask and check against the device roster.
+// The seam derives the address from the presented point
+// (`secp256k1EthereumAddress`), so presenting a point that does not hash to the
+// enrolled address fails the membership assert before any signature is
+// examined: the address match of FR-003 IS this derivation, exactly as the
+// other arms bind their keys through their own entry preimages.
+//
+// The address collapses the point's two coordinates into keccak's 160-bit
+// image. That is the same identity Ethereum itself uses for an account, and it
+// is the point at infinity, not a collision, that the arm must refuse — see
+// `require_live_k256_key`, which the evm seam and bootstrap both call on the
+// presented POINT before deriving anything from it.
+//
+// No envelope id (the k256 arm's v2 preimages carry one): an EIP-712 digest is
+// already a complete, unambiguous envelope, agreed between wallet and contract
+// by the frozen byte contract.
+export pure circuit derive_device_entry_with_evm(
+  self_addr: ContractAddress,
+  address:   Bytes<20>,
+  epoch:     Uint<32>,
+  counter:   Uint<64>,
+): Bytes<32> {
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Uint<32>, Uint<64>]>(
+    [pad(32, "midnight:account:device:evm:v1"), self_addr, address, epoch, counter]
   );
 }
 
@@ -699,6 +873,128 @@ export pure circuit challenge_remove_device_with_k256(
   );
 }
 
+// ── Challenge constructions, arm evm ────────────────────────────────────────
+//
+// Preimage:
+//   [DST_CIRCUIT, self, address, ...args, ...witness_values, auth_nonce]
+// The k256 arm's preimage with the key encoded as the device's 20-byte Ethereum
+// address instead of its two affine coordinates — the identity this arm enrols.
+// Everything else is identical: no signature term, no grinding nonce, the same
+// witness-value pinning (AUTH-10), the same one-DST-per-circuit rule (AUTH-3).
+//
+// The challenge is NOT what the wallet signs on this arm: it is one field of the
+// EIP-712 struct whose digest the wallet signs (docs/AUTH-EIP712-PASSPORT-EVM-V1.md).
+// That is what lets the wallet display readable action fields while the circuit
+// still binds the private witness values the wallet cannot see — the readable
+// fields and the challenge cover the same arguments, so a signature that looks
+// right in MetaMask and means something else in the circuit does not exist.
+
+export pure circuit challenge_withdraw_unshielded_with_evm(
+  self_addr:   ContractAddress,
+  address:     Bytes<20>,
+  color:       Bytes<32>,
+  amount:      Uint<128>,
+  recipient:   UserAddress,
+  nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:withdraw_unshielded")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<32>, Uint<128>, UserAddress, Uint<64>]>(
+    [dst, self_addr, address, color, amount, recipient, nonce_value]
+  );
+}
+
+export pure circuit challenge_withdraw_shielded_with_evm(
+  self_addr:   ContractAddress,
+  address:     Bytes<20>,
+  recipient:   ZswapCoinPublicKey,
+  color:       Bytes<32>,
+  amount:      Uint<128>,
+  coin:        QualifiedShieldedCoinInfo,
+  nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:withdraw_shielded")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, ZswapCoinPublicKey, Bytes<32>, Uint<128>, QualifiedShieldedCoinInfo, Uint<64>]>(
+    [dst, self_addr, address, recipient, color, amount, coin, nonce_value]
+  );
+}
+
+export pure circuit challenge_withdraw_shielded_to_contract_with_evm(
+  self_addr:   ContractAddress,
+  address:     Bytes<20>,
+  recipient:   ContractAddress,
+  color:       Bytes<32>,
+  amount:      Uint<128>,
+  coin:        QualifiedShieldedCoinInfo,
+  nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:withdraw_shielded_to_contract")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, ContractAddress, Bytes<32>, Uint<128>, QualifiedShieldedCoinInfo, Uint<64>]>(
+    [dst, self_addr, address, recipient, color, amount, coin, nonce_value]
+  );
+}
+
+export pure circuit challenge_append_inbox_with_evm(
+  self_addr:   ContractAddress,
+  address:     Bytes<20>,
+  entry:       Bytes<192>,
+  nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:append_inbox")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<192>, Uint<64>]>(
+    [dst, self_addr, address, entry, nonce_value]
+  );
+}
+
+export pure circuit challenge_rotate_enc_key_with_evm(
+  self_addr:   ContractAddress,
+  address:     Bytes<20>,
+  new_key:     Bytes<32>,
+  nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:rotate_enc_key")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<32>, Uint<64>]>(
+    [dst, self_addr, address, new_key, nonce_value]
+  );
+}
+
+export pure circuit challenge_add_device_with_evm(
+  self_addr:   ContractAddress,
+  address:     Bytes<20>,
+  new_entry:   Bytes<32>,
+  nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:add_device")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<32>, Uint<64>]>(
+    [dst, self_addr, address, new_entry, nonce_value]
+  );
+}
+
+export pure circuit challenge_remove_device_with_evm(
+  self_addr:   ContractAddress,
+  address:     Bytes<20>,
+  entry:       Bytes<32>,
+  nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:remove_device")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<32>, Uint<64>]>(
+    [dst, self_addr, address, entry, nonce_value]
+  );
+}
+
 // ── The authorisation seam (MIP-0012 §4), one chip per arm ──────────────────
 //
 // One seam chip per arm gates every asset-releasing and state-changing
@@ -773,6 +1069,47 @@ circuit require_authorised_with_k256(
   // internally; both low-S and high-S signature forms are accepted (see
   // the malleability note in the header).
   const digest = envelope_digest(envelope, challenge);
+  assert(
+    secp256k1EcdsaVerify(digest, sig, pk),
+    "invalid signature"
+  );
+  auth_nonce = ((auth_nonce + (1 as Uint<64>)) as Uint<64>);
+  bump_round();
+}
+
+// Arm evm. The digest is computed by the CALLER (each gated export builds its
+// own EIP-712 struct), and `address` is the caller's already-computed
+// `secp256k1EthereumAddress(pk)` — the same value it put in the struct's `owner`
+// field. Passing it rather than recomputing it here keeps one keccak per call;
+// the obligation is local and holds for all seven call sites in this file, which
+// are the only ones this internal chip has.
+//
+// Consequences of binding the entry to the address: presenting a point that does
+// not hash to the enrolled address fails the membership assert, and so does a
+// point of the k256 or jubjub arm (different DST), an unenrolled address, a
+// stale epoch and a wrong use counter — all identically, before any signature is
+// examined.
+circuit require_authorised_with_evm(
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+  digest:      Bytes<32>,
+  address:     Bytes<20>,
+): [] {
+  require_live_k256_key(pk);
+  const entry = disclose(derive_device_entry_with_evm(
+    kernel.self(), address, device_epoch, use_counter
+  ));
+  assert(devices.member(entry), "unknown device entry");
+  devices.remove(entry);
+  devices.insert(disclose(derive_device_entry_with_evm(
+    kernel.self(), address, device_epoch,
+    ((use_counter + (1 as Uint<64>)) as Uint<64>)
+  )));
+  // The signature covers the EIP-712 digest, never the challenge itself. The
+  // verify interprets its digest as a big-endian integer and reduces it mod the
+  // curve order internally; both low-S and high-S forms are accepted (see the
+  // malleability note in the header).
   assert(
     secp256k1EcdsaVerify(digest, sig, pk),
     "invalid signature"
@@ -954,6 +1291,26 @@ export circuit withdraw_unshielded_with_k256(
   do_withdraw_unshielded(color, amount, recipient);
 }
 
+export circuit withdraw_unshielded_with_evm(
+  color:       Bytes<32>,
+  amount:      Uint<128>,
+  recipient:   UserAddress,
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+): [] {
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_withdraw_unshielded_with_evm(
+    kernel.self(), address, color, amount, recipient, auth_nonce
+  );
+  const digest = evm_digest_withdraw_unshielded(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce,
+    color, amount, recipient.bytes, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
+  do_withdraw_unshielded(color, amount, recipient);
+}
+
 // ── Shielded custody, stateless (MIP-0012 §6) ───────────────────────────────
 
 // Permissionless deposit (§6.2): claims the coin for the contract and
@@ -1000,6 +1357,27 @@ export circuit append_inbox_with_k256(
   do_append_inbox(entry);
 }
 
+// The entry enters the EIP-712 struct as its keccak (one word per field), and
+// the challenge binds all 192 bytes, so the entry behind the hash is pinned
+// twice over.
+export circuit append_inbox_with_evm(
+  entry:       Bytes<192>,
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+): [] {
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_append_inbox_with_evm(
+    kernel.self(), address, entry, auth_nonce
+  );
+  const digest = evm_digest_append_inbox(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce,
+    keccak256<Bytes<192>>(entry), challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
+  do_append_inbox(entry);
+}
+
 // Authorised spend to a user's Zswap key (§6.3). The coin description
 // enters through the held_coin witness, never from ledger state. The
 // witness is invoked before the challenge so its returned value enters the
@@ -1038,6 +1416,30 @@ export circuit withdraw_shielded_with_k256(
     kernel.self(), pk, recipient, color, amount, coin, auth_nonce
   );
   require_authorised_with_k256(pk, use_counter, sig, challenge, envelope);
+  return do_withdraw_shielded(recipient, amount, coin);
+}
+
+export circuit withdraw_shielded_with_evm(
+  recipient:   ZswapCoinPublicKey,
+  color:       Bytes<32>,
+  amount:      Uint<128>,
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+): Maybe<ShieldedCoinInfo> {
+  // The witness runs BEFORE the challenge, so its value enters the challenge
+  // (AUTH-10) and the signature authorises spending exactly this qualified coin
+  // — the coin the wallet never sees and cannot display.
+  const coin = held_coin(color);
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_withdraw_shielded_with_evm(
+    kernel.self(), address, recipient, color, amount, coin, auth_nonce
+  );
+  const digest = evm_digest_withdraw_shielded(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce,
+    color, amount, recipient.bytes, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
   return do_withdraw_shielded(recipient, amount, coin);
 }
 
@@ -1090,6 +1492,27 @@ export circuit withdraw_shielded_to_contract_with_k256(
   return do_withdraw_shielded_to_contract(recipient, amount, coin);
 }
 
+export circuit withdraw_shielded_to_contract_with_evm(
+  recipient:   ContractAddress,
+  color:       Bytes<32>,
+  amount:      Uint<128>,
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+): [ShieldedCoinInfo, Maybe<ShieldedCoinInfo>] {
+  const coin = held_coin(color);
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_withdraw_shielded_to_contract_with_evm(
+    kernel.self(), address, recipient, color, amount, coin, auth_nonce
+  );
+  const digest = evm_digest_withdraw_shielded_to_contract(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce,
+    color, amount, recipient.bytes, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
+  return do_withdraw_shielded_to_contract(recipient, amount, coin);
+}
+
 // ── Encryption-key lifecycle (MIP-0012 §6.7) ────────────────────────────────
 //
 // Exactly one way to change enc_key. After rotation the client SHOULD
@@ -1122,6 +1545,23 @@ export circuit rotate_enc_key_with_k256(
     kernel.self(), pk, new_key, auth_nonce
   );
   require_authorised_with_k256(pk, use_counter, sig, challenge, envelope);
+  do_rotate_enc_key(new_key);
+}
+
+export circuit rotate_enc_key_with_evm(
+  new_key:     Bytes<32>,
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+): [] {
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_rotate_enc_key_with_evm(
+    kernel.self(), address, new_key, auth_nonce
+  );
+  const digest = evm_digest_rotate_enc_key(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce, new_key, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
   do_rotate_enc_key(new_key);
 }
 
@@ -1220,6 +1660,23 @@ export circuit add_device_with_k256(
   do_add_device(new_entry);
 }
 
+export circuit add_device_with_evm(
+  new_entry:   Bytes<32>,
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+): [] {
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_add_device_with_evm(
+    kernel.self(), address, new_entry, auth_nonce
+  );
+  const digest = evm_digest_add_device(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce, new_entry, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
+  do_add_device(new_entry);
+}
+
 // Removes a device's CURRENT entry, supplied as the literal set element
 // (MIP-0013 §6): removing a lost device requires its public key and
 // current use counter, recovered from the client roster or the S11
@@ -1259,6 +1716,27 @@ export circuit remove_device_with_k256(
   // As above: the caller's post-roll entry is off limits.
   do_remove_device(entry, derive_device_entry_with_k256(
     kernel.self(), pk, envelope, device_epoch,
+    ((use_counter + (1 as Uint<64>)) as Uint<64>)
+  ));
+}
+
+export circuit remove_device_with_evm(
+  entry:       Bytes<32>,
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+): [] {
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_remove_device_with_evm(
+    kernel.self(), address, entry, auth_nonce
+  );
+  const digest = evm_digest_remove_device(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce, entry, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
+  // As above: the caller's post-roll entry is off limits.
+  do_remove_device(entry, derive_device_entry_with_evm(
+    kernel.self(), address, device_epoch,
     ((use_counter + (1 as Uint<64>)) as Uint<64>)
   ));
 }

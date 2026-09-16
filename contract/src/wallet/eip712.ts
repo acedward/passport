@@ -273,6 +273,15 @@ export function computeDigest(
   };
 }
 
+/** The recommended `evm_domain_salt` for a network: `keccak256("midnight:" ||
+ *  networkId)`, the MIP-0008 CAIP-2 style binding. Accounts on one network
+ *  share it; a signature still cannot cross accounts, because the domain also
+ *  binds the account's own address through `verifyingContract`. A deployer who
+ *  wants a per-account domain passes its own 32 bytes instead. */
+export function evmDomainSaltFor(networkId: string): Uint8Array {
+  return keccak(utf8(`midnight:${networkId}`));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Wallet transport
 // ─────────────────────────────────────────────────────────────────────────────

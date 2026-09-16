@@ -5,19 +5,19 @@
   "verdict": "PASS",
   "note": "Stateless deposit conforms (entry decrypts, no coin material observable, wrong-index probe fails at proving); partial spend + surviving-coin capture + cross-transaction change spend all accepted by the node.",
   "details": {
-    "account": "e26184a8a347b021af588e3c0ed1b4fa03368d71d55350ce579e107d60f3d007",
-    "depositTx": "003f5771c1841db106cbb55eb98aff6498ae60b5427006982e826d5faa2f88c282",
+    "account": "db8894bdac58c84c7129478a6df4e41aab24d2bbf31fefe168df29b812c2f75b",
+    "depositTx": "00793172869fad36e69483773f41f5b2285693a5fbad5401b8fd3cd4ea68d84f6d",
     "mtIndexCandidates": [
       "29"
     ],
     "depositAudit": {
-      "tx:003f5771c1…:raw": {
+      "tx:0079317286…:raw": {
         "nonce": false,
         "color": false,
         "valueBE": false,
         "valueLE": false
       },
-      "tx:003f5771c1…:contractActions": {
+      "tx:0079317286…:contractActions": {
         "nonce": false,
         "color": false,
         "valueBE": false,
@@ -31,48 +31,44 @@
       }
     },
     "wrongIndexRejection": "Unexpected error executing scoped transaction '<unnamed>': Error: invalid index into sparse merkle tree: 1029 -- write creating spend proof",
-    "partialSpendTx": "005ec3066342871764f84cc757c90ba442a2c41722c16a78123f7a5a5282443880",
+    "partialSpendTx": "008c722487dc29e3053d04309a868cd25b82ddcdbe32a9342f40d200c91a9a5844",
     "partialSpendAttempts": [
       {
         "mtIndex": "29",
-        "outcome": "accepted: 005ec3066342871764f84cc757c90ba442a2c41722c16a78123f7a5a5282443880"
+        "outcome": "accepted: 008c722487dc29e3053d04309a868cd25b82ddcdbe32a9342f40d200c91a9a5844"
       }
     ],
     "changeCandidates": [
       "30",
       "31"
     ],
-    "changeSpendTx": "003df1864298c043fdeccf8833002d1b595b3a79f8bc12d565b297778a1441368c",
+    "changeSpendTx": "009295e80aa023db3d3f2fb0dfb7a21265db04534ff34f58f92833e8c0309a6770",
     "changeSpendAttempts": [
       {
         "mtIndex": "30",
-        "outcome": "rejected: Unexpected error submitting scoped transaction '<unnamed>': Error: 'prove' retur"
-      },
-      {
-        "mtIndex": "31",
-        "outcome": "accepted: 003df1864298c043fdeccf8833002d1b595b3a79f8bc12d565b297778a1441368c"
+        "outcome": "accepted: 009295e80aa023db3d3f2fb0dfb7a21265db04534ff34f58f92833e8c0309a6770"
       }
     ],
     "lifecycleAudit": {
-      "tx:005ec30663…:raw": {
+      "tx:008c722487…:raw": {
         "nonce": false,
         "color": false,
         "valueBE": false,
         "valueLE": false
       },
-      "tx:005ec30663…:contractActions": {
+      "tx:008c722487…:contractActions": {
         "nonce": false,
         "color": false,
         "valueBE": false,
         "valueLE": false
       },
-      "tx:003df18642…:raw": {
+      "tx:009295e80a…:raw": {
         "nonce": false,
         "color": false,
         "valueBE": false,
         "valueLE": false
       },
-      "tx:003df18642…:contractActions": {
+      "tx:009295e80a…:contractActions": {
         "nonce": false,
         "color": false,
         "valueBE": false,
@@ -86,7 +82,7 @@
       }
     }
   },
-  "ranAt": "2026-09-16T03:42:32.309Z",
+  "ranAt": "2026-09-16T04:47:20.111Z",
   "stack": {
     "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
     "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",

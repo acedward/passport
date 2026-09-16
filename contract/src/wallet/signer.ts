@@ -40,7 +40,7 @@ import {
 } from './contract.js';
 
 /** The authorisation arms the contract exports circuits for. */
-export type Arm = 'jubjub' | 'k256';
+export type Arm = 'jubjub' | 'k256' | 'evm';
 
 export interface CallContext {
   /** The account's contract address, raw bytes (binds the account, AUTH-3). */
@@ -355,9 +355,10 @@ export function authArgs(a: Authorisation): unknown[] {
     : [a.pk, a.use_counter, a.sig, a.envelope];
 }
 
-/** The arguments `activate_initial_device_with_<arm>` declares. The k256
- *  arm carries the device's envelope id (it is bound into the boot
- *  commitment the activation must reproduce), the jubjub arm does not. */
+/** The arguments `activate_initial_device_with_<arm>` declares. The k256 arm
+ *  carries the device's envelope id (it is bound into the boot commitment the
+ *  activation must reproduce); jubjub and evm do not — an EIP-712 digest is
+ *  already a complete envelope, so the evm arm has no id to equivocate. */
 export function activationArgs(device: AnyDevice, salt: Uint8Array): unknown[] {
-  return device.arm === 'jubjub' ? [device.pk, salt] : [device.pk, salt, device.envelope];
+  return device.arm === 'k256' ? [device.pk, salt, device.envelope] : [device.pk, salt];
 }
