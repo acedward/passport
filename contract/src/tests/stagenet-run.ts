@@ -48,19 +48,21 @@ import * as path from 'node:path';
 import * as Rx from 'rxjs';
 import { ethers } from 'ethers';
 import { CompiledContract } from '@midnight-ntwrk/compact-js';
-import { deployContract } from '@midnight-ntwrk/midnight-js-contracts';
+import { deployContract, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
 import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
 import { secp256k1PublicKeyOf, signAttestationDigest } from '@sig-net/midnight/testing';
 
 import * as VaultModule from '../../contracts/managed/Erc20Vault/contract/index.js';
 import { pureCircuits as vaultPureCircuits } from '../../contracts/erc20-vault/src/index.js';
 import { fingerprintDeployArtefacts } from '../../contracts/erc20-vault/deploy/artefacts.js';
+import { contractRecipient } from '../../contracts/erc20-vault/src/index.js';
 import {
   deriveMidnightResponseKey,
   formatSecp256k1PublicKey,
   getMpcRootPublicKey,
   getSignetContractAddress,
   normaliseSecp256k1PublicKey,
+  toSignBidirectionalEventIndex as sdkToIndex,
 } from '../../contracts/erc20-vault/src/signet-sdk.js';
 
 import { CustodyAccount } from '../wallet/account.js';
@@ -118,7 +120,9 @@ const DEPOSIT_AMOUNT = BigInt(process.env.PRS_DEPOSIT_AMOUNT ?? '1000000');   //
 const SPEND_AMOUNT = BigInt(process.env.PRS_SPEND_AMOUNT ?? '100000');       // 0.1 USDC, S4
 const TEST3_AMOUNT = BigInt(process.env.PRS_TEST3_AMOUNT ?? '250000');       // 0.25 USDC, S5–S7
 
-/** The MPC wait the owner capped at 45 minutes for the FIRST deposit. */
+/** The MPC wait. The owner capped the FIRST deposit at 45 minutes; the coordinator's
+ *  authorised retries use 30, which the census says is generous rather than a retry loop —
+ *  every signature the stagenet MPC has ever posted arrived inside 60 seconds. */
 const MPC_TIMEOUT_MS = Number(process.env.PRS_MPC_TIMEOUT_MS ?? String(45 * 60 * 1000));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -159,8 +163,14 @@ interface State {
    *  index is unsatisfiable at proving time, so nothing is ever submitted — MIP-0012
    *  INV-5), and the one that proves is written back into `coinStore`. */
   coinCandidates?: Record<string, string[]>;
-  /** open bridge requests */
-  deposit?: { requestId?: string; startTxId?: string; relay?: unknown; settleTxId?: string; mtIndex?: string };
+  /** open bridge requests. `attempts` keeps every deposit start this account has made, in
+   *  order, because a request the MPC never signs is not closed by a later one: it stays
+   *  open in the vault for ever, and whoever reads this later needs to know which of several
+   *  open request ids the run was actually settling. */
+  deposit?: {
+    requestId?: string; startTxId?: string; relay?: unknown; settleTxId?: string; mtIndex?: string;
+    attempts?: { requestId: string; startTxId: string; startedUtc: string; signed: boolean | null }[];
+  };
   withdraw?: { requestId?: string; startTxId?: string; relay?: unknown; settleTxId?: string };
   wallet2?: { coinPublicKey: string; encryptionPublicKey: string };
 }
@@ -218,6 +228,7 @@ function check(ok: boolean, label: string): boolean {
   return ok;
 }
 const nowUtc = (): string => new Date().toISOString();
+const strip = (hex: string): string => hex.replace(/^0x/, '').toLowerCase();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared plumbing
@@ -277,6 +288,34 @@ async function deployWitnessFree(walletCtx: any, name: string, module: any, args
     deployTxId: deployed.deployTxData.public.txId ?? deployed.deployTxData.public.transactionHash,
     call: async (circuit: string, ...callArgs: unknown[]) => {
       const r = await deployed.callTx[circuit](...callArgs);
+      return { txId: r?.public?.txId ?? r?.public?.transactionHash, result: r };
+    },
+    ledgerState: async () => {
+      const state = await providers.publicDataProvider.queryContractState(address);
+      if (!state) throw new Error(`no contract state at ${address}`);
+      return module.ledger(state.data);
+    },
+  };
+}
+
+/** Connect to an ALREADY DEPLOYED witness-free contract — the vault, for a call made from a
+ *  wallet rather than from the account. Same leaf/registry provider split as the deploy. */
+async function connectWitnessFree(walletCtx: any, name: string, module: any, address: string) {
+  const providers = await createProviders(walletCtx, path.join(managedPath, name));
+  const compiled = CompiledContract.make(name, module.Contract).pipe(
+    CompiledContract.withVacantWitnesses,
+    CompiledContract.withCompiledFileAssets(path.join(managedPath, name)),
+  );
+  const found: any = await (findDeployedContract as any)(providers, {
+    contractAddress: address,
+    compiledContract: compiled,
+    privateStateId: `${name}-connect-${Date.now().toString(36)}`,
+    initialPrivateState: {},
+  });
+  return {
+    address,
+    call: async (circuit: string, ...callArgs: unknown[]) => {
+      const r = await found.callTx[circuit](...callArgs);
       return { txId: r?.public?.txId ?? r?.public?.transactionHash, result: r };
     },
     ledgerState: async () => {
@@ -613,10 +652,25 @@ async function s3Fund(): Promise<void> {
   });
 }
 
-async function s3Start(): Promise<void> {
+/**
+ * Post a deposit start. `retry` posts ANOTHER one against the same already-funded deposit
+ * address rather than refusing because one is open.
+ *
+ * A retry is safe with respect to the funds, and it is worth saying why rather than assuming
+ * it: the Ethereum leg is a `transfer` of the address's whole 1 USDC with nonce 0, so at most
+ * ONE of the outstanding requests can ever execute. A second signed transaction with the same
+ * nonce is simply not includable, and a transfer of USDC the address no longer holds returns
+ * false — which is the branch `bridge_deposit_complete` already settles by minting nothing.
+ * The cost of a retry is therefore one stagenet transaction's DUST and a request left open in
+ * the vault's map.
+ */
+async function s3Start(retry = false): Promise<void> {
   const s = loadState();
-  if (s.deposit?.startTxId) { console.log(`the deposit already started: ${s.deposit.startTxId}`); return; }
-  step('S3.3  Midnight tx 1: bridge_deposit_start_with_evm (account → vault → singleton)');
+  if (s.deposit?.startTxId && !retry) { console.log(`the deposit already started: ${s.deposit.startTxId}`); return; }
+  if (retry && s.deposit?.relay) throw new Error('a relay result is already recorded — settle it rather than retrying');
+  step(retry
+    ? 'S3.3 (retry)  another bridge_deposit_start_with_evm against the same funded address'
+    : 'S3.3  Midnight tx 1: bridge_deposit_start_with_evm (account → vault → singleton)');
   const w = await wallet('STAGENET_WALLET_SEED', 'wallet 1');
   const providers = await createProviders(w);
   const { bridge, device } = await connectAccount(s, providers);
@@ -633,16 +687,85 @@ async function s3Start(): Promise<void> {
   const seconds = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`  start tx ${start.txId}  request ${start.requestId}  (${seconds}s)`);
 
-  s.deposit = { requestId: start.requestId, startTxId: start.txId };
+  const attempts = s.deposit?.attempts ?? (s.deposit?.requestId
+    ? [{ requestId: s.deposit.requestId, startTxId: s.deposit.startTxId!, startedUtc: 'see s3-deposit.json', signed: false }]
+    : []);
+  attempts.push({ requestId: start.requestId, startTxId: start.txId, startedUtc: nowUtc(), signed: null });
+  s.deposit = { requestId: start.requestId, startTxId: start.txId, attempts };
   saveState(s);
   evidence('s3-deposit', {
     startTxId: start.txId, requestId: start.requestId, startSeconds: seconds,
     startedUtc: nowUtc(),
+    attempt: attempts.length,
+    allAttempts: attempts,
     startShape: 'account → vault.startDeposit → SignetSigner.signBidirectional (one transaction, three contract calls)',
     depositEvmNonce: String(nonce),
     amountRaw: String(DEPOSIT_AMOUNT),
     vaultEvmUsdcBefore: String(vaultUsdcBefore),
   });
+}
+
+/**
+ * Attempt 3, and it is a DIAGNOSTIC rather than another throw of the dice.
+ *
+ * Sig Network's README says the MPC authenticates a notification by checking that the
+ * emitting transaction "also called the named client". In attempts 1 and 2 the vault is a
+ * CALLEE: the transaction's root is the ACCOUNT, and the tree is account → vault → singleton.
+ * If the MPC's check only recognises a client called from the transaction's ROOT, every
+ * nested request is silently unauthenticated — which would explain our two drops without
+ * contradicting the five earlier ones having other causes.
+ *
+ * So this posts the SAME request from the ROOT: wallet 1 calls the vault's permissionless
+ * `startDeposit` directly, with `recipient = right(account address)`. The deposit path is
+ * derived from the RECIPIENT, so the funded address and the nonce are unchanged and no new
+ * money is needed — and `bridge_deposit_complete` still mints into the account, because the
+ * mint recipient is the account either way. If this one is signed in 30 seconds while the
+ * nested ones were not, the cause is found.
+ */
+async function s3RootRetry(): Promise<void> {
+  const s = loadState();
+  if (!s.vault || !s.account) throw new Error('run s1 and s2 first');
+  step('S3.3 (attempt 3, ROOT POSITION)  wallet 1 calls vault.startDeposit directly');
+  const w = await wallet('STAGENET_WALLET_SEED', 'wallet 1');
+  const vault = await connectWitnessFree(w, 'Erc20Vault', VaultModule, s.vault.address);
+
+  const { provider } = sepolia();
+  const depositAddress = depositAddressOf(s);
+  const nonce = BigInt(await provider.getTransactionCount(depositAddress, 'latest'));
+  provider.destroy();
+  console.log(`  same deposit address ${depositAddress}, same Ethereum nonce ${nonce}`);
+  console.log(`  recipient = right(${s.account.address}) — the mint still lands in the account`);
+
+  const before = [...toRequestIds(await vault.ledgerState())];
+  const t0 = Date.now();
+  const r = await vault.call('startDeposit',
+    nonce, EVM_GAS.gasLimit, EVM_GAS.maxFeePerGas, EVM_GAS.maxPriorityFeePerGas,
+    EVM_GAS.keyVersion, hexToBytes(strip(USDC)), DEPOSIT_AMOUNT,
+    contractRecipient(hexToBytes(strip(s.account.address))));
+  const seconds = ((Date.now() - t0) / 1000).toFixed(1);
+  const after = [...toRequestIds(await vault.ledgerState())];
+  const fresh = after.filter((id) => !before.includes(id));
+  const requestId = fresh[fresh.length - 1] ?? after[after.length - 1]!;
+  console.log(`  start ${r.txId}  request ${requestId}  (${seconds}s)`);
+
+  const attempts = s.deposit?.attempts ?? [];
+  attempts.push({ requestId, startTxId: String(r.txId), startedUtc: nowUtc(), signed: null });
+  s.deposit = { ...(s.deposit ?? {}), requestId, startTxId: String(r.txId), attempts, relay: undefined };
+  saveState(s);
+  evidence('s3-deposit', {
+    startTxId: String(r.txId), requestId, startSeconds: seconds, startedUtc: nowUtc(),
+    attempt: attempts.length,
+    allAttempts: attempts,
+    startShape: 'wallet 1 → vault.startDeposit → SignetSigner.signBidirectional (ROOT POSITION: the vault is the transaction root\'s callee, not a nested one)',
+    rootPositionDiagnostic: "Sig Network's README says the MPC checks that the emitting transaction 'also called the named client'; attempts 1 and 2 had the vault as a CALLEE of the account. This attempt makes the same request with the vault called from the transaction root, changing nothing else",
+    depositEvmNonce: String(nonce),
+    amountRaw: String(DEPOSIT_AMOUNT),
+  });
+}
+
+/** The request ids currently open in the vault's deposit map. */
+function toRequestIds(state: any): string[] {
+  return [...sdkToIndex(state.depositEventMap).keys()].map(String);
 }
 
 async function relay(kind: 'deposit' | 'withdraw'): Promise<void> {
@@ -1126,7 +1249,8 @@ async function status(): Promise<void> {
 
 const commands: Record<string, () => Promise<void>> = {
   s1, s2,
-  's3-fund': s3Fund, 's3-start': s3Start,
+  's3-fund': s3Fund, 's3-start': () => s3Start(false), 's3-retry': () => s3Start(true),
+  's3-root-retry': s3RootRetry,
   's3-relay': () => relay('deposit'), 's3-complete': s3Complete,
   s4, s5, s6,
   's7-gas': s7Gas, 's7-start': s7Start,
