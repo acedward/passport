@@ -142,18 +142,33 @@ export class AccountSim {
     const privateState = emptyCoinStore(opts.encSecretKey);
     const contract = new (Contract as any)(makeWitnesses());
     const boot = initialDevice.bootCommitment(salt);
-    const res = await contract.initialState(
-      createConstructorContext(privateState, COIN_PK),
-      boot,
-      encPublicKey,
-      evmDomainSalt,
-      // The ERC20 bridge binding (PR-G): the vault as a callable reference and as the raw
-      // address a shielded send targets. Zero here — an offer never reaches the vault, and
-      // the constructor only stores the value. `src/tests/bridge-offline.ts` is where a
-      // real binding is exercised.
-      { bytes: new Uint8Array(32) },
-      { bytes: new Uint8Array(32) },
-    );
+    // The constructor's arity moved under this harness: PR-B wrote it against three arguments and
+    // PR-G's bridge added two more (the vault as a callable reference and as the raw address a
+    // shielded send targets). Three lines of work share this clone and `contracts/managed` is
+    // git-ignored, so at any moment the compiled artefact may be either shape — and recompiling to
+    // settle it would delete the tree another agent's on-node suite is reading from. So the
+    // simulator tries the current source's shape and falls back, which costs one thrown error and
+    // makes this file correct against both builds.
+    //
+    // The bridge arguments are ZERO here on purpose: an offer never reaches the vault and the
+    // constructor only stores the values. `src/tests/bridge-offline.ts` is where a real binding is
+    // exercised.
+    const zeroAddress = { bytes: new Uint8Array(32) };
+    const construct = (extra: unknown[]) =>
+      contract.initialState(
+        createConstructorContext(privateState, COIN_PK),
+        boot,
+        encPublicKey,
+        evmDomainSalt,
+        ...extra,
+      );
+    let res: any;
+    try {
+      res = await construct([zeroAddress, zeroAddress]);
+    } catch (e) {
+      if (!/argument|arity|expected/i.test(String((e as Error)?.message))) throw e;
+      res = await construct([]);
+    }
     const sim = new AccountSim(
       contract,
       res.currentContractState.data,

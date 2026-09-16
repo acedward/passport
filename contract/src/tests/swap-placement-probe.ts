@@ -19,6 +19,7 @@
 //
 // Run: npm run probe:swap-placement  (needs a localnet and both wallet seeds)
 import { randomBytes } from 'node:crypto';
+import * as path from 'node:path';
 import { firstValueFrom } from 'rxjs';
 import { CompiledContract } from '@midnight-ntwrk/compact-js';
 import { rawTokenType, encodeRawTokenType } from '@midnightntwrk/ledger-v9';
@@ -134,7 +135,7 @@ await (async () => {
   console.log(`  B = ${bytesToHex(B)}`);
 
   step('hand it to a real taker anyway — STOCK facade calls, with the placement gate bypassed');
-  writeEnvelope('/tmp/prb-probe.offer', offer.terms, offer.bytes);
+  writeEnvelope(path.join(process.env.PRB_EVIDENCE_DIR ?? 'evidence', 'prb-placement-probe.offer'), offer.terms, offer.bytes);
   const tx = (ledgerLib as any).Transaction.deserialize('signature', 'proof', 'pre-binding', offer.bytes);
   dump('the DESERIALISED artefact, as the taker sees it', tx);
   const facade: any = taker.walletCtx.wallet;

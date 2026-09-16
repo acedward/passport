@@ -300,7 +300,11 @@ async function main(): Promise<void> {
   const privateStateId = `swap-ladder-${Date.now()}`;
   const address = await deployAccountInWaves(maker.providers, compiled, {
     firstArm: 'evm',
-    args: [boot, encKeys.publicKey, evmDomainSalt],
+    // The constructor took three arguments when this suite was written; PR-G's bridge added two
+    // more (the vault as a callable reference and as the raw address a shielded send targets). An
+    // offer never reaches the vault and the constructor only stores the values, so the ladder binds
+    // the zero address — `src/tests/bridge-e2e.ts` is where a real binding is exercised.
+    args: [boot, encKeys.publicKey, evmDomainSalt, { bytes: new Uint8Array(32) }, { bytes: new Uint8Array(32) }],
     privateStateId,
     initialPrivateState: emptyCoinStore(encKeys.secretKey),
     // The ladder's operations, named explicitly: five in wave 1, none in wave 2 — the second
