@@ -17,7 +17,8 @@
     "g1": "tsx src/tests/g1-mint-in-callee.ts",
     "g1n": "tsx src/tests/g1n-negatives.ts",
     "g1b": "tsx src/tests/g1b-send-claim-onward.ts",
-    "vkcompare": "tsx src/tests/g0v-signet-vk-compare.ts"
+    "vkcompare": "tsx src/tests/g0v-signet-vk-compare.ts",
+    "g0o": "tsx src/tests/g0o-offline-exec.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

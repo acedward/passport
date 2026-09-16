@@ -58,3 +58,11 @@ compact-runtime 0.19.0 · compact-js 2.5.5-rc.8 · midnight-js 5.0.0-beta.7 ·
 ledger-v9 1.0.0-rc.3 · `@sig-net/midnight` and `@sig-net/midnight-contract`
 0.22.0-rc.1 · node `2.1.0-2e92c4ae642c` · indexer-standalone `4.4.0-rc.2` ·
 proof-server `9.0.0-rc.6`.
+
+## Offline probes
+
+`g0v` (verifier-key comparison) and `g0o` (runtime-level execution of every call
+tree, modelled on the Passport C2C experiment's P1) need no Docker and no
+network. They exist so the expensive half of the gate — the shared localnet —
+is only spent on questions the runtime cannot already answer, and so an on-node
+failure can be attributed to the network or the ledger rather than the circuits.

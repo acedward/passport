@@ -7,6 +7,7 @@
 #   ./run-gate0.sh compile          # contracts only (offline; no Docker)
 #   ./run-gate0.sh up               # bring the stack up and wait for it
 #   ./run-gate0.sh probes [ids…]    # run probes (default: all, in order)
+#                                   # g0v and g0o are OFFLINE and need no stack
 #   ./run-gate0.sh down             # docker compose down -v
 #   ./run-gate0.sh all              # compile + up + probes + down
 #
@@ -100,6 +101,8 @@ do_up() {
 
 probe_file() {
   case "$1" in
+    g0v) echo "src/tests/g0v-signet-vk-compare.ts" ;;   # offline
+    g0o) echo "src/tests/g0o-offline-exec.ts" ;;        # offline
     g0)  echo "src/tests/g0-depth2-chain.ts" ;;
     g0n) echo "src/tests/g0n-cycle-negative.ts" ;;
     g1)  echo "src/tests/g1-mint-in-callee.ts" ;;
@@ -114,7 +117,7 @@ do_probes() {
   cd "$SCRIPT_DIR"
   mkdir -p "$EVIDENCE_DIR" "$GATE0_EVIDENCE_DIR"
   local ids=("$@")
-  if [[ ${#ids[@]} -eq 0 ]]; then ids=(g0 g0n g1 g1n g1b); fi
+  if [[ ${#ids[@]} -eq 0 ]]; then ids=(g0v g0o g0 g0n g1 g1n g1b); fi
   for id in "${ids[@]}"; do
     local file; file=$(probe_file "$id")
     if [[ -z "$file" ]]; then echo "WARN: unknown probe '$id'"; continue; fi
