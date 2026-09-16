@@ -853,7 +853,9 @@ async function s5(): Promise<void> {
     encryptionPublicKey: state2.shielded.encryptionPublicKey.toHexString(),
   };
   saveState(s);
-  console.log(`  wallet 2 coin pk ${s.wallet2.coinPublicKey.slice(0, 20)}…`);
+  let w2Dust = 'unknown';
+  try { w2Dust = String((state2.dust?.balance?.(new Date()))?.value ?? state2.dust?.balance?.(new Date())); } catch { /* reported as unknown */ }
+  console.log(`  wallet 2 coin pk ${s.wallet2.coinPublicKey.slice(0, 20)}…  dust ${w2Dust}`);
   await (w2.wallet as any).stop?.().catch?.(() => undefined);
 
   const w1 = await wallet('STAGENET_WALLET_SEED', 'wallet 1');
@@ -886,7 +888,7 @@ async function s5(): Promise<void> {
     phase: 'S5', network: 'stagenet',
     payTxId: pay.txId, paySeconds: seconds,
     amountRaw: String(TEST3_AMOUNT), colour: bytesToHex(colour),
-    recipient: { wallet: 'wallet 2', coinPublicKey: s.wallet2.coinPublicKey, encryptionPublicKey: s.wallet2.encryptionPublicKey },
+    recipient: { wallet: 'wallet 2', coinPublicKey: s.wallet2.coinPublicKey, encryptionPublicKey: s.wallet2.encryptionPublicKey, dustAtSync: w2Dust },
     changeValue: pay.change ? String(pay.change.value) : null, changeMtIndex: changeMt,
     mechanism: 'withdrawShieldedToWallet — createUnprovenCallTx with additionalCoinEncPublicKeyMappings (Q42); the first on-node proof of that path',
     accountLedger: { inboxCount: String(l.inbox_count), round: String(l.round), authNonce: String(l.auth_nonce) },
@@ -929,6 +931,12 @@ async function s6(): Promise<void> {
   const ok2 = check(recovered !== undefined && recovered.value === TEST3_AMOUNT,
     "the account's inbox walk recovers the deposited coin");
 
+  // The store holds ONE coin per colour (Passport's `held_coin` witness is single-valued),
+  // so filing this one DISPLACES the change coin S5 left behind. That coin is not lost: it
+  // is the account's, and its description is in the inbox entry S5 filed, so any client with
+  // the viewing key can recover it. Recorded here because a reader of the balances otherwise
+  // cannot account for the difference.
+  const displaced = s.coinStore?.coins[bytesToHex(colour)];
   const cands = (await candidateIndices(dep.txId).catch(() => ({ candidates: [] as bigint[] }))).candidates;
   const mt = await mtIndexForSingleOutput(dep.txId).catch(async () => ({ mtIndex: cands[0] ?? 0n, position: {} }));
   await rememberCoin(s, account, coin, mt.mtIndex, cands);
@@ -941,6 +949,9 @@ async function s6(): Promise<void> {
     coinNonce: bytesToHex(nonce), mtIndex: String(mt.mtIndex),
     inboxCount: { before: inboxBefore, after: Number(l.inbox_count) },
     recoveredByInboxWalk: recovered ? String(recovered.value) : null,
+    displacedFromTheSingleValuedStore: displaced
+      ? { value: displaced.value, note: "S5's change coin; still the account's, still described by the inbox entry S5 filed, but no longer the coin `held_coin` serves for this colour" }
+      : null,
     allChecksPassed: ok0 && ok1 && ok2,
     writtenUtc: nowUtc(),
   });
