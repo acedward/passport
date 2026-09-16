@@ -8,15 +8,19 @@ import { rawTokenType, encodeRawTokenType } from '@midnightntwrk/ledger-v9';
 
 import { sleep, step } from './runner.js';
 import {
+  compiledAccountContract,
   deployFaucet,
   deployAccount,
   setupWallet,
   type TestContext,
   type FaucetHandle,
 } from '../node/setup.js';
+import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
+import type { Arm } from '../wallet/signer.js';
 import { coinPublicKeyBytes } from '../node/wallet.js';
 import { CustodyAccount } from '../wallet/account.js';
-import { K256Device } from '../wallet/signer.js';
+import { EvmDevice, K256Device, type AnyDevice } from '../wallet/signer.js';
+import { evmDomainSaltFor, toHex } from '../wallet/eip712.js';
 import {
   generateEncKeyPair,
   sealInboxEntry,
@@ -59,11 +63,15 @@ export interface AccountSetup {
   ctx: TestContext;
   faucet: FaucetHandle;
   account: CustodyAccount;
-  device: K256Device;
+  device: AnyDevice;
   encKeys: EncKeyPair;
 }
 
-export async function standardSetup(): Promise<AccountSetup> {
+export interface K256AccountSetup extends AccountSetup {
+  device: K256Device;
+}
+
+export async function standardSetup(): Promise<K256AccountSetup> {
   step('setup: wallet, faucet, account contract (one device, fresh enc key)');
   const ctx = await setupWallet();
   const faucet = await deployFaucet(ctx.walletCtx);
@@ -73,6 +81,52 @@ export async function standardSetup(): Promise<AccountSetup> {
   const account = await deployAccount(ctx, device, encKeys);
   console.log(`  account @ ${account.address}`);
   return { ctx, faucet, account, device, encKeys };
+}
+
+export interface EvmAccountSetup extends AccountSetup {
+  device: EvmDevice;
+  /** The arms this account was deployed with — the client needs them, because
+   *  no account carries all of the contract's circuits (`contractForArms`). */
+  arms: readonly Arm[];
+}
+
+/**
+ * The same setup, but the account is BORN on the `evm` arm: its boot commitment
+ * is the Ethereum address's, and an Ethereum key activates it.
+ *
+ * `armsInWaveTwo` decides what else the account carries. The default here adds
+ * the jubjub arm, because the cross-arm matrix has to run in BOTH directions —
+ * an evm device enrolling a jubjub device proves the entry lands, but only a
+ * deployed jubjub arm lets that device authorise anything back. An EVM-only
+ * account (the shape the console deploys) is `armsInWaveTwo: []`.
+ */
+export async function evmSetup(options: {
+  armsInWaveTwo?: Arm[];
+  withFaucet?: boolean;
+} = {}): Promise<EvmAccountSetup> {
+  const armsInWaveTwo = options.armsInWaveTwo ?? ['jubjub'];
+  const arms: Arm[] = ['evm', ...armsInWaveTwo];
+  step(`setup: wallet${options.withFaucet === false ? '' : ', faucet'}, an EVM-born account (arms: ${arms.join(' + ')})`);
+  const ctx = await setupWallet();
+  const faucet = options.withFaucet === false
+    ? (undefined as unknown as FaucetHandle)
+    : await deployFaucet(ctx.walletCtx);
+  if (faucet) console.log(`  faucet  @ ${faucet.address}`);
+  const device = EvmDevice.generate();
+  await device.enrol();
+  console.log(`  device  @ ${device.addressHex} (an Ethereum EOA)`);
+  const encKeys = generateEncKeyPair();
+  const account = await CustodyAccount.deploy(
+    ctx.providers,
+    compiledAccountContract(arms),
+    device,
+    encKeys,
+    { armsInWaveTwo, evmDomainSalt: evmDomainSaltFor(String(getNetworkId())) },
+  );
+  console.log(`  account @ ${account.address}`);
+  const l = await account.ledgerState();
+  console.log(`  evm_domain_salt ${toHex(l.evm_domain_salt)}; booted=${l.booted}; devices=${l.device_count}`);
+  return { ctx, faucet, account, device, encKeys, arms };
 }
 
 export interface CapturedDeposit {
@@ -119,7 +173,7 @@ export async function depositAndCapture(
  */
 export async function captureChange(
   account: CustodyAccount,
-  device: K256Device,
+  device: AnyDevice,
   encKeys: EncKeyPair,
   spendTxId: string,
   change: PlainCoin,
@@ -150,7 +204,7 @@ export interface RetrySpendOutcome {
  */
 export async function withdrawShieldedWithRetry(
   account: CustodyAccount,
-  device: K256Device,
+  device: AnyDevice,
   recipient: Uint8Array,
   coin: PlainCoin,
   amount: bigint,
