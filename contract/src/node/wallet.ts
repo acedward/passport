@@ -97,7 +97,18 @@ export const CONFIG = {
 setNetworkId(CONFIG.networkId as any);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const managedPath = path.resolve(__dirname, '..', '..', 'contracts', 'managed');
+/** Where the compiled artefacts (verifier and prover keys) are read from.
+ *
+ *  `MIDNIGHT_MANAGED_PATH` points this at a COPY of `contracts/managed`. The
+ *  reason is not configurability: `npm run compile` deletes and rewrites this
+ *  tree, and an on-node suite looks a prover key up per call, so a recompile
+ *  started while a suite is running kills it mid-run with `ENOENT … .prover` —
+ *  measured, in a clone several lines of work share. Pointing a long run at a
+ *  snapshot makes the artefacts it proves against immutable for its duration.
+ *  Defaults to the in-tree path, so nothing changes for a single developer. */
+export const managedPath = process.env.MIDNIGHT_MANAGED_PATH
+  ? path.resolve(process.env.MIDNIGHT_MANAGED_PATH)
+  : path.resolve(__dirname, '..', '..', 'contracts', 'managed');
 export const zkConfigPath = path.join(managedPath, 'account');
 export const controlZkConfigPath = path.join(managedPath, 'control');
 export const faucetZkConfigPath = path.join(managedPath, 'faucet');

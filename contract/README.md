@@ -256,9 +256,9 @@ npm run measure-k                    # (k, rows) per circuit — measurement onl
 export WALLET_SEED=0000000000000000000000000000000000000000000000000000000000000001
 export WALLET_SEED_SECONDARY=0000000000000000000000000000000000000000000000000000000000000002
 
-# Offline (no localnet needed; both suites run the jubjub and k256 arms)
+# Offline (no localnet needed; both suites run all THREE arms)
 npm run test:unit                    # signer pipelines, codec, domain separation
-npx tsx src/tests/crossimpl-offline.ts  # Rust challenge bit-exactness per arm
+npm run test:crossimpl-offline       # Rust challenge bit-exactness per arm
 
 # Offline, arm `evm`: the frozen EIP-712 byte contract
 npm run fixtures:evm -- --check      # the 63 vectors regenerate byte-identically
@@ -267,8 +267,10 @@ npm run test:eip712-oracles          # the contract's pure circuits match the ve
 npm run deploy-budget                # what each operation set costs to deploy
 
 # On-node, running on the v9 localnet (shielded flows and coinless calls)
-npm run test:auth-coinless           # BOTH seams on-node + cross-arm enrolment + tamper aborts
+npm run test:auth-coinless           # the jubjub and k256 seams + cross-arm enrolment + tamper aborts
+npm run test:evm-auth-coinless       # the evm seam on an EVM-born account: the full rejection matrix
 npm run test:custody-shielded        # MIP-0012 tests 1, 2, 3
+npm run test:evm-custody-shielded    # MIP-0012 tests 1, 2, 3 on an EVM-only account
 npm run test:custody-discovery      # MIP-0012 test 4
 npm run test:custody-payments        # MIP-0012 tests 7, 8
 npm run test:leak-audit              # MIP-0012 test 5
@@ -425,24 +427,30 @@ TTL within ~10 s of build time is rejected as
 
 | Suite | MIP-0012 Testing | MIP-0013 Testing | Invariants exercised |
 |---|---|---|---|
-| `unit-offline` | — (client halves of §5.2–5.3, §6.4) | — | AUTH-3, AUTH-9, AUTH-10 at the hash level; S10 non-vacuity — **both arms** |
+| `unit-offline` | — (client halves of §5.2–5.3, §6.4) | — | AUTH-3, AUTH-9, AUTH-10 at the hash level; S10 non-vacuity — **all three arms** |
 | `auth-coinless` | — | coinless halves of 1, 2(a), 6, 10 | AUTH-1, AUTH-2, AUTH-5 (via S13), AUTH-9 (entry roll under a second key), S12, S13, §3 bootstrap, wave deploy — **both seams on-node, cross-arm enrolment in both directions, per-arm tamper aborts, both seam guards through their real attacks** |
 | `auth-conformance` | — | 1, 2, 5, 10 | AUTH-1, AUTH-2, AUTH-3, AUTH-8, AUTH-9 (wrong-counter fault), INV-7, §3 bootstrap |
 | `auth-lifecycle` | — | 6, 9 | AUTH-4, AUTH-5, AUTH-7, AUTH-9 (entry roll observed) |
 | `auth-replay` | — | 3, 4 | AUTH-3 (address and circuit binding) |
 | `auth-crossimpl` + `crossimpl-offline` | — | 7 | AUTH-4 (approval/proving separation) |
+| `evm-auth-coinless` | — | coinless halves of 1, 2, 3, 4, 6, 10 | the same set as `auth-coinless`, on an EVM-BORN account, plus FR-003 (a point that does not hash to the enrolled address is an unknown device) and SIG-4 (the high-S twin lands, its low-S original then cannot) |
 | `custody-shielded` | 1, 2, 3 | — | INV-1, INV-2, INV-3, INV-4, INV-5 |
+| `evm-custody-shielded` | 1, 2, 3 | — | the same, on an EVM-ONLY account: AUTH-10 under EIP-712 (the wallet sees colour, amount and recipient; the challenge pins the qualified coin it cannot) |
 | `custody-discovery` | 4 | — | INV-4, INV-5 |
 | `leak-audit` | 5 | — | INV-2 (with positive control) |
 | `custody-unshielded` | 6 | — | INV-8 |
 | `custody-payments` | 7, 8 | — | INV-6 (one-hop); direct-transfer mode |
 
-Arm coverage: `unit-offline`, `crossimpl-offline`, and `auth-coinless`
-exercise BOTH arms; the remaining on-node suites drive the k256 arm (the
-account they set up is k256-born), with the custody suites scheme-agnostic
-below the seam by construction. The jubjub arm's full funded conformance
-matrix predates the co-residency restructure on the trunk's history; its
-seam is re-proven on-node by `auth-coinless`.
+Arm coverage: `unit-offline` and `crossimpl-offline` exercise all THREE
+arms; `auth-coinless` drives the jubjub and k256 seams on-node and
+`evm-auth-coinless` the evm seam, each on an account born on its own arm,
+with cross-arm enrolment proven in both directions in both suites. The
+shielded custody matrix runs twice, once per ECDSA-family arm
+(`custody-shielded`, `evm-custody-shielded`); the remaining on-node suites
+drive the k256 arm, with the custody chips scheme-agnostic below the seam
+by construction. The jubjub arm's full funded conformance matrix predates
+the co-residency restructure on the trunk's history; its seam is re-proven
+on-node by `auth-coinless`.
 
 Not covered here, by design:
 
@@ -664,13 +672,115 @@ To be folded back into the MIP texts:
   the state it is amending and must pass a literal, which is why the
   wave-2 tag is pinned in source beside the toolchain pin.
 
+## What the `evm` arm costs, measured
+
+Every number here was produced by `npm run measure-k` and
+`npm run deploy-budget` on compactc 0.34.0 `--feature-zkir-v3`, and by
+submitting real transactions to a node `2.1.0-2e92c4ae642c` localnet. They
+are the arm's limits, and they are the reason for the two-wave deploy.
+
+| gated circuit | `evm` k / rows | prover key | `k256` twin k / rows | prover key |
+|---|---|---|---|---|
+| `withdraw_shielded_to_contract` | 18 / 188,532 | 570 MB | 17 / 80,290 | 235 MB |
+| `withdraw_shielded` | 18 / 182,809 | 570 MB | 17 / 74,587 | 235 MB |
+| `withdraw_unshielded` | 18 / 161,623 | 570 MB | 16 / 61,003 | 117 MB |
+| `append_inbox` | 18 / 160,236 | 570 MB | 16 / 64,924 | 117 MB |
+| `remove_device` | 18 / 151,466 | 570 MB | 16 / 65,404 | 117 MB |
+| `add_device` | 18 / 147,648 | 570 MB | 16 / 58,897 | 117 MB |
+| `rotate_enc_key` | 18 / 147,602 | 570 MB | 16 / 58,851 | 117 MB |
+| `activate_initial_device` | 16 / 40,282 | 143 MB | 14 / 14,094 | 29 MB |
+
+Verifier keys: `evm` 3,321 bytes, `k256` 2,745, `jubjub` 2,313. The largest
+`evm` circuit uses 72 % of the k=18 domain, so there is headroom but not a
+size class of it.
+
+**Where the premium goes.** Throwaway single-circuit probes on the same
+compiler: ECDSA verify plus `secp256k1EthereumAddress` is 60,288 rows
+(k=16); adding the domain separator and the 66-byte digest takes it to
+95,546 (k=17); adding the 256-byte struct hash takes it to 136,772 (k=18).
+The EIP-712 layer costs about 76,500 rows, of which about 28,300 recompute a
+domain separator that is constant for the whole deployment. Caching that in
+a ledger cell was measured and rejected: it moves only the three cheapest
+circuits to k=17 and would spend one of the very few deploy-budget slots
+the node allows.
+
+**The readable fields are not the expensive part.** Replacing
+`RotateEncKey`'s six-word struct with the minimal wrapper
+`MidnightAccountAuth(bytes32 account,string action,bytes32 challenge,uint64 authNonce)`
+— a scratch build, never committed — measures **135,943 rows against
+147,602**: 7.9 % saved, and still k=18. keccak-256 absorbs 136 bytes per
+permutation, so a 160-byte, a 192-byte and even the withdraw types'
+256-byte preimage are all TWO permutations; the readable colour, amount and
+recipient a wallet displays cost no extra keccak at all. The premium is the
+ECDSA-and-keccak layer as a whole, not the readability.
+
+**Deploy.** The ten-operation EVM-only set prices at 31,543 transaction
+bytes / 35,817 bytes written, well under the parameters' 50,000 budget, and
+`feesWithMargin` accepts it — but the node refuses it. The measured ceiling
+is eight operations (nine are refused with `1010: Transaction would exhaust
+the block limits`), so an EVM-only account deploys in two waves:
+
+| wave | operations |
+|---|---|
+| 1 | `deposit_unshielded`, `deposit_shielded`, `activate_initial_device_with_evm`, `withdraw_unshielded_with_evm`, `append_inbox_with_evm`, `withdraw_shielded_with_evm`, `withdraw_shielded_to_contract_with_evm`, `rotate_enc_key_with_evm` |
+| 2 | `add_device_with_evm`, `remove_device_with_evm`, in the maintenance update that retires the authority |
+
+Everything needed to receive, spend and re-key is live after wave 1; only
+enrolling or removing a device waits for wave 2. `EVM_GATED_IN_WAVE_ONE` in
+`src/wallet/wave-deploy.ts` carries the constant and the measured table.
+
+An EVM-born account that also wants the jubjub arm — what
+`evm-auth-coinless` deploys, so the cross-arm matrix can run in both
+directions — puts **ten** verifier keys in the wave-2 update (the jubjub
+arm's eight plus the evm overflow's two, 25,146 bytes of key material) and
+lands: a maintenance update is priced differently from a deploy, so the
+wall Q28 measured for deploys is not the wall for updates. Eighteen
+operations on one account, eight of them deployed and ten inserted.
+
+Proving cost, measured on this stack: a gated `evm` circuit takes the proof
+server to about **7.9 GB of RSS** at k=18, against about 1 GB idle. That is
+the number to plan a browser prover or a shared CI host around, more than
+the 570 MB key on disk.
+That the client-side fee computation accepts a set the node refuses is an
+upstream-report item in its own right: the client number is a lower bound,
+because the node prices the balanced transaction (deploy plus funding offer
+plus dust actions) and the client prices the deploy alone.
+
 ## Client-library notes
 
-- Clients maintain a device roster (public key → use counter) per
+- **The `evm` arm's client is `EvmDevice`** (`src/wallet/signer.ts`). It is
+  built from a raw key (offline checks), an ethers wallet (suites) or an
+  EIP-1193 provider (browsers) through one small backend interface, so
+  `ethers` stays a devDependency and never enters the library's import
+  graph. A device knows only its **20-byte address** until it signs: the
+  entry, the boot commitment, the challenge and the EIP-712 `owner` field
+  all take the address, and the public point the circuits need is
+  **recovered from the device's own signature** and cached. An ordinary call
+  therefore costs exactly one wallet prompt and no wallet ever has to expose
+  a public key.
+- **One prompt is needed before the first call**, and only for browser
+  wallets: `activate_initial_device_with_evm` is permissionless, so it
+  carries a point and no signature. `device.enrol()` covers it — free for a
+  backend that publishes its verifying key, otherwise one EIP-191
+  `personal_sign` whose text names no operation and moves no funds. That
+  message is **not** part of the byte contract; no circuit ever verifies it.
+- **A call is described once, not twice.** `CustodyAccount` builds one
+  arm-independent `AuthRequest` and hands it to `authorise(device, ctx,
+  request, counter)`. On the `evm` arm that one object yields both the
+  challenge the circuit binds and the readable EIP-712 message the wallet
+  displays, which is what makes "the wallet shows what executes" a property
+  of the code rather than a convention. `CallContext` also carries the
+  account's sealed `evm_domain_salt`, read from the same ledger state the
+  nonce comes from.
+- Clients maintain a device roster (device → use counter) per
   MIP-0013 S11: the rolling entry consumed by each call is
-  `persistentHash([DST_DEVICE, self, pk, epoch, use_counter])`, and an
-  unknown or stale counter is recovered by probing ledger membership of
-  candidate entries (`CustodyAccount.resolveUseCounter`).
+  `persistentHash([DST_DEVICE, self, key, epoch, use_counter])` — with
+  `key` the affine coordinates on the jubjub and k256 arms and the 20-byte
+  Ethereum address on the `evm` arm — and an unknown or stale counter is
+  recovered by probing ledger membership of candidate entries
+  (`CustodyAccount.resolveUseCounter`). **The counter is client state**: the
+  chain holds only the current entry, never the position, so a client that
+  loses its roster recovers by rescan and never by reading it back.
 - For witness-consuming circuits the approver signs over the exact
   qualified coin the spend will consume (AUTH-10); the client pipeline
   hands the witness values to the signer, and a candidate `mt_index`

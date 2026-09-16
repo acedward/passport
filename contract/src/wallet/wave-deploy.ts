@@ -48,6 +48,23 @@ import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import { Contract } from './contract.js';
 import type { Arm } from './signer.js';
 
+/**
+ * The gated operations EVERY arm defines, in the order a deploy lists them.
+ *
+ * This list is what `armCircuits` expands, which decides both what a deploy
+ * submits (`defaultWaves`) and which verifier keys a client checks against a
+ * deployed account (`contractForArms`). A name here that the compiled contract
+ * does not export makes every deploy of that arm throw, so an operation joins
+ * it only once the circuit exists for all three arms.
+ *
+ * An operation that only SOME accounts want — project 00034's
+ * `open_swap_shielded` is the first — does not belong here at all while Q28's
+ * wall stands: it would cost every account a k=18 verifier key on the wrong
+ * side of a block limit, whether or not that account ever uses it. Such an
+ * operation travels through `waveOneCircuits` / `waveTwoCircuits`, which take
+ * explicit circuit ids, until the client grows a per-account capability flag
+ * (questions file Q35).
+ */
 const GATED_BASES = [
   'withdraw_unshielded',
   'append_inbox',
@@ -340,9 +357,16 @@ export async function deployAccountInWaves(
     console.log('  wave 2: nothing to do (single-arm account, authority left LIVE)');
     return address;
   }
-  const waveTwoWhat = secondWaveArms.length > 0
-    ? `${secondWaveArms.join(', ')} arm${secondWaveArms.length > 1 ? 's' : ''}`
-    : `${options.firstArm} overflow`;
+  // Wave 2 can carry another arm's circuits, the first arm's overflow, or both
+  // (an evm-born account that also wants jubjub inserts 8 + 2), so the log line
+  // names whichever parts are actually present rather than assuming one.
+  const overflowCount = (options.waveTwoCircuits ?? waves.waveTwo).length;
+  const waveTwoParts: string[] = [];
+  if (secondWaveArms.length > 0) {
+    waveTwoParts.push(`${secondWaveArms.join(', ')} arm${secondWaveArms.length > 1 ? 's' : ''}`);
+  }
+  if (overflowCount > 0) waveTwoParts.push(`${options.firstArm} overflow`);
+  const waveTwoWhat = waveTwoParts.join(' + ') || `${options.firstArm} overflow`;
   console.log(
     waveTwoIds.length === 0
       ? '  wave 2: one maintenance update retiring the maintenance authority (single-wave account)'
