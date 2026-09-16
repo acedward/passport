@@ -5,19 +5,19 @@
   "verdict": "PASS",
   "note": "Stateless deposit conforms (entry decrypts, no coin material observable, wrong-index probe fails at proving); partial spend + surviving-coin capture + cross-transaction change spend all accepted by the node.",
   "details": {
-    "account": "7a8b9f3c549befab67cee177ac93a43af9da5266632d7775ab45d3bd10e7fba3",
-    "depositTx": "0079f4888bb73e1d3f034511a5352468f739a6e3f9d8494743e4d3d522840dffd6",
+    "account": "e26184a8a347b021af588e3c0ed1b4fa03368d71d55350ce579e107d60f3d007",
+    "depositTx": "003f5771c1841db106cbb55eb98aff6498ae60b5427006982e826d5faa2f88c282",
     "mtIndexCandidates": [
       "29"
     ],
     "depositAudit": {
-      "tx:0079f4888b…:raw": {
+      "tx:003f5771c1…:raw": {
         "nonce": false,
         "color": false,
         "valueBE": false,
         "valueLE": false
       },
-      "tx:0079f4888b…:contractActions": {
+      "tx:003f5771c1…:contractActions": {
         "nonce": false,
         "color": false,
         "valueBE": false,
@@ -31,18 +31,18 @@
       }
     },
     "wrongIndexRejection": "Unexpected error executing scoped transaction '<unnamed>': Error: invalid index into sparse merkle tree: 1029 -- write creating spend proof",
-    "partialSpendTx": "00bf53efa9e09577b49744d8f4a2282b7b54d31c0d2a86b8caae636bb2ff94b187",
+    "partialSpendTx": "005ec3066342871764f84cc757c90ba442a2c41722c16a78123f7a5a5282443880",
     "partialSpendAttempts": [
       {
         "mtIndex": "29",
-        "outcome": "accepted: 00bf53efa9e09577b49744d8f4a2282b7b54d31c0d2a86b8caae636bb2ff94b187"
+        "outcome": "accepted: 005ec3066342871764f84cc757c90ba442a2c41722c16a78123f7a5a5282443880"
       }
     ],
     "changeCandidates": [
       "30",
       "31"
     ],
-    "changeSpendTx": "00fe42610ec38d0683c94e57195ba42dac16498d2ea34238dba797dd37978e15df",
+    "changeSpendTx": "003df1864298c043fdeccf8833002d1b595b3a79f8bc12d565b297778a1441368c",
     "changeSpendAttempts": [
       {
         "mtIndex": "30",
@@ -50,29 +50,29 @@
       },
       {
         "mtIndex": "31",
-        "outcome": "accepted: 00fe42610ec38d0683c94e57195ba42dac16498d2ea34238dba797dd37978e15df"
+        "outcome": "accepted: 003df1864298c043fdeccf8833002d1b595b3a79f8bc12d565b297778a1441368c"
       }
     ],
     "lifecycleAudit": {
-      "tx:00bf53efa9…:raw": {
+      "tx:005ec30663…:raw": {
         "nonce": false,
         "color": false,
         "valueBE": false,
         "valueLE": false
       },
-      "tx:00bf53efa9…:contractActions": {
+      "tx:005ec30663…:contractActions": {
         "nonce": false,
         "color": false,
         "valueBE": false,
         "valueLE": false
       },
-      "tx:00fe42610e…:raw": {
+      "tx:003df18642…:raw": {
         "nonce": false,
         "color": false,
         "valueBE": false,
         "valueLE": false
       },
-      "tx:00fe42610e…:contractActions": {
+      "tx:003df18642…:contractActions": {
         "nonce": false,
         "color": false,
         "valueBE": false,
@@ -86,7 +86,7 @@
       }
     }
   },
-  "ranAt": "2026-08-27T12:41:21.277Z",
+  "ranAt": "2026-09-16T03:42:32.309Z",
   "stack": {
     "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
     "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",

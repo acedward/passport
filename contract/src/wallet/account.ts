@@ -33,6 +33,7 @@ import {
   jubjubChallenges,
   k256Challenges,
   authArgs,
+  activationArgs,
   type AnyDevice,
   type Authorisation,
   type CallContext,
@@ -179,7 +180,7 @@ export class CustodyAccount {
       salt,
       activate: (device, s) => {
         const name = `activate_initial_device_with_${device.arm}`;
-        return submitWithDustRetry(name, () => (found as any).callTx[name](device.pk, s));
+        return submitWithDustRetry(name, () => (found as any).callTx[name](...activationArgs(device, s)));
       },
       finish: () => {
         const account = new CustodyAccount(address, addressToBytes(address), providers, privateStateId, found);
@@ -192,7 +193,7 @@ export class CustodyAccount {
   /** Low-level activation call against a live account (bootstrap probes). */
   activateInitialDevice(device: AnyDevice, salt: Uint8Array): Promise<unknown> {
     const name = `activate_initial_device_with_${device.arm}`;
-    return submitWithDustRetry(name, () => this.handle.callTx[name](device.pk, salt));
+    return submitWithDustRetry(name, () => this.handle.callTx[name](...activationArgs(device, salt)));
   }
 
   static async connect(

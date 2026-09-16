@@ -354,3 +354,10 @@ export function authArgs(a: Authorisation): unknown[] {
     ? [a.pk, a.use_counter, a.sig_r, a.sig_s, a.grind_nonce]
     : [a.pk, a.use_counter, a.sig, a.envelope];
 }
+
+/** The arguments `activate_initial_device_with_<arm>` declares. The k256
+ *  arm carries the device's envelope id (it is bound into the boot
+ *  commitment the activation must reproduce), the jubjub arm does not. */
+export function activationArgs(device: AnyDevice, salt: Uint8Array): unknown[] {
+  return device.arm === 'jubjub' ? [device.pk, salt] : [device.pk, salt, device.envelope];
+}

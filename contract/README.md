@@ -134,16 +134,17 @@ measured, it is live on both arms, and deriving the entry in-circuit does not
 prevent it. See erratum 8, which is the substantive open defect in this
 implementation and in MIP-0013 §3 and §6.
 
-Toolchain: the k256 arm requires the ZKIR v3 pre-release stack, so the
-whole contract compiles with it. The one coherent all-published set
-today — the set this package pins — is compactc 0.33.0-rc.2 (generates
-for compact-runtime 0.18.0-rc.1), compact-js 2.5.5-rc.6, and midnight-js
-5.0.0-beta.4, on the node 2.1.0 / ledger 9.1 localnet images with fresh
-volumes (see `infra/docker-compose.yml`). midnight-js 5.0.0-beta.6
-requires an unpublished compact-js interface (per-call Zswap local
-state), and the newer compactc 0.34.0-rc.0 / compact-runtime 0.19.0-rc.0
-line has no published midnight-js consumer; mixing the lines fails at
-deploy or call time on runtime-instance checks. The full experiment
+Toolchain: the k256 arm requires ZKIR v3, so the whole contract compiles
+with it. The set this package pins is compactc 0.34.0 (language 0.26.0,
+generates for compact-runtime 0.19.0), compact-js 2.5.5-rc.8 and
+midnight-js 5.0.0-beta.7, on the node 2.1.0 / ledger 9 localnet images
+with fresh volumes (see `infra/docker-compose.yml`). This line is now
+fully published and is the one the stagenet Passport demo and the
+mint-test-tokens stack run; the whole set moves together, because mixing
+lines fails at deploy or call time on runtime-instance checks. The
+earlier pin (compactc 0.33.0-rc.2 / compact-runtime 0.18.0-rc.1 /
+compact-js 2.5.5-rc.6 / midnight-js 5.0.0-beta.4) produced byte-identical
+circuits: the bump changed generated JavaScript and version strings only. The full experiment
 behind this verdict (`experiments/secp256k1-in-compact/`) is not yet on
 the main branch; until it lands, the summary above is the citable form.
 
@@ -161,15 +162,32 @@ the main branch; until it lands, the summary above is the citable form.
 
 ## Running
 
-The compile script pins the RC toolchain (`compact compile +0.33.0-rc.2
---feature-zkir-v3`); install it once by unzipping the release asset from
-LFDT-Minokawa/compact into
-`~/.compact/versions/0.33.0-rc.2/aarch64-darwin/` (the `compact update`
-manager only sees the stable line).
+The compile script pins `compact compile +0.34.0 --feature-zkir-v3`
+(language 0.26.0, ZKIR v3, generated code for compact-runtime 0.19.0);
+`compact update 0.34.0` installs it from the stable line. The move off
+0.33.0-rc.2 changed no circuit: all 18 `.zkir` files and all 36 proving
+and verifying keys are byte-identical between the two compilers (only the
+version strings, a type-alias spelling in `contract-info.json` and the
+generated JavaScript differ).
+
+`npm run measure-k` reports (k, rows) per circuit from the compiled
+`.zkir` files, through the same pinned `zkir-v3`; it generates no keys.
+
+The localnet's indexer reads `infra/.env` (gitignored) and refuses to
+start without a wallet secret, so create it once:
+
+```sh
+echo 'APP__INFRA__SECRET=303132333435363738393031323334353637383930313233343536373839303132' > infra/.env
+```
+
+The suites talk to the compose file's published ports by default and
+honour `MIDNIGHT_NODE_URL`, `INDEXER_URL`, `INDEXER_WS_URL` and
+`MIDNIGHT_PROOF_SERVER_URL` when a host needs different ones.
 
 ```sh
 npm install
 npm run compile                      # compact compile → contracts/managed/
+npm run measure-k                    # (k, rows) per circuit — measurement only
 (cd signer-rs && cargo build)        # the independent Rust signer
 (cd infra && docker compose -f docker-compose.yml -f docker-compose.macos.yml up -d)
 
@@ -220,10 +238,10 @@ batched `MaintenanceUpdate`, hand-built against the ledger API and signed
 with the maintenance authority key the deploy stored locally.
 
 Not through midnight-js's published circuit maintenance interface, for two
-reasons. It cannot produce a current key: compact-js 2.5.5-rc.6 hardcodes
-`ContractOperationVersion 'v3'`, whose raw keys carry the
-`midnight:verifier-key[v6]:` header, while compactc 0.33.0-rc.2 emits
-v7-headed keys (tag `'v4'`), so `insertVerifierKey` throws before a
+reasons. It cannot produce a current key: compact-js still hardcodes
+`ContractOperationVersion 'v3'` (measured again on 2.5.5-rc.8), whose raw
+keys carry the `midnight:verifier-key[v6]:` header, while compactc 0.34.0
+emits v7-headed keys (tag `'v4'`), so `insertVerifierKey` throws before a
 transaction exists. And it is per-circuit, so it would cost 8 transactions
 where the ledger API takes all 8 inserts in one. **This is the third
 upstream finding on this branch** (recorded under "Ecosystem dependencies
@@ -512,9 +530,9 @@ To be folded back into the MIP texts:
   finalisation watch. Avoid on-chain calls for pure derivations; compute
   them client-side (`rawTokenType` for token colors).
 - **The published circuit-maintenance interface cannot insert a current
-  verifier key**: compact-js 2.5.5-rc.6 hardcodes
-  `ContractOperationVersion 'v3'` (v6-headed keys) while compactc
-  0.33.0-rc.2 emits v7-headed keys (tag `'v4'`), so
+  verifier key**: compact-js hardcodes `ContractOperationVersion 'v3'`
+  (v6-headed keys; still true at 2.5.5-rc.8) while compactc 0.34.0 emits
+  v7-headed keys (tag `'v4'`), so
   `CircuitMaintenanceTxInterface.insertVerifierKey` throws a header-tag
   mismatch before a transaction exists. A version-matrix gap between two
   published packages, not a misuse: nothing in the interface takes a

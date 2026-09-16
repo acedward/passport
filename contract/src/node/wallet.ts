@@ -77,7 +77,23 @@ const CONFIGS: Record<
   },
 };
 
-export const CONFIG = CONFIGS[NETWORK] ?? CONFIGS.local;
+// Endpoint overrides. The defaults above are the compose file's published
+// ports; a shared machine cannot assume they are free, so every suite also
+// honours an explicit URL per service (INDEXER_URL is the same variable
+// src/wallet/capture.ts already read).
+const base = CONFIGS[NETWORK] ?? CONFIGS.local;
+const indexerHttp = process.env.INDEXER_URL ?? process.env.MIDNIGHT_INDEXER_URL ?? base.indexer;
+export const CONFIG = {
+  ...base,
+  indexer: indexerHttp,
+  indexerWS:
+    process.env.INDEXER_WS_URL
+    ?? (process.env.INDEXER_URL || process.env.MIDNIGHT_INDEXER_URL
+      ? `${indexerHttp.replace(/^http/, 'ws')}/ws`
+      : base.indexerWS),
+  node: process.env.MIDNIGHT_NODE_URL ?? base.node,
+  proofServer: process.env.MIDNIGHT_PROOF_SERVER_URL ?? base.proofServer,
+};
 setNetworkId(CONFIG.networkId as any);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
