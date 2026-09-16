@@ -1,0 +1,8 @@
+node_modules/
+managed/
+dist/
+midnight-level-db/
+infra/.env
+.env
+deployment/*.json
+*.log
