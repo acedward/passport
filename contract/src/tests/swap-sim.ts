@@ -147,6 +147,12 @@ export class AccountSim {
       boot,
       encPublicKey,
       evmDomainSalt,
+      // The ERC20 bridge binding (PR-G): the vault as a callable reference and as the raw
+      // address a shielded send targets. Zero here — an offer never reaches the vault, and
+      // the constructor only stores the value. `src/tests/bridge-offline.ts` is where a
+      // real binding is exercised.
+      { bytes: new Uint8Array(32) },
+      { bytes: new Uint8Array(32) },
     );
     const sim = new AccountSim(
       contract,
