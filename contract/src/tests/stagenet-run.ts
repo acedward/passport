@@ -720,7 +720,7 @@ async function s1(): Promise<void> {
   const started = Date.now();
   const root = mpcRoot();
   const singleton = signetAddress();
-  step('S1  deploy the ERC20 vault fork on stagenet and initialise it');
+  step(`S1  deploy the ERC20 vault fork on the ${NETWORK_LABEL} and initialise it`);
   console.log(`  MPC root key   ${root.slice(0, 20)}…`);
   console.log(`  singleton      ${singleton}`);
 
@@ -872,7 +872,7 @@ async function s2(): Promise<void> {
     allChecksPassed: ok1 && ok2 && ok3 && ok4 && ok5,
   });
   console.log(`  account ${account.address} (${deploySeconds}s)`);
-  console.log(`  its deposit address on Sepolia: ${bridge.depositAddress()}`);
+  console.log(`  its deposit address on ${EVM_CHAIN_LABEL}: ${bridge.depositAddress()}`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -890,7 +890,7 @@ function depositAddressOf(s: State): string {
 async function s3Fund(): Promise<void> {
   const s = loadState();
   const to = depositAddressOf(s);
-  step('S3.2  Sepolia: fund the deposit address with the capped amount');
+  step(`S3.2  ${EVM_CHAIN_LABEL}: fund the deposit address${LOCAL ? '' : ' with the capped amount'}`);
   console.log(`  deposit address ${to}`);
   const { provider, funder } = evmChain();
   const before = { eth: await provider.getBalance(to), usdc: await erc20Balance(provider, to) };
@@ -1391,7 +1391,7 @@ function withdrawDestination(s: State): string {
 
 async function s7Gas(): Promise<void> {
   const s = loadState();
-  step("S7.1  Sepolia: fund the vault's OWN Ethereum account with withdraw gas");
+  step(`S7.1  ${EVM_CHAIN_LABEL}: fund the vault's OWN Ethereum account with withdraw gas`);
   const to = s.vault!.vaultEvmAddress;
   const { provider, funder } = evmChain();
   const before = await provider.getBalance(to);
