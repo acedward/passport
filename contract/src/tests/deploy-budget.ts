@@ -47,6 +47,14 @@ const EVM_GATED = [
   'rotate_enc_key', 'add_device', 'remove_device',
 ].map((base) => `${base}_with_evm`);
 
+/** The five operations the ERC20 bridge adds (project 00034 PR-G). They ride wave 2, so the
+ *  sets below price both what a bridge account would cost in one transaction (it cannot have
+ *  it) and what its maintenance update carries. */
+const BRIDGE = [
+  'bridge_deposit_start_with_evm', 'bridge_deposit_complete',
+  'bridge_withdraw_start_with_evm', 'bridge_withdraw_complete', 'bridge_withdraw_refund',
+];
+
 const SETS: { label: string; note: string; ids: string[] }[] = [
   {
     label: 'evm, all 10 in one wave',
@@ -79,8 +87,18 @@ const SETS: { label: string; note: string; ids: string[] }[] = [
     ids: [...SHARED, ...armCircuits('evm' as Arm), ...armCircuits('jubjub' as Arm)],
   },
   {
-    label: 'all three arms (26)',
-    note: 'everything the contract exports',
+    label: 'evm bridge account, all 15 in one wave',
+    note: 'the ten EVM-only operations plus PR-G\'s five bridge circuits — priced for the record, never attempted',
+    ids: [...SHARED, ...armCircuits('evm' as Arm), ...BRIDGE],
+  },
+  {
+    label: 'evm bridge account, wave 2 payload (7 keys)',
+    note: 'NOT a deploy: the maintenance update that adds the device-lifecycle pair and the five bridge circuits, priced here as a deploy of the same keys because the ledger charges per verifier key either way',
+    ids: [...EVM_GATED.slice(5), ...BRIDGE],
+  },
+  {
+    label: 'everything the contract exports',
+    note: 'all three arms, the swap and the bridge — 33 impure circuits since PR-B and PR-G',
     ids: [],
   },
 ];
