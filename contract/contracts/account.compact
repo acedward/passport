@@ -1221,7 +1221,7 @@ export pure circuit challenge_bridge_deposit_start_with_evm(
 //
 // The `change_entry` ARGUMENT of the circuit is deliberately NOT bound here, and this is
 // the one place in the whole arm where an argument escapes the challenge. The reason is
-// measured, not stylistic (question Q41): the nonce the standard library gives the change
+// measured, not stylistic (question Q46): the nonce the standard library gives the change
 // coin of a `sendShielded` is NOT an `evolveNonce` of the spent coin's nonce on this
 // runtime — no index from 0 to 15, at one or two levels, reproduces it — so a client cannot
 // seal the change entry before the call. It CAN learn the nonce by executing the call
@@ -2426,7 +2426,7 @@ export circuit bridge_deposit_complete(
 // The change coin follows the MIP-0012 surviving-coin rule. Its inbox entry is an ARGUMENT
 // so that one transaction can create the change AND make it discoverable, but the entry is
 // NOT part of the signed challenge — see `challenge_bridge_withdraw_start_with_evm` for the
-// measurement behind that (question Q41). A caller that cannot predict the change coin
+// measurement behind that (question Q46). A caller that cannot predict the change coin
 // passes 32 zero bytes' worth of nothing (any 192 bytes: a spend of the WHOLE coin never
 // reaches the append at all) and re-files later with `append_inbox_with_evm`.
 export circuit bridge_withdraw_start_with_evm(

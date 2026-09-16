@@ -333,7 +333,7 @@ export class AccountBridge {
    * THE CHANGE COIN. A spend of less than the whole coin leaves change, which stays with the
    * account and is returned here. Its inbox entry is an argument of the same call, but the
    * client cannot compute it in advance: the nonce the standard library gives that coin is
-   * not derivable from the spent coin's (question Q41, measured). Two honest ways out, and
+   * not derivable from the spent coin's (question Q46, measured). Two honest ways out, and
    * the caller picks:
    *
    *   * pass `changeEntry` — a console that has executed the call locally first (the same
@@ -428,7 +428,7 @@ export class AccountBridge {
   /**
    * The coin a settle will mint, computed from public state and the caller's own argument
    * BEFORE the call, so its inbox entry can be sealed and passed in the same transaction
-   * that claims it (question Q40; the sub-plan's Q11 option A proposed a local dry run
+   * that claims it (question Q45; the sub-plan's Q11 option A proposed a local dry run
    * instead, and this is the same information without one).
    *
    * All three fields are knowable: the VALUE and the ERC20 are in the vault's settle view,

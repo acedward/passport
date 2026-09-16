@@ -167,7 +167,7 @@ commitment, exactly as on the other two arms, so it has no primary type here.
   through `challenge`. `dest` is the one field a user must read carefully: it is the only value in
   the byte contract whose mistake the account cannot undo.
 - **The circuit's `change_entry` argument is bound by NEITHER the struct nor the challenge**, and
-  it is the only argument of the whole arm that is not (question Q41). The change coin's nonce is
+  it is the only argument of the whole arm that is not (question Q46). The change coin's nonce is
   not derivable before the call on this runtime, so a bound entry would cost a second wallet
   signature for every withdrawal that leaves change: the client would need a signature to execute
   the call that reveals the coin, and then a second one over the entry it could finally seal. The

@@ -290,7 +290,7 @@ async function main(): Promise<void> {
   assert((auth2 as any).typedData.primaryType === 'BridgeWithdrawStart',
     'the wallet signed BridgeWithdrawStart');
 
-  // THE DRY RUN (question Q41). The change coin's nonce is not derivable from the spent
+  // THE DRY RUN (question Q46). The change coin's nonce is not derivable from the spent
   // coin's, so the client executes the call locally FIRST to learn it, seals the entry, and
   // submits the very same call with that entry. One wallet signature covers both, which is
   // the whole reason the challenge does not bind the entry: a bound entry would have to be

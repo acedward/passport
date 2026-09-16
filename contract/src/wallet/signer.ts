@@ -753,7 +753,7 @@ export const evmChallenges = {
   // Takes the request itself: thirteen arguments in one fixed order is a place where
   // positional parameters would be a bug waiting to happen, and the request object is
   // already the single description every other projection is built from. Note what is NOT
-  // here: the change inbox entry, which the challenge deliberately does not bind (Q41).
+  // here: the change inbox entry, which the challenge deliberately does not bind (Q46).
   bridgeWithdrawStart: (
     ctx: CallContext,
     address: Uint8Array,

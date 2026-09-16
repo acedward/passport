@@ -815,7 +815,7 @@ then poll until an attestation verifies over a recomputed output — and it is
 ### The one argument the signature does not cover
 
 `bridge_withdraw_start_with_evm` takes a `change_entry`, and the challenge deliberately does
-not bind it (question Q41). The nonce the standard library gives the change coin of a
+not bind it (question Q46). The nonce the standard library gives the change coin of a
 `sendShielded` is not derivable before the call, so a client learns it by executing the call
 locally first — with the signature it already holds, which is only possible while the entry
 is unbound. A caller that will not do that passes 192 zero bytes and re-files later with
