@@ -52,6 +52,11 @@ export interface DeployOptions {
    * carry them can never call the vault anyway.
    */
   vaultAddress?: Uint8Array | string;
+  /** The exact circuit ids each wave deploys, when the caller knows better than the
+   *  defaults — a bridge account names them from `bridge.ts`'s `bridgeWaves()`, because
+   *  the five bridge operations are not in `wave-deploy.ts`'s lists (question Q39). */
+  waveOneCircuits?: string[];
+  waveTwoCircuits?: string[];
 }
 
 /** A ContractAddress / contract-reference circuit argument: `{ bytes }`. */
@@ -233,8 +238,8 @@ export class CustodyAccount {
       initialPrivateState,
       retireAuthority: opts?.retireAuthority,
       armsInWaveTwo: opts?.armsInWaveTwo,
-      waveOneCircuits: (opts as any)?.waveOneCircuits,
-      waveTwoCircuits: (opts as any)?.waveTwoCircuits,
+      waveOneCircuits: opts?.waveOneCircuits,
+      waveTwoCircuits: opts?.waveTwoCircuits,
     });
     const found = await (findDeployedContract as any)(providers, {
       contractAddress: address,

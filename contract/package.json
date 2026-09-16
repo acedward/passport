@@ -43,6 +43,7 @@
     "test:eip712-evm": "tsx src/tests/eip712-evm-offline.ts",
     "link-runtime": "bash scripts/link-runtime.sh",
     "test:bridge-offline": "npm run link-runtime && tsx src/tests/bridge-offline.ts",
+    "test:bridge-e2e": "npm run link-runtime && tsx src/tests/bridge-e2e.ts",
     "test:eip712-oracles": "tsx src/tests/eip712-evm-oracles.ts",
     "test:client-offline": "tsx src/tests/client-offline.ts",
     "test:evm-deploy": "tsx src/tests/evm-account-deploy.ts",
