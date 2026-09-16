@@ -92,6 +92,11 @@ const SETS: { label: string; note: string; ids: string[] }[] = [
     ids: [...SHARED, ...armCircuits('evm' as Arm), ...BRIDGE],
   },
   {
+    label: 'evm bridge + offer account, wave 2 payload (8 keys)',
+    note: 'the same update with the opt-in offer circuit (question Q35): `bridgeWaves({ withSwap: true })`',
+    ids: [...EVM_GATED.slice(5), ...BRIDGE, 'open_swap_shielded_with_evm'],
+  },
+  {
     label: 'evm bridge account, wave 2 payload (7 keys)',
     note: 'NOT a deploy: the maintenance update that adds the device-lifecycle pair and the five bridge circuits, priced here as a deploy of the same keys because the ledger charges per verifier key either way',
     ids: [...EVM_GATED.slice(5), ...BRIDGE],

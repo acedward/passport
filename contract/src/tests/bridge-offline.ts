@@ -432,6 +432,13 @@ async function main(): Promise<void> {
     'wave 2 carries the device-lifecycle pair plus all five bridge circuits');
   assert(waves.waveOne.every((id) => !BRIDGE_CIRCUITS.includes(id)),
     'no bridge circuit is in wave 1');
+  // The offer circuit is opt-in and rides the same update when asked for (question Q35).
+  const withSwap = bridgeWaves({ withSwap: true });
+  assert(withSwap.waveOne.length === 8 && withSwap.waveTwo.length === 8
+    && withSwap.waveTwo.includes('open_swap_shielded_with_evm'),
+    'withSwap adds the offer circuit to wave 2 and leaves wave 1 alone');
+  assert(!bridgeWaves().waveTwo.includes('open_swap_shielded_with_evm'),
+    'and an account that will not post offers does not pay for its key');
 
   // ── Helpers that need the closure ──────────────────────────────────────────
   /** Put one coin of the vault colour in the client's local store — what `held_coin`

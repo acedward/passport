@@ -806,7 +806,17 @@ a console should show the pending state there.
    question Q24. The economics are a burn's; an explorer shows the vault holding the value.
 4. **A bridge account carries five more operations, and they ride wave 2.** Wave 1 stays at
    the eight the node accepts; `bridgeWaves()` in `src/wallet/bridge.ts` produces the split
-   and `contractForBridgeAccount()` the matching client contract.
+   and `contractForBridgeAccount()` the matching client contract. The offer circuit is opt-in
+   on the same update — `bridgeWaves({ withSwap: true })`, eight verifier keys instead of
+   seven (question Q35) — so an account that will never post an offer does not pay for its
+   key. Measured on a node: the 8 + 7 split deploys and activates in 65.5 s, and every bridge
+   circuit is callable immediately afterwards.
+5. **A gated call's shielded legs land in the call's own FALLIBLE segment, not in segment 0**
+   (question Q39, PR-B's finding on the offer circuit; `bridge_withdraw_start_with_evm`
+   inherits it — its `sendShielded` to the vault is such a leg). Nothing in this client
+   assumes otherwise: it submits through `callTx` and the wallet balances what it built. A
+   consumer that INSPECTS a built transaction — an offer exporter, a taker, a fee sponsor —
+   must read the segment from the transaction rather than assume a number.
 
 ### The relayer
 
@@ -834,9 +844,32 @@ is created and spendable either way.
 # offline: the whole three-contract tree in the compact-runtime simulator
 npm run test:bridge-offline
 
+# offline: every entry point in the exports map loads from dist/, `./bridge` included
+npm run test:exports
+
 # on a localnet with the fakenet MPC responder and a local EVM chain
 ./run-g4.sh all          # compile + up + e2e + down  (claim the host's stack first)
 ```
+
+**Compiling while a suite runs will break the suite.** `npm run compile` deletes and rewrites
+`contracts/managed/<target>/`, and a midnight-js provider looks a prover key up from there
+PER CALL — so a recompile started mid-run kills it several minutes in with `ENOENT …
+<circuit>.prover`, and nothing about the failure points at the real cause (question Q37). On
+a machine where two things run at once, point the long run at an immutable snapshot:
+
+```sh
+cp -R contracts/managed /tmp/managed-snapshot
+MIDNIGHT_MANAGED_PATH=/tmp/managed-snapshot npm run test:bridge-e2e
+```
+
+The bridge adds a second reason to be careful: `contracts/managed/{Erc20Vault,SignetSigner}`
+are directories of symlinks into the vault package's own `managed/` (`scripts/link-callees.sh`,
+run by `npm run compile`), so recompiling the VAULT moves the ground under the account too.
+
+The package exports the client as `./bridge`. Publishing it needs one build step nothing else
+needs (`scripts/bundle-signet-sdk.mjs`): the Signet SDK cannot be imported by package name on
+this runtime, so the vault's shim reaches its modules by file path, and that path has to exist
+inside `dist/` too (question Q47). `npm run test:exports` is what keeps that honest.
 
 `npm run test:bridge-offline` runs the account, the vault and the singleton in-process:
 both round trips, both refund paths and the negatives, with no node and no proving. It also

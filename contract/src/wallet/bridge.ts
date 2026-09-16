@@ -81,21 +81,44 @@ export const BRIDGE_CIRCUITS: string[] = [
   ...BRIDGE_SETTLE_CIRCUITS,
 ];
 
+/** The offer circuit, which an account carries only if it will post offers (question Q35).
+ *  Like the bridge circuits it is opt-in and rides wave 2, so `GATED_BASES` stays the set
+ *  every account of every arm pays for. */
+export const SWAP_CIRCUIT = 'open_swap_shielded_with_evm';
+
+export interface BridgeWaveOptions {
+  /** Also deploy the open-offer circuit (question Q35). One more k=18 verifier key in the
+   *  wave-2 update — 8 instead of 7 — which is below the ten PR-A measured landing in one. */
+  withSwap?: boolean;
+}
+
 /**
  * The wave split for a bridge-capable `evm` account.
  *
  * Wave 1 is exactly what `wave-deploy.ts` measured as the node's ceiling (8 operations,
- * question Q28) and is not touched: all five bridge circuits ride wave 2, the maintenance
- * update that also retires the authority. An account is therefore usable for custody the
- * moment wave 1 lands, and gains the bridge one transaction later.
+ * question Q28) and is not touched: the five bridge circuits — and the offer circuit, when
+ * asked for — ride wave 2, the maintenance update that also retires the authority. An
+ * account is therefore usable for custody the moment wave 1 lands, and gains the bridge (and
+ * the offer) one transaction later, before the authority that could add anything else is
+ * retired for good.
+ *
+ * MEASURED on a node, 2026-09-16 (G4): the 8 + 7 split deploys and activates in 65.5 s, and
+ * every bridge circuit was callable afterwards.
  *
  * The lists live here rather than in `wave-deploy.ts` because that file belongs to PR-A and
- * three lines of work share the branch (question Q39, the same answer Q35 recorded for the
- * swap circuit). They fold together when the lines merge.
+ * three lines of work share the branch (question Q39). They fold together when the lines
+ * merge; `GATED_BASES` deliberately stays the set EVERY account pays for.
  */
-export function bridgeWaves(): { waveOne: string[]; waveTwo: string[] } {
+export function bridgeWaves(options: BridgeWaveOptions = {}): { waveOne: string[]; waveTwo: string[] } {
   const waves = defaultWaves('evm');
-  return { waveOne: waves.waveOne, waveTwo: [...waves.waveTwo, ...BRIDGE_CIRCUITS] };
+  return {
+    waveOne: waves.waveOne,
+    waveTwo: [
+      ...waves.waveTwo,
+      ...BRIDGE_CIRCUITS,
+      ...(options.withSwap === true ? [SWAP_CIRCUIT] : []),
+    ],
+  };
 }
 
 /**
@@ -107,8 +130,15 @@ export function bridgeWaves(): { waveOne: string[]; waveTwo: string[] } {
  * the local verifier keys against the deployed state for every circuit the compiled contract
  * declares, and a bridge account carries five it does not list.
  */
-export function contractForBridgeAccount(arms: readonly Arm[] = ['evm']): typeof Contract {
-  const keep = new Set([...accountCircuits(arms), ...BRIDGE_CIRCUITS]);
+export function contractForBridgeAccount(
+  arms: readonly Arm[] = ['evm'],
+  options: BridgeWaveOptions = {},
+): typeof Contract {
+  const keep = new Set([
+    ...accountCircuits(arms),
+    ...BRIDGE_CIRCUITS,
+    ...(options.withSwap === true ? [SWAP_CIRCUIT] : []),
+  ]);
   return class BridgeAccountContract extends (Contract as any) {
     constructor(...args: any[]) {
       super(...args);
