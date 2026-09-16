@@ -39,11 +39,31 @@
 //
 // Environment: MIDNIGHT_NETWORK=stagenet, MIDNIGHT_PROOF_SERVER_URL=<local proof server>,
 // STAGENET_WALLET_SEED, STAGENET_WALLET2_SEED, SEPOLIA_FUNDER_KEY, SEPOLIA_RPC_URL.
+//
+// ─────────────────────────────────────────────────────────────────────────────────────────
+// TWO NETWORKS, ONE DRIVER (sub-plan phase S-L)
+//
+// The same file also runs the WHOLE sequence against a local stack, under the `local`
+// network profile: `MIDNIGHT_NETWORK=local` (or `PRS_PROFILE=local`) plus one extra
+// bootstrap command, `l0`, which builds locally everything stagenet gets from Sig Network —
+// an ERC20, an MPC root key, the Signet singleton, and the `fakenet` responder. Everything
+// after that is the SAME code path, which is the point: the local run is a rehearsal of the
+// stagenet run, not a separate test of a separate thing, so what it proves carries over and
+// a fix reaches both. `contracts/erc20-vault/run-sl.sh` drives it end to end.
+//
+//   ./contracts/erc20-vault/run-sl.sh all     # compile, up, l0 → s8, down
+//
+// What the profile changes is listed, exhaustively, at `PROFILE` below. The local profile
+// never reads `~/.config/aa-00034` — no owner seed, no Sepolia key, no stagenet endpoint is
+// touched by it.
+// ─────────────────────────────────────────────────────────────────────────────────────────
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import * as Rx from 'rxjs';
 import { ethers } from 'ethers';
@@ -53,10 +73,12 @@ import { encodeContractAddress } from '@midnight-ntwrk/compact-runtime';
 import { secp256k1PublicKeyOf, signAttestationDigest } from '@sig-net/midnight/testing';
 
 import * as VaultModule from '../../contracts/managed/Erc20Vault/contract/index.js';
+import * as SignetModule from '../../contracts/managed/SignetSigner/contract/index.js';
 import { pureCircuits as vaultPureCircuits } from '../../contracts/erc20-vault/src/index.js';
 import { fingerprintDeployArtefacts } from '../../contracts/erc20-vault/deploy/artefacts.js';
 import { contractRecipient } from '../../contracts/erc20-vault/src/index.js';
 import {
+  bytesToHex as sdkBytesToHex,
   deriveMidnightResponseKey,
   formatSecp256k1PublicKey,
   getMpcRootPublicKey,
@@ -64,6 +86,9 @@ import {
   normaliseSecp256k1PublicKey,
   toSignBidirectionalEventIndex as sdkToIndex,
 } from '../../contracts/erc20-vault/src/signet-sdk.js';
+// PR-G's own EVM half, reused rather than re-implemented: the same solc-in-process compile,
+// the same TestUsd, the same dev-account connection the localnet bridge e2e proved on.
+import { compileTestTokens, connectEvm, deployToken } from '../../contracts/erc20-vault/e2e/evm.js';
 
 import { CustodyAccount } from '../wallet/account.js';
 import {
@@ -84,15 +109,89 @@ import {
 // Constants of the run
 // ─────────────────────────────────────────────────────────────────────────────
 
-const EVIDENCE_DIR = process.env.PRS_EVIDENCE_DIR
-  ?? '/Users/edwardalvarado/todo/AA/evidence/00034-passport-evm-account-zswap/pr-s';
-const STATE_PATH = process.env.PRS_STATE
-  ?? path.join(os.homedir(), '.config', 'aa-00034', 'stagenet-prs-state.json');
-const DEVICE_ENV = path.join(os.homedir(), '.config', 'aa-00034', 'stagenet-device.env');
+/**
+ * THE NETWORK PROFILE — the ONE place this driver differs between networks.
+ *
+ * `stagenet` is what PR-S was written for: the public Midnight stagenet, Sig Network's
+ * deployed singleton, their live MPC, and real Circle USDC on Sepolia.
+ *
+ * `local` (sub-plan phase S-L) is the SAME sequence, same circuits, same client code, run
+ * against the five-container stack PR-F and PR-G proved the bridge on: node 2.1.0 / indexer
+ * 4.4.0-rc.2 / proof-server 9.0.0-rc.6 / anvil with a locally deployed ERC20 / the Sig
+ * Network `fakenet` MPC responder. It exists because stagenet's MPC stopped signing
+ * (question Q61) and the owner's question — "can we get this working?" — is about the
+ * DESIGN, not about Sig Network's uptime. Everything that differs is listed here rather
+ * than forked into a second driver, so a fix to the sequence reaches both networks and the
+ * local rehearsal is evidence about the code that will resume on stagenet.
+ *
+ * What the profile actually changes, and nothing else:
+ *   * the EVM chain (a public Sepolia RPC vs the run's own anvil) and its chain id;
+ *   * the ERC20 (Circle's Sepolia USDC, a constant, vs a TestUsd this run deploys — so its
+ *     address is per-run and lives in the state file);
+ *   * the MPC root key and the singleton (Sig Network's published pair vs a key this run
+ *     generates and a singleton it deploys, which is what fakenet is given);
+ *   * where the funds come from (an owner-funded Sepolia wallet that TRANSFERS vs anvil's
+ *     publicly known dev account, which MINTS and `anvil_setBalance`s);
+ *   * which env vars name wallet 1 and wallet 2;
+ *   * how long the MPC is waited for, and where state and evidence are written.
+ */
+export type ProfileName = 'stagenet' | 'local';
+const PROFILE: ProfileName = (process.env.PRS_PROFILE as ProfileName | undefined)
+  ?? ((process.env.MIDNIGHT_NETWORK ?? 'stagenet') === 'local' ? 'local' : 'stagenet');
+const LOCAL = PROFILE === 'local';
 
-const SEPOLIA_RPC = process.env.SEPOLIA_RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com';
-const USDC = process.env.SEPOLIA_USDC ?? '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238';
-const SEPOLIA_CHAIN_ID = 11155111n;
+const EVIDENCE_DIR = process.env.PRS_EVIDENCE_DIR
+  ?? `/Users/edwardalvarado/todo/AA/evidence/00034-passport-evm-account-zswap/${LOCAL ? 'pr-s-local' : 'pr-s'}`;
+/** The local run's state carries only throwaway localnet secrets (a dev-chain deployer key,
+ *  a per-run account encryption key, a coin store on a chain that is deleted at teardown),
+ *  so it deliberately does NOT go into `~/.config/aa-00034`, which holds the owner's real
+ *  seeds and is not read by this profile at all. */
+const STATE_PATH = process.env.PRS_STATE
+  ?? (LOCAL
+    ? path.join(os.homedir(), '.cache', 'aa-00034', 'local-prs-state.json')
+    : path.join(os.homedir(), '.config', 'aa-00034', 'stagenet-prs-state.json'));
+const DEVICE_ENV = LOCAL
+  ? path.join(os.homedir(), '.cache', 'aa-00034', 'local-device.env')
+  : path.join(os.homedir(), '.config', 'aa-00034', 'stagenet-device.env');
+
+const EVM_RPC = process.env.EVM_RPC_URL
+  ?? process.env.SEPOLIA_RPC_URL
+  ?? (LOCAL ? 'http://127.0.0.1:18545' : 'https://ethereum-sepolia-rpc.publicnode.com');
+
+/** Which env var carries which wallet's seed. Locally both are the dev node's genesis
+ *  seeds — `…0001` is wallet 1 (deploys and pays) and `…0002` is wallet 2 (Test 3's second
+ *  wallet); both are funded by the `dev` preset's genesis and generate their own DUST. */
+const WALLET1_SEED_VAR = LOCAL ? 'WALLET_SEED' : 'STAGENET_WALLET_SEED';
+const WALLET2_SEED_VAR = LOCAL ? 'WALLET_SEED_SECONDARY' : 'STAGENET_WALLET2_SEED';
+
+/** Anvil/Hardhat's PUBLICLY KNOWN dev account #0. Safe and deliberate on a throwaway
+ *  in-memory chain on this host, and never used anywhere reachable (the same caveat
+ *  `contracts/erc20-vault/e2e/evm.ts` records for PR-F/PR-G). */
+const ANVIL_DEV_KEY = process.env.EVM_DEPLOYER_KEY
+  ?? '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
+
+/** Per-run EVM facts. On stagenet they are constants; locally `l0` measures them and writes
+ *  them into the state file, and `loadState` restores them into here. */
+const runtime: {
+  erc20: string; chainId: bigint; mpcRootPublic?: string; signetAddress?: string;
+} = {
+  erc20: process.env.PRS_ERC20 ?? process.env.SEPOLIA_USDC
+    ?? (LOCAL ? '' : '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238'),
+  chainId: BigInt(process.env.PRS_EVM_CHAIN_ID ?? (LOCAL ? '31337' : '11155111')),
+};
+
+/** The ERC20 this bridge moves. */
+function erc20Address(): string {
+  if (!runtime.erc20) {
+    throw new Error('no ERC20 address yet — on the local profile, run `l0` first (it deploys TestUsd)');
+  }
+  return runtime.erc20;
+}
+function evmChainId(): bigint { return runtime.chainId; }
+
+/** The human name of the EVM chain, for evidence and log lines. */
+const EVM_CHAIN_LABEL = LOCAL ? 'anvil (local)' : 'Sepolia';
+const NETWORK_LABEL = LOCAL ? 'localnet' : 'stagenet';
 
 /**
  * The gas fields the DEVICE signs, and therefore what the MPC signs verbatim.
@@ -123,7 +222,8 @@ const TEST3_AMOUNT = BigInt(process.env.PRS_TEST3_AMOUNT ?? '250000');       // 
 /** The MPC wait. The owner capped the FIRST deposit at 45 minutes; the coordinator's
  *  authorised retries use 30, which the census says is generous rather than a retry loop —
  *  every signature the stagenet MPC has ever posted arrived inside 60 seconds. */
-const MPC_TIMEOUT_MS = Number(process.env.PRS_MPC_TIMEOUT_MS ?? String(45 * 60 * 1000));
+const MPC_TIMEOUT_MS = Number(process.env.PRS_MPC_TIMEOUT_MS
+  ?? String((LOCAL ? 10 : 45) * 60 * 1000));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State (secrets — mode 600, never in the repository or the evidence)
@@ -134,6 +234,17 @@ interface State {
   network: string;
   mpcRootPublicKey?: string;
   signetContractAddress?: string;
+  /** LOCAL profile only (`l0`): what the run's own anvil and its own MPC are. On stagenet
+   *  every one of these is a published constant and this field stays absent. */
+  evm?: {
+    rpcUrl: string; chainId: string; erc20: string; erc20Symbol?: string;
+    deployer: string;
+    /** The fakenet responder's root PRIVATE key, 0x-prefixed (the responder validates it as
+     *  a hex private key — PR-F's finding). Generated per run on a chain that is destroyed
+     *  at teardown; it is a localnet secret, which is why the local state file lives outside
+     *  `~/.config/aa-00034`. */
+    mpcRootSecretHex?: string;
+  };
   /** S1 */
   vault?: {
     address: string;
@@ -177,9 +288,17 @@ interface State {
 
 function loadState(): State {
   if (!existsSync(STATE_PATH)) {
-    return { version: 1, network: process.env.MIDNIGHT_NETWORK ?? 'stagenet' };
+    return { version: 1, network: process.env.MIDNIGHT_NETWORK ?? PROFILE };
   }
-  return JSON.parse(readFileSync(STATE_PATH, 'utf8')) as State;
+  const s = JSON.parse(readFileSync(STATE_PATH, 'utf8')) as State;
+  // Restore the per-run facts every command needs and only `l0` measures.
+  if (s.evm) {
+    runtime.erc20 = s.evm.erc20;
+    runtime.chainId = BigInt(s.evm.chainId);
+  }
+  if (s.mpcRootPublicKey) runtime.mpcRootPublic = s.mpcRootPublicKey;
+  if (s.signetContractAddress) runtime.signetAddress = s.signetContractAddress;
+  return s;
 }
 
 function saveState(s: State): void {
@@ -234,10 +353,23 @@ const strip = (hex: string): string => hex.replace(/^0x/, '').toLowerCase();
 // Shared plumbing
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * The MPC's root PUBLIC key.
+ *
+ * On stagenet it is Sig Network's published constant. Locally it is derived from the secret
+ * `l0` generated and handed to fakenet, and is read back out of the state file — note that
+ * `MPC_ROOT_KEY` means opposite things on the two sides (a public key in Sig Network's own
+ * constants, a PRIVATE key in the responder's environment), so the local profile deliberately
+ * refuses to read that variable and insists on `l0` having run.
+ */
 function mpcRoot(): string {
+  if (runtime.mpcRootPublic) return normaliseSecp256k1PublicKey(runtime.mpcRootPublic);
+  if (LOCAL) throw new Error('no MPC root key in the state file — run `l0` first');
   return normaliseSecp256k1PublicKey(process.env.MPC_ROOT_KEY ?? getMpcRootPublicKey('stagenet' as never));
 }
 function signetAddress(): string {
+  if (runtime.signetAddress) return runtime.signetAddress;
+  if (LOCAL) throw new Error('no Signet singleton in the state file — run `l0` first');
   return process.env.MIDNIGHT_SIGNET_CONTRACT_ADDRESS ?? getSignetContractAddress('stagenet' as never);
 }
 
@@ -249,21 +381,60 @@ async function wallet(seedVar: string, label: string) {
   return ctx;
 }
 
-function sepolia(): { provider: ethers.JsonRpcProvider; funder: ethers.Wallet } {
-  const provider = new ethers.JsonRpcProvider(SEPOLIA_RPC, undefined, { staticNetwork: true });
-  const key = process.env.SEPOLIA_FUNDER_KEY;
+/**
+ * The EVM chain and the account that plays the FUNDER.
+ *
+ * On stagenet the funder is the owner's Sepolia wallet and every unit it moves is a real
+ * test asset, so it can only TRANSFER what it holds. Locally the funder is anvil's dev
+ * account #0 on a chain this run created, so it MINTS the token and sets balances outright
+ * — the same role, the cheapest possible implementation of it, and the reason the local
+ * amounts can be generous where the stagenet ones are capped.
+ */
+function evmChain(): { provider: ethers.JsonRpcProvider; funder: ethers.Wallet } {
+  const provider = new ethers.JsonRpcProvider(EVM_RPC, undefined, { staticNetwork: true });
+  const key = LOCAL ? ANVIL_DEV_KEY : process.env.SEPOLIA_FUNDER_KEY;
   if (!key) throw new Error('SEPOLIA_FUNDER_KEY is required');
   return { provider, funder: new ethers.Wallet(key, provider) };
 }
 
 const erc20Abi = [
+  'function name() view returns (string)',
+  'function symbol() view returns (string)',
   'function balanceOf(address) view returns (uint256)',
   'function transfer(address,uint256) returns (bool)',
+  'function mint(address,uint256)',
   'function decimals() view returns (uint8)',
 ];
 
-async function usdcBalance(provider: ethers.JsonRpcProvider, who: string): Promise<bigint> {
-  return new ethers.Contract(USDC, erc20Abi, provider).balanceOf(who) as Promise<bigint>;
+async function erc20Balance(provider: ethers.JsonRpcProvider, who: string): Promise<bigint> {
+  return new ethers.Contract(erc20Address(), erc20Abi, provider).balanceOf(who) as Promise<bigint>;
+}
+
+/** Give `to` `amount` of the bridged ERC20: a transfer from the funder on stagenet, a mint
+ *  on the local chain. Returns the EVM transaction hash. */
+async function giveErc20(
+  provider: ethers.JsonRpcProvider, funder: ethers.Wallet, to: string, amount: bigint,
+): Promise<string> {
+  const token = new ethers.Contract(erc20Address(), erc20Abi, funder);
+  const tx = LOCAL
+    ? await (token as any).mint(to, amount)
+    : await (token as any).transfer(to, amount);
+  const r = await tx.wait(1);
+  return r.hash as string;
+}
+
+/** Give `to` `wei` of gas ETH. On the local chain `anvil_setBalance` does it without a
+ *  transaction at all, which is why the local evidence records `null` for the gas hash. */
+async function giveGas(
+  provider: ethers.JsonRpcProvider, funder: ethers.Wallet, to: string, wei: bigint,
+): Promise<string | null> {
+  if (LOCAL) {
+    const current = await provider.getBalance(to);
+    await provider.send('anvil_setBalance', [to, `0x${(current + wei).toString(16)}`]);
+    return null;
+  }
+  const tx = await funder.sendTransaction({ to, value: wei });
+  return (await tx.wait(1))!.hash;
 }
 
 /** A witness-free contract (the vault) deployed with the account package's wallet. Its own
@@ -341,8 +512,8 @@ function bridgeConfig(s: State): BridgeConfig {
     vaultAddress: s.vault.address,
     signetContractAddress: s.signetContractAddress ?? signetAddress(),
     mpcRootPublicKey: s.mpcRootPublicKey ?? mpcRoot(),
-    erc20: USDC,
-    evmRpcUrl: SEPOLIA_RPC,
+    erc20: erc20Address(),
+    evmRpcUrl: EVM_RPC,
   };
 }
 
@@ -422,6 +593,124 @@ async function withCandidateIndex<T>(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// L0 — the LOCAL profile's bootstrap (sub-plan phase S-L; no stagenet equivalent)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const vaultPackage = path.resolve(here, '..', '..', 'contracts', 'erc20-vault');
+
+/** `docker compose` against PR-F's compose file, with this run's project name and ports
+ *  coming from the environment `run-sl.sh` exported. One compose definition serves F4, G4
+ *  and this rehearsal; only the project name and the ports differ, so two runs can never
+ *  collide on this shared host. */
+function compose(...args: string[]): string {
+  return execFileSync('docker', [
+    'compose', '-f', path.join(vaultPackage, 'infra', 'docker-compose.yml'),
+    '--env-file', path.join(vaultPackage, 'infra', '.env'), ...args,
+  ], { cwd: vaultPackage, encoding: 'utf8', env: process.env });
+}
+
+/**
+ * Everything the stagenet profile gets for free from Sig Network, built here instead.
+ *
+ * On stagenet the ERC20 is Circle's, the singleton is `1df4ce25…` and the MPC is theirs. On
+ * the local chain none of that exists, so this step deploys a TestUsd, generates a root key,
+ * deploys the Signet singleton from wallet 1, and starts the `fakenet` responder pointed at
+ * both. Idempotent: re-running it against a state file that already has them is a no-op
+ * except for re-checking that fakenet is up.
+ */
+async function l0(): Promise<void> {
+  if (!LOCAL) throw new Error('`l0` is the LOCAL profile\'s bootstrap; stagenet has no equivalent');
+  const s = loadState();
+  const started = Date.now();
+  step('L0  the local chain, the local ERC20, the local MPC root key and singleton');
+
+  // ---- the EVM half (PR-G's own helpers) --------------------------------------------
+  const evm = await connectEvm(EVM_RPC);
+  let erc20 = s.evm?.erc20;
+  if (!erc20) {
+    const tokens = compileTestTokens();
+    erc20 = await deployToken(evm, tokens.TestUsd!);
+    console.log(`  chain ${evm.chainId}  TestUsd ${erc20}`);
+  } else console.log(`  the ERC20 is already deployed at ${erc20}`);
+  runtime.erc20 = erc20;
+  runtime.chainId = evm.chainId;
+
+  // ---- the MPC root key -------------------------------------------------------------
+  const rootSecret = s.evm?.mpcRootSecretHex
+    ? hexToBytes(strip(s.evm.mpcRootSecretHex))
+    : new Uint8Array(randomBytes(32));
+  const rootPublic = normaliseSecp256k1PublicKey(
+    formatSecp256k1PublicKey(secp256k1PublicKeyOf(rootSecret)),
+  );
+  runtime.mpcRootPublic = rootPublic;
+
+  // ---- the Signet singleton ---------------------------------------------------------
+  const w = await wallet(WALLET1_SEED_VAR, 'wallet 1');
+  let singletonAddress = s.signetContractAddress;
+  let singletonDeploySeconds: string | null = null;
+  if (!singletonAddress) {
+    const t0 = Date.now();
+    const singleton = await deployWitnessFree(w, 'SignetSigner', SignetModule);
+    singletonDeploySeconds = ((Date.now() - t0) / 1000).toFixed(1);
+    singletonAddress = singleton.address;
+    console.log(`  singleton ${singletonAddress} (${singletonDeploySeconds}s)`);
+  } else console.log(`  the singleton is already deployed at ${singletonAddress}`);
+  runtime.signetAddress = singletonAddress;
+
+  s.evm = {
+    rpcUrl: EVM_RPC, chainId: String(evm.chainId), erc20,
+    erc20Symbol: 'TUSD', deployer: evm.deployerAddress,
+    mpcRootSecretHex: `0x${bytesToHex(rootSecret)}`,
+  };
+  s.mpcRootPublicKey = rootPublic;
+  s.signetContractAddress = singletonAddress;
+  saveState(s);
+
+  // ---- the fakenet responder --------------------------------------------------------
+  // 0x-prefixed: the responder validates MPC_ROOT_KEY as a hex PRIVATE key (PR-F's finding,
+  // and the workspace rule this run was given).
+  process.env.MPC_ROOT_KEY = `0x${sdkBytesToHex(rootSecret)}`;
+  process.env.MIDNIGHT_SIGNET_CONTRACT_ADDRESS = singletonAddress;
+  compose('--profile', 'fakenet', 'up', '-d', '--force-recreate', 'fakenet');
+  await new Promise((r) => setTimeout(r, 8_000));
+  const fakenetState = compose('ps', '--format', '{{.Service}} {{.State}}', 'fakenet').trim();
+  const ok = check(fakenetState.includes('running'), `the fakenet responder is running (${fakenetState || 'NOT RUNNING'})`);
+  if (!ok) {
+    console.error(compose('logs', '--tail', '40', 'fakenet'));
+    throw new Error(`the fakenet responder is not running: "${fakenetState}"`);
+  }
+
+  evidence('l0-stack', {
+    phase: 'L0 (S-L)', network: `${NETWORK_LABEL} + ${EVM_CHAIN_LABEL}`,
+    startedUtc: new Date(started).toISOString(),
+    images: {
+      node: process.env.MIDNIGHT_NODE_IMAGE ?? 'midnightntwrk/midnight-node:2.1.0-2e92c4ae642c',
+      indexer: process.env.MIDNIGHT_INDEXER_IMAGE ?? 'midnightntwrk/indexer-standalone:4.4.0-rc.2',
+      proofServer: process.env.MIDNIGHT_PROOF_IMAGE ?? 'midnightntwrk/proof-server:9.0.0-rc.6',
+      evm: process.env.FOUNDRY_IMAGE ?? 'ghcr.io/foundry-rs/foundry:v1.5.1',
+      mpc: process.env.FAKENET_IMAGE ?? 'ghcr.io/sig-net/fakenet:0.23.0',
+    },
+    endpoints: {
+      node: process.env.MIDNIGHT_NODE_URL ?? null,
+      indexer: process.env.INDEXER_URL ?? null,
+      proofServer: process.env.MIDNIGHT_PROOF_SERVER_URL ?? null,
+      evmRpc: EVM_RPC,
+    },
+    composeProject: process.env.COMPOSE_PROJECT_NAME ?? null,
+    evmChainId: String(evm.chainId),
+    erc20: { address: erc20, symbol: 'TUSD', decimals: 6, note: 'deployed by this run (question Q27); openly mintable, real balance accounting' },
+    evmFunder: evm.deployerAddress,
+    signetContractAddress: singletonAddress,
+    singletonDeploySeconds,
+    mpcRootPublicKey: rootPublic,
+    mpcResponder: 'fakenet 0.23.0, Midnight-only mode, polling the singleton through the indexer',
+    fakenetState,
+    allChecksPassed: ok,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // S1 — the vault
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -435,7 +724,7 @@ async function s1(): Promise<void> {
   console.log(`  MPC root key   ${root.slice(0, 20)}…`);
   console.log(`  singleton      ${singleton}`);
 
-  const w = await wallet('STAGENET_WALLET_SEED', 'wallet 1');
+  const w = await wallet(WALLET1_SEED_VAR, 'wallet 1');
   const deployerSecret = new Uint8Array(randomBytes(32));
   const deployerKey = secp256k1PublicKeyOf(deployerSecret);
 
@@ -449,19 +738,19 @@ async function s1(): Promise<void> {
   // Both values need the contract's OWN address, which is why `initialise` exists at all.
   const vaultEvmAddress = vaultEvmAddressFor({
     vaultAddress: vault.address, signetContractAddress: singleton,
-    mpcRootPublicKey: root, erc20: USDC, evmRpcUrl: SEPOLIA_RPC,
+    mpcRootPublicKey: root, erc20: erc20Address(), evmRpcUrl: EVM_RPC,
   });
   const responseKey = deriveMidnightResponseKey(root, vault.address);
   const digest = vaultPureCircuits.initialiseDigest(
     { bytes: hexToBytes(vault.address) },
     hexToBytes(vaultEvmAddress.replace(/^0x/, '')),
-    SEPOLIA_CHAIN_ID,
+    evmChainId(),
     responseKey as never,
   );
   const sig = signAttestationDigest(digest, deployerSecret);
   const t1 = Date.now();
   const init = await vault.call('initialise',
-    hexToBytes(vaultEvmAddress.replace(/^0x/, '')), SEPOLIA_CHAIN_ID, responseKey, { r: sig.r, s: sig.s });
+    hexToBytes(vaultEvmAddress.replace(/^0x/, '')), evmChainId(), responseKey, { r: sig.r, s: sig.s });
   const initSeconds = ((Date.now() - t1) / 1000).toFixed(1);
 
   const state: any = await vault.ledgerState();
@@ -474,15 +763,15 @@ async function s1(): Promise<void> {
   const ok1 = check(readBack.initialised === '1', 'the vault reads back initialised == 1');
   const ok2 = check(readBack.vaultEvmAddress.toLowerCase() === vaultEvmAddress.toLowerCase(),
     'the read-back vaultEvmAddress equals the off-chain derivation');
-  const ok3 = check(readBack.evmChainId === String(SEPOLIA_CHAIN_ID), 'the pinned chain id is Sepolia');
+  const ok3 = check(readBack.evmChainId === String(evmChainId()), `the pinned chain id is ${EVM_CHAIN_LABEL} (${evmChainId()})`);
   const ok4 = check(readBack.mpcResponseKey === formatSecp256k1PublicKey(responseKey as never),
     'the read-back MPC response key equals the off-chain derivation');
 
   // The vault's own Ethereum account must be empty: deposit gas is paid at the PER-RECIPIENT
   // address, not here (S7 funds this one, and only then).
-  const { provider } = sepolia();
+  const { provider } = evmChain();
   const evmEth = await provider.getBalance(vaultEvmAddress);
-  const evmUsdc = await usdcBalance(provider, vaultEvmAddress);
+  const evmUsdc = await erc20Balance(provider, vaultEvmAddress);
   const ok5 = check(evmEth === 0n && evmUsdc === 0n, "the vault's Ethereum account starts empty");
   provider.destroy();
 
@@ -496,12 +785,12 @@ async function s1(): Promise<void> {
     initialiseTxId: String(init.txId),
     vaultEvmAddress,
     mpcResponseKeyHex: formatSecp256k1PublicKey(responseKey as never),
-    evmChainId: String(SEPOLIA_CHAIN_ID),
+    evmChainId: String(evmChainId()),
   };
   saveState(s);
 
   evidence('s1-vault', {
-    phase: 'S1', network: 'stagenet', startedUtc: new Date(started).toISOString(),
+    phase: 'S1', network: NETWORK_LABEL, startedUtc: new Date(started).toISOString(),
     vaultContractAddress: vault.address,
     vaultDeployTxId: s.vault.deployTxId ?? null,
     initialiseTxId: String(init.txId),
@@ -511,7 +800,7 @@ async function s1(): Promise<void> {
     vaultEvmAddress,
     mpcResponseKey: s.vault.mpcResponseKeyHex,
     deployerPublicKey: formatSecp256k1PublicKey(deployerKey),
-    erc20: USDC, evmChainId: String(SEPOLIA_CHAIN_ID),
+    erc20: erc20Address(), evmChainId: String(evmChainId()),
     readBack,
     vaultEvmStartingBalances: { wei: String(evmEth), usdcRaw: String(evmUsdc) },
     artefactFingerprints: { vault: artefacts.vault?.fingerprint, signetSigner: artefacts.signetSigner?.fingerprint },
@@ -529,7 +818,7 @@ async function s2(): Promise<void> {
   if (!s.vault) throw new Error('run s1 first');
   step('S2  deploy an EVM-only BRIDGE account in two waves and activate it');
 
-  const w = await wallet('STAGENET_WALLET_SEED', 'wallet 1');
+  const w = await wallet(WALLET1_SEED_VAR, 'wallet 1');
   const providers = await createProviders(w);
   const device = EvmDevice.fromPrivateKey(deviceKey());
   await device.enrol();
@@ -569,7 +858,7 @@ async function s2(): Promise<void> {
 
   const bridge = new AccountBridge(account, bridgeConfig(s), encKeys.publicKey);
   evidence('s2-account', {
-    phase: 'S2', network: 'stagenet',
+    phase: 'S2', network: NETWORK_LABEL,
     accountContractAddress: account.address,
     boundVaultAddress: s.vault.address,
     deviceAddress: device.addressHex,
@@ -579,7 +868,7 @@ async function s2(): Promise<void> {
     readBack: { booted: l.booted, deviceCount: String(l.device_count), round: String(l.round), authNonce: String(l.auth_nonce), inboxCount: String(l.inbox_count) },
     artefactFingerprints: { vault: artefacts.vault?.fingerprint, signetSigner: artefacts.signetSigner?.fingerprint },
     depositEvmAddress: bridge.depositAddress(),
-    vaultColour: bytesToHex(vaultColour(s.vault.address, USDC)),
+    vaultColour: bytesToHex(vaultColour(s.vault.address, erc20Address())),
     allChecksPassed: ok1 && ok2 && ok3 && ok4 && ok5,
   });
   console.log(`  account ${account.address} (${deploySeconds}s)`);
@@ -603,35 +892,30 @@ async function s3Fund(): Promise<void> {
   const to = depositAddressOf(s);
   step('S3.2  Sepolia: fund the deposit address with the capped amount');
   console.log(`  deposit address ${to}`);
-  const { provider, funder } = sepolia();
-  const erc20 = new ethers.Contract(USDC, erc20Abi, funder);
-  const before = { eth: await provider.getBalance(to), usdc: await usdcBalance(provider, to) };
-  const fBefore = { eth: await provider.getBalance(funder.address), usdc: await usdcBalance(provider, funder.address) };
+  const { provider, funder } = evmChain();
+  const before = { eth: await provider.getBalance(to), usdc: await erc20Balance(provider, to) };
+  const fBefore = { eth: await provider.getBalance(funder.address), usdc: await erc20Balance(provider, funder.address) };
 
   let ethTx: string | null = null;
   if (before.eth < GAS_BUDGET_WEI) {
-    const tx = await funder.sendTransaction({ to, value: GAS_FUNDING_WEI - before.eth });
-    const r = await tx.wait(1);
-    ethTx = r!.hash;
-    console.log(`  gas    ${ethers.formatEther(GAS_FUNDING_WEI - before.eth)} ETH → ${ethTx}`);
+    ethTx = await giveGas(provider, funder, to, GAS_FUNDING_WEI - before.eth);
+    console.log(`  gas    ${ethers.formatEther(GAS_FUNDING_WEI - before.eth)} ETH → ${ethTx ?? 'anvil_setBalance (no transaction)'}`);
   } else console.log('  gas already present');
 
   let usdcTx: string | null = null;
   if (before.usdc < DEPOSIT_AMOUNT) {
-    const tx = await erc20.transfer(to, DEPOSIT_AMOUNT - before.usdc);
-    const r = await tx.wait(1);
-    usdcTx = r!.hash;
-    console.log(`  usdc   ${ethers.formatUnits(DEPOSIT_AMOUNT - before.usdc, 6)} USDC → ${usdcTx}`);
-  } else console.log('  usdc already present');
+    usdcTx = await giveErc20(provider, funder, to, DEPOSIT_AMOUNT - before.usdc);
+    console.log(`  token  ${ethers.formatUnits(DEPOSIT_AMOUNT - before.usdc, 6)} → ${usdcTx}`);
+  } else console.log('  the token is already present');
 
-  const after = { eth: await provider.getBalance(to), usdc: await usdcBalance(provider, to) };
-  const fAfter = { eth: await provider.getBalance(funder.address), usdc: await usdcBalance(provider, funder.address) };
+  const after = { eth: await provider.getBalance(to), usdc: await erc20Balance(provider, to) };
+  const fAfter = { eth: await provider.getBalance(funder.address), usdc: await erc20Balance(provider, funder.address) };
   check(after.usdc >= DEPOSIT_AMOUNT, 'the deposit address holds the USDC to be swept');
   check(after.eth >= GAS_BUDGET_WEI, 'the deposit address holds the gas one ERC20 transfer needs');
   provider.destroy();
 
   evidence('s3-deposit', {
-    phase: 'S3', network: 'stagenet + sepolia',
+    phase: 'S3', network: `${NETWORK_LABEL} + ${EVM_CHAIN_LABEL}`,
     depositEvmAddress: to,
     fundingCap: {
       note: "the owner's liveness cap: 1 USDC and gas for exactly one ERC20 transfer, until the MPC has answered us once",
@@ -671,14 +955,14 @@ async function s3Start(retry = false): Promise<void> {
   step(retry
     ? 'S3.3 (retry)  another bridge_deposit_start_with_evm against the same funded address'
     : 'S3.3  Midnight tx 1: bridge_deposit_start_with_evm (account → vault → singleton)');
-  const w = await wallet('STAGENET_WALLET_SEED', 'wallet 1');
+  const w = await wallet(WALLET1_SEED_VAR, 'wallet 1');
   const providers = await createProviders(w);
   const { bridge, device } = await connectAccount(s, providers);
   const depositAddress = bridge.depositAddress();
 
-  const { provider } = sepolia();
+  const { provider } = evmChain();
   const nonce = BigInt(await provider.getTransactionCount(depositAddress, 'latest'));
-  const vaultUsdcBefore = await usdcBalance(provider, s.vault!.vaultEvmAddress);
+  const vaultUsdcBefore = await erc20Balance(provider, s.vault!.vaultEvmAddress);
   provider.destroy();
   console.log(`  deposit address ${depositAddress}, its Ethereum nonce ${nonce}`);
 
@@ -726,10 +1010,10 @@ async function s3RootRetry(): Promise<void> {
   const s = loadState();
   if (!s.vault || !s.account) throw new Error('run s1 and s2 first');
   step('S3.3 (attempt 3, ROOT POSITION)  wallet 1 calls vault.startDeposit directly');
-  const w = await wallet('STAGENET_WALLET_SEED', 'wallet 1');
+  const w = await wallet(WALLET1_SEED_VAR, 'wallet 1');
   const vault = await connectWitnessFree(w, 'Erc20Vault', VaultModule, s.vault.address);
 
-  const { provider } = sepolia();
+  const { provider } = evmChain();
   const depositAddress = depositAddressOf(s);
   const nonce = BigInt(await provider.getTransactionCount(depositAddress, 'latest'));
   provider.destroy();
@@ -740,7 +1024,7 @@ async function s3RootRetry(): Promise<void> {
   const t0 = Date.now();
   const r = await vault.call('startDeposit',
     nonce, EVM_GAS.gasLimit, EVM_GAS.maxFeePerGas, EVM_GAS.maxPriorityFeePerGas,
-    EVM_GAS.keyVersion, hexToBytes(strip(USDC)), DEPOSIT_AMOUNT,
+    EVM_GAS.keyVersion, hexToBytes(strip(erc20Address())), DEPOSIT_AMOUNT,
     contractRecipient(hexToBytes(strip(s.account.address))));
   const seconds = ((Date.now() - t0) / 1000).toFixed(1);
   const after = [...toRequestIds(await vault.ledgerState())];
@@ -773,7 +1057,7 @@ async function relay(kind: 'deposit' | 'withdraw'): Promise<void> {
   const slot = kind === 'deposit' ? s.deposit : s.withdraw;
   if (!slot?.requestId) throw new Error(`no open ${kind} request in the state file`);
   step(`S${kind === 'deposit' ? '3.4' : '7.3'}  the relayer loop: the MPC signs, we broadcast, the MPC attests`);
-  const w = await wallet('STAGENET_WALLET_SEED', 'wallet 1');
+  const w = await wallet(WALLET1_SEED_VAR, 'wallet 1');
   const providers = await createProviders(w);
   const { bridge } = await connectAccount(s, providers);
   const expectedSigner = kind === 'deposit' ? bridge.depositAddress() : s.vault!.vaultEvmAddress;
@@ -795,7 +1079,7 @@ async function relay(kind: 'deposit' | 'withdraw'): Promise<void> {
       kind: result.kind, evmTxHash: result.evmTxHash ?? null, evmStatus: result.evmStatus ?? null,
       mpcSignedFrom: result.signedTxSender, expectedSigner,
       waitedSeconds: seconds, attestedUtc: nowUtc(),
-      ethereumNetwork: 'Sepolia (chain id 11155111)',
+      ethereumNetwork: `${EVM_CHAIN_LABEL} (chain id ${evmChainId()})`,
     },
   });
 }
@@ -827,13 +1111,13 @@ async function s3Complete(): Promise<void> {
   if (!s.deposit?.relay) throw new Error('run s3-relay first');
   if (s.deposit.settleTxId) { console.log(`already settled: ${s.deposit.settleTxId}`); return; }
   step('S3.5  Midnight tx 2: bridge_deposit_complete (the vault mints, the account claims)');
-  const w = await wallet('STAGENET_WALLET_SEED', 'wallet 1');
+  const w = await wallet(WALLET1_SEED_VAR, 'wallet 1');
   const providers = await createProviders(w);
   const { account, bridge } = await connectAccount(s, providers);
   const relayResult = deserialiseRelay(s.deposit.relay);
 
-  const { provider } = sepolia();
-  const vaultBefore = await usdcBalance(provider, s.vault!.vaultEvmAddress);
+  const { provider } = evmChain();
+  const vaultBefore = await erc20Balance(provider, s.vault!.vaultEvmAddress);
 
   const planned = await bridge.plannedCoin('deposit', s.deposit.requestId!, randomNonce());
   const t0 = Date.now();
@@ -841,12 +1125,12 @@ async function s3Complete(): Promise<void> {
   const seconds = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`  settle tx ${settle.txId} (${seconds}s)`);
 
-  const vaultAfter = await usdcBalance(provider, s.vault!.vaultEvmAddress);
-  const depositAfter = await usdcBalance(provider, bridge.depositAddress());
+  const vaultAfter = await erc20Balance(provider, s.vault!.vaultEvmAddress);
+  const depositAfter = await erc20Balance(provider, bridge.depositAddress());
   provider.destroy();
 
   const l: any = await account.ledgerState();
-  const colour = vaultColour(s.vault!.address, USDC);
+  const colour = vaultColour(s.vault!.address, erc20Address());
   const ok1 = check(settle.coin !== null, 'the settle claimed a coin');
   const ok2 = check(settle.entryMatchesCoin, 'the coin the circuit returned is the coin the inbox entry describes');
   const ok3 = check(vaultAfter - vaultBefore === DEPOSIT_AMOUNT || vaultAfter >= DEPOSIT_AMOUNT,
@@ -888,10 +1172,10 @@ async function s3Complete(): Promise<void> {
 async function s4(): Promise<void> {
   const s = loadState();
   step('S4  spend part of the bridged coin to wallet 1, then the free negatives');
-  const w = await wallet('STAGENET_WALLET_SEED', 'wallet 1');
+  const w = await wallet(WALLET1_SEED_VAR, 'wallet 1');
   const providers = await createProviders(w);
   const { account, bridge, device } = await connectAccount(s, providers);
-  const colour = vaultColour(s.vault!.address, USDC);
+  const colour = vaultColour(s.vault!.address, erc20Address());
   const walletState: any = await Rx.firstValueFrom(w.wallet.state());
   const payee = coinPublicKeyBytes(walletState);
 
@@ -939,7 +1223,7 @@ async function s4(): Promise<void> {
   });
 
   evidence('s4-spend', {
-    phase: 'S4', network: 'stagenet',
+    phase: 'S4', network: NETWORK_LABEL,
     spendTxId: spend.txId, spendSeconds: seconds,
     spentValue: String(SPEND_AMOUNT), spentTo: 'wallet 1 (shielded coin public key)',
     walletCoinPublicKey: bytesToHex(payee),
@@ -960,7 +1244,7 @@ async function s4(): Promise<void> {
 async function s5(): Promise<void> {
   const s = loadState();
   step('S5  Test 3 leg 1: the account pays wallet 2 (a THIRD-PARTY shielded recipient)');
-  const w2 = await wallet('STAGENET_WALLET2_SEED', 'wallet 2');
+  const w2 = await wallet(WALLET2_SEED_VAR, 'wallet 2');
   const state2: any = await Rx.firstValueFrom(w2.wallet.state().pipe(Rx.filter((x: any) => x.isSynced)));
   // `additionalCoinEncPublicKeyMappings` is a ReadonlyMap<CoinPublicKey, EncPublicKey>, and
   // both of those types are STRINGS in ledger-v9 — the hex spelling the wallet provider
@@ -981,10 +1265,10 @@ async function s5(): Promise<void> {
   console.log(`  wallet 2 coin pk ${s.wallet2.coinPublicKey.slice(0, 20)}…  dust ${w2Dust}`);
   await (w2.wallet as any).stop?.().catch?.(() => undefined);
 
-  const w1 = await wallet('STAGENET_WALLET_SEED', 'wallet 1');
+  const w1 = await wallet(WALLET1_SEED_VAR, 'wallet 1');
   const providers = await createProviders(w1);
   const { account, bridge, device } = await connectAccount(s, providers);
-  const colour = vaultColour(s.vault!.address, USDC);
+  const colour = vaultColour(s.vault!.address, erc20Address());
 
   // The third-party path: `withdraw_shielded_with_evm` is the same circuit, but the
   // recipient's ENCRYPTION key has to be mapped explicitly or the coin lands and nobody can
@@ -1008,7 +1292,7 @@ async function s5(): Promise<void> {
   const l: any = await account.ledgerState();
 
   evidence('s5-test3-leg1', {
-    phase: 'S5', network: 'stagenet',
+    phase: 'S5', network: NETWORK_LABEL,
     payTxId: pay.txId, paySeconds: seconds,
     amountRaw: String(TEST3_AMOUNT), colour: bytesToHex(colour),
     recipient: { wallet: 'wallet 2', coinPublicKey: s.wallet2.coinPublicKey, encryptionPublicKey: s.wallet2.encryptionPublicKey, dustAtSync: w2Dust },
@@ -1027,9 +1311,9 @@ async function s5(): Promise<void> {
 async function s6(): Promise<void> {
   const s = loadState();
   step('S6  Test 3 leg 2: wallet 2 deposits the coin back into the account');
-  const w2 = await wallet('STAGENET_WALLET2_SEED', 'wallet 2');
+  const w2 = await wallet(WALLET2_SEED_VAR, 'wallet 2');
   const state2: any = await Rx.firstValueFrom(w2.wallet.state().pipe(Rx.filter((x: any) => x.isSynced)));
-  const colour = vaultColour(s.vault!.address, USDC);
+  const colour = vaultColour(s.vault!.address, erc20Address());
   const held = balanceOfColour(state2, colour);
   console.log(`  wallet 2 holds ${held} of the vault colour`);
   const ok0 = check(held >= TEST3_AMOUNT, 'wallet 2 received the coin S5 paid it');
@@ -1065,7 +1349,7 @@ async function s6(): Promise<void> {
   await rememberCoin(s, account, coin, mt.mtIndex, cands);
 
   evidence('s6-test3-leg2', {
-    phase: 'S6', network: 'stagenet',
+    phase: 'S6', network: NETWORK_LABEL,
     depositTxId: dep.txId, depositSeconds: seconds,
     payer: 'wallet 2 (its own DUST, its own shielded coin)',
     amountRaw: String(TEST3_AMOUNT), colour: bytesToHex(colour),
@@ -1096,24 +1380,32 @@ function balanceOfColour(state: any, colour: Uint8Array): bigint {
 // S7 — Test 3 leg 3: bridge back to Sepolia
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Where the withdrawn tokens land. On stagenet this is the owner-named Sepolia address
+ *  (Q15's default, the funder). Locally it is anvil's dev account — the same role, and its
+ *  balance is what the run's final assertion reads. */
+function withdrawDestination(s: State): string {
+  return process.env.PRS_WITHDRAW_DEST
+    ?? (LOCAL ? (s.evm?.deployer ?? new ethers.Wallet(ANVIL_DEV_KEY).address)
+      : '0x484738A67858305Edfc139B194Ed430Fe4D8e56b');
+}
+
 async function s7Gas(): Promise<void> {
   const s = loadState();
   step("S7.1  Sepolia: fund the vault's OWN Ethereum account with withdraw gas");
   const to = s.vault!.vaultEvmAddress;
-  const { provider, funder } = sepolia();
+  const { provider, funder } = evmChain();
   const before = await provider.getBalance(to);
   let txHash: string | null = null;
   if (before < GAS_BUDGET_WEI) {
-    const tx = await funder.sendTransaction({ to, value: GAS_FUNDING_WEI - before });
-    txHash = (await tx.wait(1))!.hash;
-    console.log(`  ${ethers.formatEther(GAS_FUNDING_WEI - before)} ETH → ${txHash}`);
+    txHash = await giveGas(provider, funder, to, GAS_FUNDING_WEI - before);
+    console.log(`  ${ethers.formatEther(GAS_FUNDING_WEI - before)} ETH → ${txHash ?? 'anvil_setBalance (no transaction)'}`);
   } else console.log('  gas already present');
   const after = await provider.getBalance(to);
-  const usdc = await usdcBalance(provider, to);
+  const usdc = await erc20Balance(provider, to);
   check(after >= GAS_BUDGET_WEI, "the vault's Ethereum account can pay for one transfer");
   provider.destroy();
   evidence('s7-withdraw', {
-    phase: 'S7', network: 'stagenet + sepolia',
+    phase: 'S7', network: `${NETWORK_LABEL} + ${EVM_CHAIN_LABEL}`,
     vaultEvmAddress: to,
     gasFundingTx: txHash,
     vaultEvmBalances: { weiBefore: String(before), weiAfter: String(after), usdcRaw: String(usdc) },
@@ -1126,20 +1418,20 @@ async function s7Start(): Promise<void> {
   const s = loadState();
   if (s.withdraw?.startTxId) { console.log(`the withdrawal already started: ${s.withdraw.startTxId}`); return; }
   step('S7.2  Midnight tx 1: bridge_withdraw_start_with_evm (account sends, vault claims, singleton notified)');
-  const destination = process.env.PRS_WITHDRAW_DEST ?? '0x484738A67858305Edfc139B194Ed430Fe4D8e56b';
-  const w = await wallet('STAGENET_WALLET_SEED', 'wallet 1');
+  const destination = withdrawDestination(s);
+  const w = await wallet(WALLET1_SEED_VAR, 'wallet 1');
   const providers = await createProviders(w);
   const { account, bridge, device } = await connectAccount(s, providers);
 
-  const { provider } = sepolia();
+  const { provider } = evmChain();
   const vaultNonce = BigInt(await provider.getTransactionCount(s.vault!.vaultEvmAddress, 'latest'));
-  const destBefore = await usdcBalance(provider, destination);
+  const destBefore = await erc20Balance(provider, destination);
   provider.destroy();
   console.log(`  destination ${destination}; the vault's Ethereum nonce ${vaultNonce}`);
 
   // The candidates of the coin S6 filed: a wrong mt_index is unsatisfiable at proving time,
   // so trying them costs time and nothing else (INV-5).
-  const colour = vaultColour(s.vault!.address, USDC);
+  const colour = vaultColour(s.vault!.address, erc20Address());
   if (!s.coinStore?.coins[bytesToHex(colour)]) {
     throw new Error('the account holds no coin of the vault colour — run s6 first');
   }
@@ -1172,15 +1464,15 @@ async function s7Complete(): Promise<void> {
   const s = loadState();
   if (!s.withdraw?.relay) throw new Error('run s7-relay first');
   step('S7.4  Midnight tx 2: bridge_withdraw_complete');
-  const destination = process.env.PRS_WITHDRAW_DEST ?? '0x484738A67858305Edfc139B194Ed430Fe4D8e56b';
-  const w = await wallet('STAGENET_WALLET_SEED', 'wallet 1');
+  const destination = withdrawDestination(s);
+  const w = await wallet(WALLET1_SEED_VAR, 'wallet 1');
   const providers = await createProviders(w);
   const { account, bridge } = await connectAccount(s, providers);
   const relayResult = deserialiseRelay(s.withdraw.relay);
 
-  const { provider } = sepolia();
-  const destBefore = await usdcBalance(provider, destination);
-  const vaultBefore = await usdcBalance(provider, s.vault!.vaultEvmAddress);
+  const { provider } = evmChain();
+  const destBefore = await erc20Balance(provider, destination);
+  const vaultBefore = await erc20Balance(provider, s.vault!.vaultEvmAddress);
 
   const t0 = Date.now();
   const settle = relayResult.kind === 'never-executed'
@@ -1189,8 +1481,8 @@ async function s7Complete(): Promise<void> {
   const seconds = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`  settle ${settle.txId} (${seconds}s)`);
 
-  const destAfter = await usdcBalance(provider, destination);
-  const vaultAfter = await usdcBalance(provider, s.vault!.vaultEvmAddress);
+  const destAfter = await erc20Balance(provider, destination);
+  const vaultAfter = await erc20Balance(provider, s.vault!.vaultEvmAddress);
   provider.destroy();
   const l: any = await account.ledgerState();
 
@@ -1218,6 +1510,180 @@ async function s7Complete(): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// S8 — closeout: the story, in order, with every hash
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Write `SUMMARY.md` from the evidence files this run produced.
+ *
+ * Generated rather than hand-written on purpose: a summary typed by hand from a terminal
+ * scrollback is where a wrong hash enters the record. Everything below is read back out of
+ * the JSON the steps wrote as they ran.
+ */
+async function s8(): Promise<void> {
+  const s = loadState();
+  step('S8  the closeout summary');
+  const read = (name: string): any => {
+    const f = path.join(EVIDENCE_DIR, `${name}.json`);
+    return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : null;
+  };
+  const l0e = read('l0-stack'); const s1e = read('s1-vault'); const s2e = read('s2-account');
+  const s3e = read('s3-deposit'); const s4e = read('s4-spend'); const s5e = read('s5-test3-leg1');
+  const s6e = read('s6-test3-leg2'); const s7e = read('s7-withdraw');
+  const u = (x: unknown): string => (x === null || x === undefined || x === '' ? '—' : String(x));
+  const tok = (raw: unknown): string => (raw === null || raw === undefined ? '—' : `${ethers.formatUnits(BigInt(String(raw)), 6)} ${l0e?.erc20?.symbol ?? 'USDC'}`);
+
+  const lines: string[] = [];
+  const P = (line = ''): void => { lines.push(line); };
+  P(`# PR-S phase S-L — the complete Test 3 story on a LOCAL stack`);
+  P();
+  P(`Generated by \`src/tests/stagenet-run.ts s8\` from the evidence files beside it, ${nowUtc()}.`);
+  P();
+  P(`**What this is.** The exact PR-S sequence S3 → S7 — bridge deposit into an EVM-only`);
+  P(`account, spend part of the bridged coin, pay a second wallet, that wallet deposits it`);
+  P(`back, bridge the rest out to an Ethereum address — driven by the SAME driver that runs`);
+  P(`on stagenet, under its \`local\` network profile. Stagenet's MPC stopped signing`);
+  P(`(question Q61); this run answers the owner's question about the DESIGN without it.`);
+  P();
+  P(`## The stack`);
+  P();
+  P(`| What | Value |`);
+  P(`|---|---|`);
+  if (l0e) {
+    for (const [k, v] of Object.entries(l0e.images ?? {})) P(`| image: ${k} | \`${u(v)}\` |`);
+    P(`| compose project | \`${u(l0e.composeProject)}\` |`);
+    P(`| EVM chain id | ${u(l0e.evmChainId)} (anvil) |`);
+    P(`| ERC20 | \`${u(l0e.erc20?.address)}\` — ${u(l0e.erc20?.symbol)}, ${u(l0e.erc20?.decimals)} decimals, deployed by this run |`);
+    P(`| EVM funder (anvil dev account #0) | \`${u(l0e.evmFunder)}\` |`);
+    P(`| Signet singleton | \`${u(l0e.signetContractAddress)}\` (deployed by this run) |`);
+    P(`| MPC | ${u(l0e.mpcResponder)} |`);
+    P(`| MPC root public key | \`${u(l0e.mpcRootPublicKey)}\` |`);
+  }
+  P();
+  P(`## S1 — the vault`);
+  P();
+  if (s1e) {
+    P(`| What | Value |`);
+    P(`|---|---|`);
+    P(`| vault contract | \`${u(s1e.vaultContractAddress)}\` |`);
+    P(`| deploy tx | \`${u(s1e.vaultDeployTxId)}\` (${u(s1e.deploySeconds)}s) |`);
+    P(`| \`initialise\` tx | \`${u(s1e.initialiseTxId)}\` (${u(s1e.initialiseSeconds)}s) |`);
+    P(`| the vault's own Ethereum account | \`${u(s1e.vaultEvmAddress)}\` — starts at 0 ETH / 0 tokens |`);
+    P(`| MPC response key | \`${u(s1e.mpcResponseKey)}\` |`);
+    P(`| pinned chain id | ${u(s1e.evmChainId)} |`);
+    P(`| artefact fingerprints | vault \`${u(s1e.artefactFingerprints?.vault).slice(0, 16)}…\`, singleton \`${u(s1e.artefactFingerprints?.signetSigner).slice(0, 16)}…\` |`);
+    P(`| all read-backs green | ${u(s1e.allChecksPassed)} |`);
+  }
+  P();
+  P(`## S2 — one EVM-only account bound to the vault`);
+  P();
+  if (s2e) {
+    P(`| What | Value |`);
+    P(`|---|---|`);
+    P(`| account contract | \`${u(s2e.accountContractAddress)}\` |`);
+    P(`| sealed vault | \`${u(s2e.boundVaultAddress)}\` |`);
+    P(`| device (a fresh throwaway EOA) | \`${u(s2e.deviceAddress)}\` |`);
+    P(`| deploy + activate | ${u(s2e.deploySeconds)}s, waves ${(s2e.waveOne ?? []).length} + ${(s2e.waveTwo ?? []).length}, authority retired |`);
+    P(`| read-back | booted ${u(s2e.readBack?.booted)}, device_count ${u(s2e.readBack?.deviceCount)}, round ${u(s2e.readBack?.round)}, auth_nonce ${u(s2e.readBack?.authNonce)}, inbox_count ${u(s2e.readBack?.inboxCount)} |`);
+    P(`| its deposit address on the EVM chain | \`${u(s2e.depositEvmAddress)}\` |`);
+    P(`| the vault colour of this ERC20 in this account | \`${u(s2e.vaultColour)}\` |`);
+    P(`| all read-backs green | ${u(s2e.allChecksPassed)} |`);
+  }
+  P();
+  P(`## S3 — the deposit round trip: two Midnight transactions and one EVM transaction`);
+  P();
+  if (s3e) {
+    P(`| Step | Value |`);
+    P(`|---|---|`);
+    P(`| 1. deposit address | \`${u(s3e.depositEvmAddress)}\` |`);
+    P(`| 2. funding (token) | \`${u(s3e.fundingSepoliaTxs?.usdc)}\` |`);
+    P(`| 2. funding (gas) | ${s3e.fundingSepoliaTxs?.eth ? `\`${u(s3e.fundingSepoliaTxs.eth)}\`` : '`anvil_setBalance` — no transaction'} |`);
+    P(`| 3. Midnight tx 1 \`bridge_deposit_start_with_evm\` | \`${u(s3e.startTxId)}\` (${u(s3e.startSeconds)}s) |`);
+    P(`| | ${u(s3e.startShape)} |`);
+    P(`| request id | \`${u(s3e.requestId)}\` |`);
+    P(`| 4. the MPC signed as | \`${u(s3e.relay?.mpcSignedFrom)}\` (expected \`${u(s3e.relay?.expectedSigner)}\`) |`);
+    P(`| 4. EVM tx (the ERC20 \`transfer\`) | \`${u(s3e.relay?.evmTxHash)}\` status ${u(s3e.relay?.evmStatus)} |`);
+    P(`| 4. attested | ${u(s3e.relay?.kind)} after ${u(s3e.relay?.waitedSeconds)}s |`);
+    P(`| 5. Midnight tx 2 \`bridge_deposit_complete\` | \`${u(s3e.settleTxId)}\` (${u(s3e.settleSeconds)}s) |`);
+    P(`| coin claimed | ${tok(s3e.claimedValue)} of colour \`${u(s3e.claimedColour).slice(0, 16)}…\`; matches its inbox entry: ${u(s3e.entryMatchesCoin)} |`);
+    P(`| vault's EVM balance | ${tok(s3e.vaultEvmUsdc?.before)} → ${tok(s3e.vaultEvmUsdc?.after)} |`);
+    P(`| deposit address after | ${tok(s3e.depositAddressUsdcAfter)} |`);
+    P(`| 6. inbox walk | ${u(s3e.inboxWalk?.entries)} entr${s3e.inboxWalk?.entries === 1 ? 'y' : 'ies'}, decrypts to ${tok(s3e.inboxWalk?.decryptedValue)} |`);
+    P(`| all checks green | ${u(s3e.allChecksPassed)} |`);
+  }
+  P();
+  P(`## S4 — the bridged coin is ordinary custody: spend part of it`);
+  P();
+  if (s4e) {
+    P(`| What | Value |`);
+    P(`|---|---|`);
+    P(`| spend tx \`withdraw_shielded_with_evm\` | \`${u(s4e.spendTxId)}\` (${u(s4e.spendSeconds)}s) |`);
+    P(`| spent | ${tok(s4e.spentValue)} to ${u(s4e.spentTo)} |`);
+    P(`| change left with the account | ${tok(s4e.changeValue)} |`);
+    P(`| its inbox entry (Q56 change continuity) | \`${u(s4e.changeEntryTxId)}\` |`);
+    for (const [k, v] of Object.entries(s4e.negatives ?? {})) P(`| negative: ${k} | refused — \`${u(v).slice(0, 90)}\` |`);
+    P(`| all checks green | ${u(s4e.allChecksPassed)} |`);
+  }
+  P();
+  P(`## S5 — Test 3 leg 1: the account pays a SECOND wallet`);
+  P();
+  if (s5e) {
+    P(`| What | Value |`);
+    P(`|---|---|`);
+    P(`| pay tx | \`${u(s5e.payTxId)}\` (${u(s5e.paySeconds)}s) |`);
+    P(`| amount | ${tok(s5e.amountRaw)} of colour \`${u(s5e.colour).slice(0, 16)}…\` |`);
+    P(`| recipient | wallet 2, coin pk \`${u(s5e.recipient?.coinPublicKey).slice(0, 24)}…\`, enc pk \`${u(s5e.recipient?.encryptionPublicKey).slice(0, 24)}…\` |`);
+    P(`| mechanism | ${u(s5e.mechanism)} |`);
+    P(`| change back to the account | ${tok(s5e.changeValue)} |`);
+    P(`| all checks green | ${u(s5e.allChecksPassed)} |`);
+  }
+  P();
+  P(`## S6 — Test 3 leg 2: the second wallet deposits it back`);
+  P();
+  if (s6e) {
+    P(`| What | Value |`);
+    P(`|---|---|`);
+    P(`| deposit tx \`deposit_shielded\` | \`${u(s6e.depositTxId)}\` (${u(s6e.depositSeconds)}s) |`);
+    P(`| payer | ${u(s6e.payer)} |`);
+    P(`| amount | ${tok(s6e.amountRaw)} |`);
+    P(`| inbox_count | ${u(s6e.inboxCount?.before)} → ${u(s6e.inboxCount?.after)} |`);
+    P(`| recovered by the account's inbox walk | ${tok(s6e.recoveredByInboxWalk)} |`);
+    if (s6e.displacedFromTheSingleValuedStore) P(`| displaced from the single-valued store | ${tok(s6e.displacedFromTheSingleValuedStore.value)} — ${u(s6e.displacedFromTheSingleValuedStore.note)} |`);
+    P(`| all checks green | ${u(s6e.allChecksPassed)} |`);
+  }
+  P();
+  P(`## S7 — Test 3 leg 3: bridge it back out to an Ethereum address`);
+  P();
+  if (s7e) {
+    P(`| Step | Value |`);
+    P(`|---|---|`);
+    P(`| 1. gas to the vault's own EVM account | ${s7e.gasFundingTx ? `\`${u(s7e.gasFundingTx)}\`` : '`anvil_setBalance` — no transaction'} |`);
+    P(`| 2. Midnight tx 1 \`bridge_withdraw_start_with_evm\` | \`${u(s7e.startTxId)}\` (${u(s7e.startSeconds)}s) |`);
+    P(`| | ${u(s7e.startShape)} |`);
+    P(`| request id | \`${u(s7e.requestId)}\` |`);
+    P(`| destination | \`${u(s7e.destination)}\` |`);
+    P(`| change back to the account | ${tok(s7e.changeValue)} |`);
+    P(`| 3. the MPC signed as | \`${u(s7e.relay?.mpcSignedFrom)}\` (expected \`${u(s7e.relay?.expectedSigner)}\`) |`);
+    P(`| 3. EVM tx | \`${u(s7e.relay?.evmTxHash)}\` status ${u(s7e.relay?.evmStatus)} |`);
+    P(`| 3. attested | ${u(s7e.relay?.kind)} after ${u(s7e.relay?.waitedSeconds)}s |`);
+    P(`| 4. Midnight tx 2 | \`${u(s7e.settleTxId)}\` (${u(s7e.settleSeconds)}s), branch ${u(s7e.branch)} |`);
+    P(`| 5. destination's token balance | ${tok(s7e.destinationUsdc?.before)} → ${tok(s7e.destinationUsdc?.after)} (**+${tok(s7e.destinationUsdc?.delta)}**) |`);
+    P(`| the vault's EVM balance | ${tok(s7e.vaultEvmUsdc?.before)} → ${tok(s7e.vaultEvmUsdc?.after)} |`);
+    P(`| all checks green | ${u(s7e.allChecksPassed)} |`);
+  }
+  P();
+  P(`## Evidence files`);
+  P();
+  for (const f of readdirSync(EVIDENCE_DIR).sort()) P(`- \`${f}\``);
+  P();
+
+  mkdirSync(EVIDENCE_DIR, { recursive: true });
+  writeFileSync(path.join(EVIDENCE_DIR, 'SUMMARY.md'), `${lines.join('\n')}\n`);
+  console.log(`  summary → ${path.join(EVIDENCE_DIR, 'SUMMARY.md')}`);
+  void s;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // status
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1232,14 +1698,14 @@ async function status(): Promise<void> {
     withdraw: s.withdraw ? { requestId: s.withdraw.requestId, startTxId: s.withdraw.startTxId, settleTxId: s.withdraw.settleTxId, relayed: Boolean(s.withdraw.relay) } : null,
   }, null, 2));
   if (s.vault) {
-    const { provider } = sepolia();
+    const { provider } = evmChain();
     console.log('sepolia balances:');
     for (const [label, addr] of [
       ['vault EVM account', s.vault.vaultEvmAddress],
       ...(s.account ? [['deposit address', depositAddressOf(s)] as [string, string]] : []),
-      ['funder', new ethers.Wallet(process.env.SEPOLIA_FUNDER_KEY!).address],
+      ['funder', new ethers.Wallet(LOCAL ? ANVIL_DEV_KEY : process.env.SEPOLIA_FUNDER_KEY!).address],
     ] as [string, string][]) {
-      console.log(`  ${label.padEnd(20)} ${addr}  ${ethers.formatEther(await provider.getBalance(addr))} ETH  ${ethers.formatUnits(await usdcBalance(provider, addr), 6)} USDC`);
+      console.log(`  ${label.padEnd(20)} ${addr}  ${ethers.formatEther(await provider.getBalance(addr))} ETH  ${ethers.formatUnits(await erc20Balance(provider, addr), 6)} USDC`);
     }
     provider.destroy();
   }
@@ -1248,6 +1714,7 @@ async function status(): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const commands: Record<string, () => Promise<void>> = {
+  l0,
   s1, s2,
   's3-fund': s3Fund, 's3-start': () => s3Start(false), 's3-retry': () => s3Start(true),
   's3-root-retry': s3RootRetry,
@@ -1255,6 +1722,7 @@ const commands: Record<string, () => Promise<void>> = {
   s4, s5, s6,
   's7-gas': s7Gas, 's7-start': s7Start,
   's7-relay': () => relay('withdraw'), 's7-complete': s7Complete,
+  s8,
   status,
 };
 
