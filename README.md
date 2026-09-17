@@ -1,3 +1,11 @@
+> **NOTE — experimental fork.** This is `acedward/passport`, an experimental fork of
+> [`midnightntwrk/passport`](https://github.com/midnightntwrk/passport) that adds **EVM browser-wallet
+> support** to the Passport account contract — a MetaMask-style wallet authorises the account through
+> **EIP-712 typed-data signatures** verified in-circuit (the `evm` arm) — together with **open ZSwap offer
+> generation** from the account and a witness-free ERC20 bridge (Sig Network vault) reached by
+> cross-contract call. Everything lives under [`contract/`](contract/); nothing here is proposed upstream.
+> Merged history: [PR #1](https://github.com/acedward/passport/pull/1) (the product),
+> [PR #2](https://github.com/acedward/passport/pull/2) (the stagenet/local test drivers).
 
 # Midnight Passport
 
