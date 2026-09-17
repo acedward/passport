@@ -503,9 +503,9 @@ export class CustodyAccount {
    * to the recipient — they simply cannot SEE it, because nothing in the
    * transaction is encrypted to them. That silent failure is why this exists.
    *
-   * ⚠ Implemented in PR-C/C1 and exercised offline only. The on-node proof of
-   * this path is PR-D's console withdraw (the same mechanism the AA console
-   * already runs against its Manager contract today).
+   * Implemented in PR-C/C1, exercised offline there, and first proven ON NODE by the
+   * local Test 3 rehearsal (sub-plan `00034-sub-s-stagenet-bridge.md`, phase S-L), which
+   * is where the `bind()` defect below was found and fixed.
    */
   async withdrawShieldedToWallet(
     device: AnyDevice,
@@ -536,17 +536,33 @@ export class CustodyAccount {
       privateStateId: this.privateStateId,
       additionalCoinEncPublicKeyMappings: new Map([[keys.coinPublicKey, keys.encryptionPublicKey]]),
     });
+    // prove → balance → submit, in that order and with NOTHING in between.
+    //
+    // An earlier version of this method called `proven.bind()` before balancing, by analogy
+    // with the shapes the swap work builds by hand. That is wrong here and the on-node
+    // rehearsal of Test 3 (sub-plan phase S-L) is what found it: the wallet balances through
+    // `balanceUnboundTransaction`, so a transaction whose intent is already bound is refused
+    // with `Wallet.Transacting: Intent at segment <n> is already bound` — after a successful
+    // proof, which is why the failure reads like an unsatisfiable witness and is not one.
+    // midnight-js's own `submitTxCore` is exactly these three lines; this path differs from
+    // it only in passing `additionalCoinEncPublicKeyMappings`, so it must not differ here.
     const result = await submitWithDustRetry(name, async () => {
       const proven: any = await this.providers.proofProvider.proveTx(built.private.unprovenTx);
-      const bound: any = typeof proven.bind === 'function' ? proven.bind() : proven;
-      const balanced: any = await this.providers.walletProvider.balanceTx(bound);
-      await this.providers.midnightProvider.submitTx(balanced);
-      return balanced;
+      const balanced: any = await this.providers.walletProvider.balanceTx(proven);
+      const submitted: any = await this.providers.midnightProvider.submitTx(balanced);
+      return { balanced, submitted };
     });
     this.advanceCounterOf(device, counter);
     const change = changeOf(built.private) ?? changeOf(built);
+    const balanced: any = result?.balanced;
+    const submitted: unknown = result?.submitted;
     return {
-      txId: String(result?.transactionHash?.()?.toString?.() ?? result?.transactionHash ?? ''),
+      txId: String(
+        (typeof submitted === 'string' ? submitted : (submitted as any)?.txId)
+        ?? balanced?.transactionHash?.()?.toString?.()
+        ?? balanced?.transactionHash
+        ?? '',
+      ),
       change,
     };
   }
