@@ -9,6 +9,7 @@
 // (INV-5).
 
 import WebSocket from 'ws';
+import { NETWORKS } from '../node/wallet.js';
 
 export interface TxPosition {
   startIndex?: number;
@@ -19,10 +20,13 @@ export interface TxPosition {
   error?: string;
 }
 
+// Q68: the fallback used to be a bare localhost literal, so a driver pointed at stagenet
+// without INDEXER_URL looked up commitment-tree positions on a port nothing listened on.
+// Now the network profile decides, the same table the wallet plumbing uses.
 export function indexerUrl(): string {
   return process.env.INDEXER_URL
     ?? process.env.MIDNIGHT_INDEXER_URL
-    ?? 'http://localhost:8088/api/v4/graphql';
+    ?? (NETWORKS[process.env.MIDNIGHT_NETWORK ?? 'local'] ?? NETWORKS.local).indexer;
 }
 
 export async function queryTxPosition(txId: string): Promise<TxPosition> {
