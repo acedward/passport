@@ -49,7 +49,7 @@ https.globalAgent = new https.Agent({ keepAlive: false });
 // Mirrors wallet-sdk-abstractions' NoOpTransactionHistoryStorage: the wallet
 // records tx-history lifecycle transitions through this, but the suites read
 // ledger state and events from the indexer, not from tx history.
-const NoopTxHistoryStorage = {
+export const NoopTxHistoryStorage = {
   gotPending: async () => undefined,
   gotFinalized: async () => undefined,
   gotRejected: async () => undefined,
@@ -64,10 +64,35 @@ globalThis.WebSocket = WebSocket;
 
 const NETWORK = process.env.MIDNIGHT_NETWORK ?? 'local';
 
-const CONFIGS: Record<
-  string,
-  { networkId: string; indexer: string; indexerWS: string; node: string; proofServer: string }
-> = {
+/** One network's endpoints. `node` is given as http(s); the wallet's relay URL
+ *  is the same host as ws(s), which is how the facade is configured below. */
+export interface NetworkConfig {
+  networkId: string;
+  indexer: string;
+  indexerWS: string;
+  node: string;
+  proofServer: string;
+}
+
+/**
+ * The networks this client knows, selected by `MIDNIGHT_NETWORK`.
+ *
+ * `local` is the compose file's published ports — a default, not a promise: a
+ * shared machine cannot assume 8088/9944/6300 are free, so every field is also
+ * overridable per service (see the override block below).
+ *
+ * `stagenet` is the public staging network, the only one on which Sig Network
+ * has published an MPC root key and a singleton address (project 00034, PR-S).
+ * Its endpoints were re-verified read-only on 2026-09-15/16 (indexer answering
+ * at block 480,691; node `2.0.0-d9729c13`, the ledger-9 line these pins target).
+ * There is NO hosted proof server: proving is local, and the default points at
+ * a locally run `midnightntwrk/proof-server` of the tag this fork pins.
+ *
+ * Adding a network here is deliberately cheap, but note what the network id
+ * does: `setNetworkId` decides how addresses are encoded, so a wrong id
+ * produces addresses that look right and reach nobody.
+ */
+export const NETWORKS: Record<string, NetworkConfig> = {
   local: {
     networkId: 'undeployed',
     indexer: 'http://localhost:8088/api/v4/graphql',
@@ -75,13 +100,58 @@ const CONFIGS: Record<
     node: 'http://localhost:9944',
     proofServer: 'http://127.0.0.1:6300',
   },
+  stagenet: {
+    networkId: 'stagenet',
+    indexer: 'https://indexer.stagenet.shielded.tools/api/v4/graphql',
+    indexerWS: 'wss://indexer.stagenet.shielded.tools/api/v4/graphql/ws',
+    node: 'https://rpc.stagenet.shielded.tools',
+    proofServer: 'http://127.0.0.1:6300',
+  },
 };
 
-export const CONFIG = CONFIGS[NETWORK] ?? CONFIGS.local;
+/** Kept for callers written before the map was named. */
+const CONFIGS = NETWORKS;
+
+// Endpoint overrides. The defaults above are the compose file's published
+// ports; a shared machine cannot assume they are free, so every suite also
+// honours an explicit URL per service (INDEXER_URL is the same variable
+// src/wallet/capture.ts already read).
+const base = CONFIGS[NETWORK] ?? CONFIGS.local;
+if (!CONFIGS[NETWORK]) {
+  console.warn(
+    `MIDNIGHT_NETWORK='${NETWORK}' is not one of ${Object.keys(CONFIGS).join(', ')} — `
+    + 'falling back to `local` endpoints; set INDEXER_URL / MIDNIGHT_NODE_URL / '
+    + 'MIDNIGHT_PROOF_SERVER_URL / MIDNIGHT_NETWORK_ID to describe it explicitly',
+  );
+}
+const indexerHttp = process.env.INDEXER_URL ?? process.env.MIDNIGHT_INDEXER_URL ?? base.indexer;
+export const CONFIG: NetworkConfig = {
+  ...base,
+  networkId: process.env.MIDNIGHT_NETWORK_ID ?? base.networkId,
+  indexer: indexerHttp,
+  indexerWS:
+    process.env.INDEXER_WS_URL
+    ?? (process.env.INDEXER_URL || process.env.MIDNIGHT_INDEXER_URL
+      ? `${indexerHttp.replace(/^http/, 'ws')}/ws`
+      : base.indexerWS),
+  node: process.env.MIDNIGHT_NODE_URL ?? base.node,
+  proofServer: process.env.MIDNIGHT_PROOF_SERVER_URL ?? base.proofServer,
+};
 setNetworkId(CONFIG.networkId as any);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const managedPath = path.resolve(__dirname, '..', '..', 'contracts', 'managed');
+/** Where the compiled artefacts (verifier and prover keys) are read from.
+ *
+ *  `MIDNIGHT_MANAGED_PATH` points this at a COPY of `contracts/managed`. The
+ *  reason is not configurability: `npm run compile` deletes and rewrites this
+ *  tree, and an on-node suite looks a prover key up per call, so a recompile
+ *  started while a suite is running kills it mid-run with `ENOENT … .prover` —
+ *  measured, in a clone several lines of work share. Pointing a long run at a
+ *  snapshot makes the artefacts it proves against immutable for its duration.
+ *  Defaults to the in-tree path, so nothing changes for a single developer. */
+export const managedPath = process.env.MIDNIGHT_MANAGED_PATH
+  ? path.resolve(process.env.MIDNIGHT_MANAGED_PATH)
+  : path.resolve(__dirname, '..', '..', 'contracts', 'managed');
 export const zkConfigPath = path.join(managedPath, 'account');
 export const controlZkConfigPath = path.join(managedPath, 'control');
 export const faucetZkConfigPath = path.join(managedPath, 'faucet');

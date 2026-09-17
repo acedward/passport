@@ -1,0 +1,67 @@
+pragma language_version >= 0.26.0;
+
+// @module ByteCodec
+// @description The big-endian 32-byte ABI word encoders every EIP-712 preimage of the `evm` arm is
+//              assembled from.
+//
+// Ported from AA-midnight-evm-experiment-v3 @ 41de69d (`contracts/modules/ByteCodec.compact`),
+// reduced to the three encoders this contract uses. State-free by construction: everything is an
+// `export pure circuit`, so the compiler enforces the claim rather than this comment making it. It
+// is imported with `prefix ByteCodec_` (OZ style) by `Eip712` and re-exported by nobody, so none of
+// these names reaches the compiled artifact's surface and none emits a proving key.
+//
+// FROZEN BYTES: none. Every constant below is a structural zero — a word's zero prefix — not a
+// domain separator.
+//
+// WHY THE DIRECT FORM. Each encoder CONSTRUCTS the big-endian word directly, placing the integer's
+// significant bytes behind a compile-time-constant zero prefix, instead of casting to a full
+// little-endian `Bytes<32>` and reversing it. Same bytes out; the reason is cost. The backend holds
+// a `Bytes<32>` packed and charges only for VARIABLE bytes, so reversing a packed 32-byte word pays
+// for all 32 — roughly 8,500 rows per call — even though 24, 16 or 12 of them are known zero. Every
+// preimage in `Eip712` is assembled from these, so that cost would recur at every site.
+
+module ByteCodec {
+  import CompactStandardLibrary;
+
+  export {
+    uint8Word,
+    uint64Word,
+    uint128Word,
+    addressWord
+  }
+
+  /// A `uint8` enum in a 32-byte word: 31 zero bytes, then the value. Added for the swap circuit's
+  /// `recipientKind`, the one EIP-712 field of this contract that is a small enumeration rather than
+  /// an amount, an address or a hash — a wallet shows `0` (open) or `1` (named) rather than a hash.
+  export pure circuit uint8Word(value: Uint<8>): Bytes<32> {
+    const b = value as Bytes<1>;
+    return Bytes[0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, b[0]];
+  }
+
+  /// `v as Bytes<8>` is LITTLE-endian; EVM words are big-endian, so the bytes are placed in
+  /// reverse behind 24 zero bytes.
+  export pure circuit uint64Word(value: Uint<64>): Bytes<32> {
+    const b = value as Bytes<8>;
+    return Bytes[0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0,
+                 b[7], b[6], b[5], b[4], b[3], b[2], b[1], b[0]];
+  }
+
+  export pure circuit uint128Word(value: Uint<128>): Bytes<32> {
+    const b = value as Bytes<16>;
+    return Bytes[0, 0, 0, 0, 0, 0, 0, 0,
+                 0, 0, 0, 0, 0, 0, 0, 0,
+                 b[15], b[14], b[13], b[12], b[11], b[10], b[9], b[8],
+                 b[7],  b[6],  b[5],  b[4],  b[3],  b[2],  b[1], b[0]];
+  }
+
+  /// A 20-byte EVM address in a 32-byte word: 12 zero bytes, then the address — the layout
+  /// Solidity's ABI encoder produces for an `address`. Already big-endian, so no reversal.
+  export pure circuit addressWord(value: Bytes<20>): Bytes<32> {
+    return slice<32>([...pad(12, ""), ...value], 0) as Bytes<32>;
+  }
+}

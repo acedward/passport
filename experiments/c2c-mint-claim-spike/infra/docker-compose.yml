@@ -1,0 +1,101 @@
+# Gate 0 (project 00034) localnet — node + indexer + proof-server.
+#
+# Derived from experiments/cross-contract-calls/infra/docker-compose{,.macos}.yml
+# (the Passport C2C experiment) with two deliberate changes for this shared host:
+#   * a unique project name, so this stack's containers and volumes never
+#     collide with another agent's;
+#   * every published port comes from an env var with a >= 10000 default, so
+#     the standard 9944/8088/6300 ports stay free for whoever holds them.
+#
+# Bridge networking (the macOS shape) is used on every host: `network_mode:
+# host` does not publish ports on Docker Desktop.
+#
+# Fresh volumes are mandatory: ledger 9 has no 8-to-9 state migration.
+#
+# Run:  docker compose -f infra/docker-compose.yml --env-file infra/.env up -d
+# Down: docker compose -f infra/docker-compose.yml --env-file infra/.env down -v
+
+name: ${COMPOSE_PROJECT_NAME:-gate0-c2c-spike}
+
+services:
+  node:
+    image: '${MIDNIGHT_NODE_IMAGE:-midnightntwrk/midnight-node:2.1.0-2e92c4ae642c}'
+    networks: [midnight]
+    ports:
+      - '${NODE_PORT:-19944}:9944'
+      - '${NODE_P2P_PORT:-19933}:30333'
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    volumes:
+      - node-data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9944/health']
+      interval: 2s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    environment:
+      CFG_PRESET: 'dev'
+      SIDECHAIN_BLOCK_BENEFICIARY: '04bcf7ad3be7a5c790460be82a713af570f22e0f801f6659ab8e84a52be6969e'
+
+  indexer:
+    image: '${MIDNIGHT_INDEXER_IMAGE:-midnightntwrk/indexer-standalone:4.4.0-rc.2}'
+    networks: [midnight]
+    ports:
+      - '${INDEXER_PORT:-18088}:8088'
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - indexer-data:/data
+    environment:
+      RUST_LOG: 'indexer=info,chain_indexer=info,indexer_api=info,info'
+      APP__INFRA__SECRET: '${APP__INFRA__SECRET}'
+      APP__APPLICATION__NETWORK_ID: 'undeployed'
+      # Plaintext ws is intentional: container-to-container on the private
+      # compose bridge network; the localnet node terminates no TLS.
+      APP__INFRA__NODE__URL: 'ws://node:9944' # nosemgrep
+      # indexer >= 4.3 runs a second (SPO) node connection with its own URL;
+      # without this it dials localhost inside the bridge network and exits
+      # once its reconnect budget runs out (~5 min).
+      APP__INFRA__SPO_NODE__URL: 'ws://node:9944' # nosemgrep
+      # Required non-empty since indexer 4.3.x; SPO features are unused on the
+      # localnet, any placeholder is accepted.
+      APP__INFRA__SPO_NODE__BLOCKFROST_ID: 'dummy-not-using-spo'
+    healthcheck:
+      test: ['CMD-SHELL', 'cat /var/run/indexer-standalone/running']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    depends_on:
+      node:
+        condition: service_healthy
+
+  proof-server:
+    image: '${MIDNIGHT_PROOF_IMAGE:-midnightntwrk/proof-server:9.0.0-rc.6}'
+    networks: [midnight]
+    ports:
+      - '${PROOF_PORT:-16300}:6300'
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      disable: true
+    environment:
+      RUST_BACKTRACE: 'full'
+      EXTRA_ARGS: -v
+
+networks:
+  midnight:
+    driver: bridge
+
+volumes:
+  node-data:
+  indexer-data:

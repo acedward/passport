@@ -1,0 +1,140 @@
+{
+  "testId": "PRB-BUDGET",
+  "name": "swap-deploy-budget",
+  "description": "What adding the offer circuit costs a deploy — the measured input to Q35",
+  "verdict": "PASS",
+  "note": "Offline pricing against LedgerParameters.initialParameters(). The offer's verifier key is 3321 bytes on the evm arm and 2313 on jubjub. Compare against PR-A's on-node boundary (Q28): 8 evm operations accepted, 9 refused.",
+  "details": {
+    "ledgerParameters": "LedgerParameters.initialParameters()",
+    "feeBlocksMargin": 100,
+    "sets": [
+      {
+        "label": "ladder (5)",
+        "note": "PR-B's on-node set: deposit, activation, the offer, a shielded spend and an inbox backfill",
+        "ops": 5,
+        "ids": [
+          "deposit_shielded",
+          "activate_initial_device_with_evm",
+          "open_swap_shielded_with_evm",
+          "withdraw_shielded_with_evm",
+          "append_inbox_with_evm"
+        ],
+        "txBytes": 16566,
+        "verifierBytes": 15405,
+        "blockUsage": "16493",
+        "bytesWritten": "19314",
+        "fees": "424359862136489264",
+        "refusal": null
+      },
+      {
+        "label": "offer-capable minimum (4)",
+        "note": "the smallest account that can be funded, activated, make an offer and spend what it gets",
+        "ops": 4,
+        "ids": [
+          "deposit_shielded",
+          "activate_initial_device_with_evm",
+          "open_swap_shielded_with_evm",
+          "withdraw_shielded_with_evm"
+        ],
+        "txBytes": 13172,
+        "verifierBytes": 12084,
+        "blockUsage": "13099",
+        "bytesWritten": "15316",
+        "fees": "337743407687365565",
+        "refusal": null
+      },
+      {
+        "label": "evm 8 + swap (9)",
+        "note": "PR-A's accepted wave-1 set with the offer added — the first question Q35 has to answer",
+        "ops": 9,
+        "ids": [
+          "deposit_unshielded",
+          "deposit_shielded",
+          "activate_initial_device_with_evm",
+          "withdraw_unshielded_with_evm",
+          "append_inbox_with_evm",
+          "withdraw_shielded_with_evm",
+          "withdraw_shielded_to_contract_with_evm",
+          "rotate_enc_key_with_evm",
+          "open_swap_shielded_with_evm"
+        ],
+        "txBytes": 28152,
+        "verifierBytes": 26721,
+        "blockUsage": "28079",
+        "bytesWritten": "31825",
+        "fees": "699722086819223895",
+        "refusal": null
+      },
+      {
+        "label": "evm, all 11 in one wave",
+        "note": "every evm operation including the offer; PR-A measured the node refusing this set at 9 ops",
+        "ops": 11,
+        "ids": [
+          "deposit_unshielded",
+          "deposit_shielded",
+          "activate_initial_device_with_evm",
+          "withdraw_unshielded_with_evm",
+          "append_inbox_with_evm",
+          "withdraw_shielded_with_evm",
+          "withdraw_shielded_to_contract_with_evm",
+          "rotate_enc_key_with_evm",
+          "add_device_with_evm",
+          "remove_device_with_evm",
+          "open_swap_shielded_with_evm"
+        ],
+        "txBytes": 34925,
+        "verifierBytes": 33363,
+        "blockUsage": "34853",
+        "bytesWritten": "39309",
+        "fees": "863742000304591221",
+        "refusal": null
+      },
+      {
+        "label": "evm 11, wave two only (3)",
+        "note": "what the maintenance update that retires the authority would carry if wave one keeps 8",
+        "ops": 3,
+        "ids": [
+          "add_device_with_evm",
+          "remove_device_with_evm",
+          "open_swap_shielded_with_evm"
+        ],
+        "txBytes": 10987,
+        "verifierBytes": 9963,
+        "blockUsage": "10914",
+        "bytesWritten": "13018",
+        "fees": "286911085275951125",
+        "refusal": null
+      },
+      {
+        "label": "jubjub, all 11",
+        "note": "the normative arm with the offer, for comparison — its keys are 2,313 bytes, not 3,321",
+        "ops": 11,
+        "ids": [
+          "deposit_unshielded",
+          "deposit_shielded",
+          "activate_initial_device_with_jubjub",
+          "withdraw_unshielded_with_jubjub",
+          "append_inbox_with_jubjub",
+          "withdraw_shielded_with_jubjub",
+          "withdraw_shielded_to_contract_with_jubjub",
+          "rotate_enc_key_with_jubjub",
+          "add_device_with_jubjub",
+          "remove_device_with_jubjub",
+          "open_swap_shielded_with_jubjub"
+        ],
+        "txBytes": 25900,
+        "verifierBytes": 24291,
+        "blockUsage": "25827",
+        "bytesWritten": "30775",
+        "fees": "670894615236342119",
+        "refusal": null
+      }
+    ]
+  },
+  "ranAt": "2026-09-16T06:17:34.920Z",
+  "stack": {
+    "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
+    "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",
+    "proofServer": "midnightntwrk/proof-server:9.0.0-rc.6"
+  }
+}

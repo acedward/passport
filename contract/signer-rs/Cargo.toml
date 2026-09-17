@@ -3,7 +3,7 @@ name = "account-custody-signer"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "Independent Rust signer for the account authorisation seam, both arms: JubJub Schnorr (MIP-0013) and ECDSA-secp256k1 (conformance test 7). No Midnight TypeScript, WASM, or npm dependency."
+description = "Independent Rust signer for the account authorisation seam, all three arms: JubJub Schnorr (MIP-0013), ECDSA-secp256k1, and EIP-712 over secp256k1 for the evm arm (conformance test 7). No Midnight TypeScript, WASM, or npm dependency."
 
 [dependencies]
 # Midnight ledger crates — used ONLY for the field-aligned binary encoding
@@ -18,8 +18,14 @@ midnight-curves = "0.2.0"
 ff = "0.13"
 group = "0.13"
 
-# Curve arithmetic and ECDSA, arm k256 (secp256k1, RustCrypto).
+# Curve arithmetic and ECDSA, arms k256 and evm (secp256k1, RustCrypto).
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+
+# keccak-256, arm evm only: the EIP-712 domain separator, struct hashes and
+# digest, and the Ethereum address derivation. Nothing else in this binary
+# hashes with keccak, and nothing the other two arms do depends on it.
+sha3 = "0.10"
+
 
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }

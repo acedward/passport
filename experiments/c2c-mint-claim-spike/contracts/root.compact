@@ -1,0 +1,165 @@
+pragma language_version 0.26;
+
+// Root — the ROOT of the Gate 0 chain (project 00034, spec FR-023).
+//
+// Stands in for the Passport account contract. Two shapes are probed:
+//
+//   G0   forward(...)               root -> Mid.request -> SignetSigner.signBidirectional
+//                                   Three contract calls, one transaction, DEPTH 2 —
+//                                   the chain the vault bridge assumes and that no probe
+//                                   in either repository had exercised.
+//        forward_to(target, ...)    the same call with the callee supplied as a
+//                                   contract-typed ARGUMENT, so the negative control can
+//                                   aim it at this contract itself (A -> A) and make the
+//                                   client re-entrancy guard fire.
+//
+//   G1b  fund_shielded(...)         in-circuit mint of this contract's own colour to
+//                                   itself, so the probe never touches the node 2.1.0 fee
+//                                   wall on user-funded call+offer transactions.
+//        pay_and_forward(...)       the withdraw shape of spec FR-027: the witness-held
+//                                   coin is sendShielded to Mid's ContractAddress and
+//                                   Mid.take_and_request claims it AND calls the singleton,
+//                                   all in ONE transaction (send + same-transaction claim
+//                                   at depth 2).
+//        pay_and_forward_noclaim    the negative: the same send, but the callee circuit
+//                                   called is Mid.request, which does not claim. The
+//                                   contract-addressed output nobody collects must fail to
+//                                   balance.
+//        spend_to_wallet(...)       change continuity: spend a witness-held coin to a user
+//                                   key in a LATER transaction.
+//
+// Root circuits MAY consume witnesses (Passport P7 closed that question); only callees
+// must be witness-free.
+//
+// Mid is named TWICE in the constructor: as the callable contract reference and as the raw
+// ContractAddress the send targets — the language has no cast between the two.
+//
+// Compile SECOND, after Mid: the declared contract type name `Mid` resolves to
+// contracts/managed/Mid on the compact path.
+
+import CompactStandardLibrary;
+
+contract Mid {
+  circuit request(evmNonce: Uint<64>, keyVersion: Uint<8>): [];
+  circuit take_and_request(coin: ShieldedCoinInfo, evmNonce: Uint<64>, keyVersion: Uint<8>): [];
+}
+
+export ledger mid: Mid;
+export ledger mid_addr: ContractAddress;
+
+export ledger forwards: Counter;
+export ledger shielded_funded: Uint<128>;
+export ledger shielded_spent: Uint<128>;
+export ledger ops: Counter;
+
+// The wallet-local coin store (MIP-0012 section 6.5): the qualified description of a coin
+// this contract holds enters proof generation as a private input.
+witness held_coin(color: Bytes<32>): QualifiedShieldedCoinInfo;
+
+constructor(m: Mid, m_addr: ContractAddress) {
+  mid = disclose(m);
+  mid_addr = disclose(m_addr);
+  shielded_funded = 0 as Uint<128>;
+  shielded_spent = 0 as Uint<128>;
+}
+
+// ── G0: the depth-2 chain ───────────────────────────────────────────────────
+
+// root -> mid.request -> signetSigner.signBidirectional. One transaction,
+// three contract calls.
+export circuit forward(evmNonce: Uint<64>, keyVersion: Uint<8>): [] {
+  mid.request(disclose(evmNonce), disclose(keyVersion));
+  forwards.increment(1);
+}
+
+// The same chain with the callee passed in. Positive use: target = Mid.
+// Negative use (G0 step 6): target = THIS contract's own address, which the
+// client re-entrancy guard must refuse before anything is proved or submitted.
+export circuit forward_to(target: Mid, evmNonce: Uint<64>, keyVersion: Uint<8>): [] {
+  disclose(target).request(disclose(evmNonce), disclose(keyVersion));
+  forwards.increment(1);
+}
+
+// ── G1b: value out to the callee, claimed there, onward call in the same tx ──
+
+// Mint a shielded coin of this contract's own colour to itself (auto-received per the
+// stdlib; the coin's nonce IS the argument, its colour tokenType(domain, self)).
+export circuit fund_shielded(domain: Bytes<32>, amount: Uint<64>, nonce: Bytes<32>): ShieldedCoinInfo {
+  const coin = mintShieldedToken(
+    disclose(domain),
+    disclose(amount),
+    disclose(nonce),
+    right<ZswapCoinPublicKey, ContractAddress>(kernel.self())
+  );
+  shielded_funded = ((shielded_funded + disclose(amount)) as Uint<128>);
+  ops.increment(1);
+  return coin;
+}
+
+// The headline G1b circuit: send to the callee, the callee claims AND calls onward.
+export circuit pay_and_forward(
+  color: Bytes<32>,
+  amount: Uint<128>,
+  evmNonce: Uint<64>,
+  keyVersion: Uint<8>
+): [ShieldedCoinInfo, Maybe<ShieldedCoinInfo>] {
+  const coin = held_coin(color);
+  const value = disclose(amount);
+  const result = sendShielded(
+    disclose(coin),
+    right<ZswapCoinPublicKey, ContractAddress>(mid_addr),
+    value
+  );
+  mid.take_and_request(disclose(result.sent), disclose(evmNonce), disclose(keyVersion));
+  shielded_spent = ((shielded_spent + value) as Uint<128>);
+  forwards.increment(1);
+  if (disclose(result.change.is_some)) {
+    return [disclose(result.sent), some<ShieldedCoinInfo>(disclose(result.change.value))];
+  }
+  return [disclose(result.sent), none<ShieldedCoinInfo>()];
+}
+
+// Negative control: identical send, but the callee circuit driven is Mid.request, which
+// never claims. The contract-addressed output must then fail to balance.
+export circuit pay_and_forward_noclaim(
+  color: Bytes<32>,
+  amount: Uint<128>,
+  evmNonce: Uint<64>,
+  keyVersion: Uint<8>
+): [ShieldedCoinInfo, Maybe<ShieldedCoinInfo>] {
+  const coin = held_coin(color);
+  const value = disclose(amount);
+  const result = sendShielded(
+    disclose(coin),
+    right<ZswapCoinPublicKey, ContractAddress>(mid_addr),
+    value
+  );
+  mid.request(disclose(evmNonce), disclose(keyVersion));
+  shielded_spent = ((shielded_spent + value) as Uint<128>);
+  forwards.increment(1);
+  if (disclose(result.change.is_some)) {
+    return [disclose(result.sent), some<ShieldedCoinInfo>(disclose(result.change.value))];
+  }
+  return [disclose(result.sent), none<ShieldedCoinInfo>()];
+}
+
+// Change continuity: spend a witness-held coin to a user key in a later transaction.
+export circuit spend_to_wallet(
+  color: Bytes<32>,
+  amount: Uint<128>,
+  recipient: ZswapCoinPublicKey
+): [ShieldedCoinInfo, Maybe<ShieldedCoinInfo>] {
+  const coin = held_coin(color);
+  const value = disclose(amount);
+  const result = sendShielded(
+    disclose(coin),
+    left<ZswapCoinPublicKey, ContractAddress>(disclose(recipient)),
+    value
+  );
+  shielded_spent = ((shielded_spent + value) as Uint<128>);
+  ops.increment(1);
+  if (disclose(result.change.is_some)) {
+    return [disclose(result.sent), some<ShieldedCoinInfo>(disclose(result.change.value))];
+  }
+  return [disclose(result.sent), none<ShieldedCoinInfo>()];
+}

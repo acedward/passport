@@ -1,0 +1,85 @@
+{
+  "testId": "G0N",
+  "name": "cycle-negative",
+  "description": "The cross-contract re-entrancy guard: a self-call A -> A is refused client-side before anything is proved, and a true A -> B -> A cycle is not constructible on this toolchain",
+  "verdict": "PASS",
+  "txHash": "0045f9a1529ac9129334d388d8565402496f7b163ff9d9dee5176fe7c4029dda92",
+  "errorCode": "contract-runtime-error",
+  "note": "The control (Root.forward_to(Mid)) landed as 3 contract call(s) in tx 0045f9a1529ac9129334d388d8565402496f7b163ff9d9dee5176fe7c4029dda92, so the contract-typed argument path works. The self-call Root.forward_to(Root) was refused client-side during local execution with: \"Unexpected error executing scoped transaction '<unnamed>': Error: Contract re-entrancy detected: '3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250' is already executing on the call stack; re-entrant cross-contract calls are not yet supported\". Recognised as the re-entrancy guard: true. No state drift on either contract from the refused call: true. Structural finding: A true A -> B -> A cycle cannot be compiled on compactc 0.34.0: one implementation per declared contract type is resolved statically and the caller embeds an expectedVk fingerprint of the callee verifier key, so the two contracts have no build order. The guard is address-based (compact-runtime 0.19.0 assertNoReentrancy over CircuitContext.activeContracts) and fires for A -> A identically; it is checked BEFORE the implementation-binding check in crossContractCall.",
+  "details": {
+    "midAddress": "8662f18f76b0014ad444854c3d9bd28d0ede771a4169c8868bae67ddf3cce765",
+    "rootAddress": "3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250",
+    "control": {
+      "txId": "0045f9a1529ac9129334d388d8565402496f7b163ff9d9dee5176fe7c4029dda92",
+      "observerSummary": {
+        "status": "SUCCESS",
+        "contractCalls": 3,
+        "entryPoints": [
+          "forward_to",
+          "request",
+          "signBidirectional"
+        ],
+        "addresses": [
+          "3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250",
+          "8662f18f76b0014ad444854c3d9bd28d0ede771a4169c8868bae67ddf3cce765",
+          "ba89b53b963e46f167cf475115d22bc87e912e9072bde83d611f7a609acd5931"
+        ]
+      }
+    },
+    "negativeError": {
+      "name": "Error",
+      "message": "Unexpected error executing scoped transaction '<unnamed>': Error: Contract re-entrancy detected: '3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250' is already executing on the call stack; re-entrant cross-contract calls are not yet supported",
+      "stack": "Error: Unexpected error executing scoped transaction '<unnamed>': Error: Contract re-entrancy detected: '3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250' is already executing on the call stack; re-entrant cross-contract calls are not yet supported\n    at scoped (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/node_modules/@midnight-ntwrk/midnight-js-contracts/src/internal/transaction.ts:246:21)\n    at async callCircuit (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/src/node/setup.ts:99:18)\n    at async <anonymous> (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/src/tests/g0n-cycle-negative.ts:115:17)\n    at async runScenario (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/src/tests/runner.ts:7:5)\n    at async <anonymous> (/Users/edwardalvarado/todo/AA/experiments/00034-passport-evm-account-zswap/experiments/c2c-mint-claim-spike/src/tests/g0n-cycle-negative.ts:50:1)",
+      "causeChain": [
+        {
+          "name": "Error",
+          "tag": null,
+          "message": "Unexpected error executing scoped transaction '<unnamed>': Error: Contract re-entrancy detected: '3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250' is already executing on the call stack; re-entrant cross-contract calls are not yet supported"
+        },
+        {
+          "name": "Error",
+          "tag": null,
+          "message": "Contract re-entrancy detected: '3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250' is already executing on the call stack; re-entrant cross-contract calls are not yet supported"
+        },
+        {
+          "name": "ContractRuntimeError",
+          "tag": "ContractRuntimeError",
+          "message": "Error executing circuit 'forward_to'"
+        },
+        {
+          "name": "CompactError",
+          "tag": null,
+          "message": "Contract re-entrancy detected: '3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250' is already executing on the call stack; re-entrant cross-contract calls are not yet supported"
+        }
+      ]
+    },
+    "negativeErrorClass": {
+      "outcome": "construction-rejected",
+      "errorCode": "contract-runtime-error",
+      "note": "compact-runtime failed during local circuit execution / proof construction; the transaction never reached the node. Not a ledger verdict."
+    },
+    "stateDrift": {
+      "rootForwardsBeforeControl": "1",
+      "rootForwardsAfterControl": "2",
+      "rootForwardsAfterNegative": "2",
+      "midRequestsAfterControl": "2",
+      "midRequestsAfterNegative": "2",
+      "noDriftFromTheRefusedCall": true
+    },
+    "reentrancyErrorText": "Unexpected error executing scoped transaction '<unnamed>': Error: Contract re-entrancy detected: '3b848ee813938e66cdd6b75bd5e98980ef678561fe45b955ea6ae21608b86250' is already executing on the call stack; re-entrant cross-contract calls are not yet supported",
+    "structuralFinding": "A true A -> B -> A cycle cannot be compiled on compactc 0.34.0: one implementation per declared contract type is resolved statically and the caller embeds an expectedVk fingerprint of the callee verifier key, so the two contracts have no build order. The guard is address-based (compact-runtime 0.19.0 assertNoReentrancy over CircuitContext.activeContracts) and fires for A -> A identically; it is checked BEFORE the implementation-binding check in crossContractCall."
+  },
+  "ranAt": "2026-09-16T04:09:14.928Z",
+  "stack": {
+    "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
+    "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",
+    "proofServer": "midnightntwrk/proof-server:9.0.0-rc.6",
+    "compactc": "0.34.0 (--feature-zkir-v3)",
+    "compactRuntime": "0.19.0",
+    "compactJs": "2.5.5-rc.8",
+    "midnightJs": "5.0.0-beta.7",
+    "ledgerV9": "1.0.0-rc.3",
+    "signetModule": "@sig-net/midnight 0.22.0-rc.1",
+    "signetSingleton": "@sig-net/midnight-contract 0.22.0-rc.1 (dist/managed)"
+  }
+}

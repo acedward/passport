@@ -1,0 +1,4 @@
+# the driver's artefacts; the copies that count live under the project evidence root
+out/
+node_modules/
+package-lock.json

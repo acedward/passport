@@ -1,0 +1,98 @@
+{
+  "testId": "PRB-B1",
+  "name": "swap-shapes-offline",
+  "description": "The 00006 offer ladder measured offline: zswap imbalance, inputs/outputs, the ledger effects rules, the inbox, the seam, both arms, the refusal matrix, replay and the deadline",
+  "verdict": "PASS",
+  "note": "Keyless (compact-runtime 0.19.0 only). OFFER-2 leaves +give/−want at segment 0 with one input and two contract-addressed outputs; OFFER-1 leaves only −want with three outputs; the exact spend leaves one. Every refusal leaves the ledger AND the private state byte-identical.",
+  "details": {
+    "offer2Open": {
+      "deltas": {
+        "shielded:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1": "2",
+        "shielded:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2": "-3"
+      },
+      "outputs": [
+        {
+          "colour": "a1a1a1a1a1a1",
+          "value": "4",
+          "toContract": true
+        },
+        {
+          "colour": "b2b2b2b2b2b2",
+          "value": "3",
+          "toContract": true
+        }
+      ],
+      "nullifiers": 1,
+      "spends": 1,
+      "receives": 2,
+      "inboxCount": "2"
+    },
+    "offer1Named": {
+      "deltas": {
+        "shielded:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2": "-7"
+      },
+      "outputs": [
+        {
+          "colour": "a1a1a1a1a1a1",
+          "value": "4",
+          "toContract": false
+        },
+        {
+          "colour": "a1a1a1a1a1a1",
+          "value": "2",
+          "toContract": true
+        },
+        {
+          "colour": "b2b2b2b2b2b2",
+          "value": "7",
+          "toContract": true
+        }
+      ],
+      "spends": 2,
+      "receives": 2,
+      "changeNonceMatchesOracle": true
+    },
+    "exactSpend": {
+      "deltas": {
+        "shielded:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1": "5",
+        "shielded:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2": "-9"
+      },
+      "inboxCount": "1"
+    },
+    "evmArm": {
+      "owner": "76fa9717ca09ae53182496bf0d6f3ce68ff453f1",
+      "digest": "c1f13a832fe45a0113f5b1037c567794b2d5c535f15b2393f3088e94caa55c6f",
+      "structHash": "134505adf5aa8d34d8b29faffe0b4b2638eb8d4a9480c823a7df805ea23f3f3e",
+      "domainSeparator": "02afe435c4ed10d9209b92d8f13aadfc063bf92a29c1d20e2bb1bca0c8c0176e",
+      "typedDataPrimaryType": "OpenSwapShielded",
+      "deltas": {
+        "shielded:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1": "2",
+        "shielded:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2": "-3"
+      }
+    },
+    "refusals": {
+      "equal give and want colours": "failed assert: swap legs must be different colours",
+      "zero give amount": "failed assert: swap must give a positive amount",
+      "zero want amount": "failed assert: swap must want a positive amount",
+      "recipient kind 2 (a contract taker)": "failed assert: swap to a contract taker is not supported",
+      "recipient kind 3 (out of range)": "failed assert: swap recipient kind is invalid",
+      "open offer with a non-zero recipient": "failed assert: open swap recipient must be zero",
+      "named offer with a zero recipient": "failed assert: named swap recipient must be nonzero",
+      "give more than the held coin holds": "failed assert: held coin is smaller than the give amount",
+      "tampered give amount (signed for 2, called with 3)": "range error at account.compact line 1113 char 13: byte vector [131,25,129,53,104,156,124,234,254,159,68,145,80,118,3,214,81,35,47,71,244,213,19,129,8,157,21,245,80,75,117,137] exceeds maximum value 52435875175126190479447740508185965837690552500527637822603658699938581184512 of Field type",
+      "tampered want nonce": "range error at account.compact line 1113 char 13: byte vector [121,193,30,161,135,176,95,74,214,173,206,115,255,165,8,169,242,128,225,212,19,207,28,105,186,177,69,189,99,116,168,233] exceeds maximum value 52435875175126190479447740508185965837690552500527637822603658699938581184512 of Field type",
+      "tampered want entry": "range error at account.compact line 1113 char 13: byte vector [59,207,237,94,190,42,20,177,39,148,154,183,215,179,208,49,150,127,1,13,125,159,18,60,57,239,48,82,127,105,153,158] exceeds maximum value 52435875175126190479447740508185965837690552500527637822603658699938581184512 of Field type",
+      "tampered change entry": "failed assert: invalid signature",
+      "tampered valid_until": "range error at account.compact line 1113 char 13: byte vector [1,205,9,215,179,71,36,236,242,140,205,124,195,95,176,195,225,231,26,106,176,173,96,67,122,28,175,119,185,101,141,129] exceeds maximum value 52435875175126190479447740508185965837690552500527637822603658699938581184512 of Field type",
+      "witness coin of another colour": "failed assert: held coin colour does not match the give colour"
+    },
+    "replayRefusal": "failed assert: unknown device entry",
+    "expiredRefusal": "failed assert: offer authorisation has expired"
+  },
+  "ranAt": "2026-09-16T06:51:23.661Z",
+  "stack": {
+    "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
+    "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",
+    "proofServer": "midnightntwrk/proof-server:9.0.0-rc.6"
+  }
+}

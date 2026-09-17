@@ -1,0 +1,616 @@
+pragma language_version >= 0.26.0;
+
+// @module Eip712
+// @description The EIP-712 codec of the `evm` arm: the frozen domain and per-operation type hashes,
+//              the account's EVM alias, the domain separator, the seven struct hashes and the seven
+//              digests an Ethereum wallet's signature covers.
+//
+// The byte contract these constants belong to is `docs/AUTH-EIP712-PASSPORT-EVM-V1.md`, frozen in
+// phase A1 before this file existed; `src/wallet/eip712.ts` is the client's copy of the same codec
+// and `src/tests/eip712-evm-offline.ts` reproduces the whole vector set with ethers alone. If any
+// of the four ever disagree by a byte, the fixture check fails.
+//
+// Ported from AA-midnight-evm-experiment-v3 @ 41de69d (`contracts/modules/Eip712.compact`), with
+// AA-v3's Manager-shaped payload replaced by Passport's per-operation argument lists, its
+// `deploymentDomain` by this account's `evm_domain_salt`, and its account-id derivation dropped
+// (a Passport account IS a contract, so its address is its id).
+//
+// State-free: every circuit here is a function of its arguments alone, which is why the exported
+// ones are FREE ORACLES on the compiled artifact — a signer, a relayer or an EVM-side verifier
+// obtains the contract's OWN answer instead of reimplementing the codec, and being `pure` they emit
+// no proving key and cost no deploy budget.
+//
+// EIP-712 in one line:
+//
+//     digest = keccak256(0x19 || 0x01 || domainSeparator || structHash)
+//
+// THE DOMAIN SEPARATOR BINDS THE DEPLOYMENT (`evm_domain_separator_for`): the account's ALIAS — the
+// low 20 bytes of keccak256 over its 32-byte Midnight address, which is what gives a Midnight
+// contract an EVM-shaped `verifyingContract` — and the account's `evm_domain_salt`. A signature is
+// therefore useless against another account and against another deployment of this code. THE STRUCT
+// HASH IS PER-OPERATION: each has its own frozen type hash and field list, so a signature
+// authorising a withdrawal cannot be reinterpreted as a device change. That separation is at the
+// HASH level, not merely the field level, which is also what lets a wallet show a distinct,
+// meaningful action name.
+//
+// Byte order: `v as Bytes<N>` is LITTLE-endian here, while EVM hashing wants BIG-endian 32-byte
+// words, so every integer goes through one of `ByteCodec`'s `*Word` encoders.
+//
+// FROZEN BYTES: the ten hashes below. They are defined HERE and nowhere else in the contract;
+// changing any one of them changes what every wallet signs and what every off-chain verifier
+// recomputes, and needs a new byte-contract version.
+
+module Eip712 {
+  import CompactStandardLibrary;
+  import "./ByteCodec" prefix ByteCodec_;
+
+  export {
+    evm_account_alias,
+    evm_domain_separator_for,
+    evm_struct_hash_withdraw_unshielded,
+    evm_struct_hash_withdraw_shielded,
+    evm_struct_hash_withdraw_shielded_to_contract,
+    evm_struct_hash_append_inbox,
+    evm_struct_hash_rotate_enc_key,
+    evm_struct_hash_add_device,
+    evm_struct_hash_remove_device,
+    evm_struct_hash_open_swap_shielded,
+    evm_struct_hash_bridge_deposit_start,
+    evm_struct_hash_bridge_withdraw_start,
+    evm_digest_withdraw_unshielded,
+    evm_digest_withdraw_shielded,
+    evm_digest_withdraw_shielded_to_contract,
+    evm_digest_append_inbox,
+    evm_digest_rotate_enc_key,
+    evm_digest_add_device,
+    evm_digest_remove_device,
+    evm_digest_open_swap_shielded,
+    evm_digest_bridge_deposit_start,
+    evm_digest_bridge_withdraw_start
+  }
+
+  // ── Frozen constants (AUTH-EIP712-PASSPORT-EVM-V1) ────────────────────────────────────────────
+
+  /// keccak256("EIP712Domain(string name,string version,address verifyingContract,bytes32 salt)")
+  /// Identical to AA-v3's: the same type string.
+  pure circuit domain_type_hash(): Bytes<32> {
+    return Bytes[0x36, 0xc2, 0x5d, 0xe3, 0xe5, 0x41, 0xd5, 0xd9,
+                 0x70, 0xf6, 0x6e, 0x42, 0x10, 0xd7, 0x28, 0x72,
+                 0x12, 0x20, 0xff, 0xf5, 0xc0, 0x77, 0xcc, 0x6c,
+                 0xd0, 0x08, 0xb3, 0xa0, 0xc6, 0x2a, 0xda, 0xb7];
+  }
+
+  /// keccak256("Midnight Passport Account")
+  pure circuit domain_name_hash(): Bytes<32> {
+    return Bytes[0x64, 0xd1, 0xc9, 0x23, 0xe5, 0x9d, 0xa2, 0x0d,
+                 0x02, 0xc9, 0x2d, 0xc0, 0xd6, 0xca, 0xa0, 0x86,
+                 0x8c, 0xb5, 0xc8, 0xab, 0x17, 0xee, 0x06, 0x58,
+                 0xaa, 0xfc, 0x5f, 0x0b, 0x72, 0xd5, 0x6c, 0x85];
+  }
+
+  /// keccak256("1"). Identical to AA-v3's: the same version.
+  pure circuit domain_version_hash(): Bytes<32> {
+    return Bytes[0xc8, 0x9e, 0xfd, 0xaa, 0x54, 0xc0, 0xf2, 0x0c,
+                 0x7a, 0xdf, 0x61, 0x28, 0x82, 0xdf, 0x09, 0x50,
+                 0xf5, 0xa9, 0x51, 0x63, 0x7e, 0x03, 0x07, 0xcd,
+                 0xcb, 0x4c, 0x67, 0x2f, 0x29, 0x8b, 0x8b, 0xc6];
+  }
+
+  /// keccak256("WithdrawUnshielded(bytes32 account,address owner,uint64 authNonce,bytes32 color,uint128 amount,bytes32 recipient,bytes32 challenge)")
+  pure circuit type_hash_withdraw_unshielded(): Bytes<32> {
+    return Bytes[0x3a, 0xac, 0xc3, 0x6e, 0x8b, 0x18, 0xcc, 0xfd,
+                 0x9f, 0x41, 0x61, 0x29, 0xbb, 0x89, 0x18, 0xb1,
+                 0x7f, 0x3e, 0xf1, 0xe9, 0x0f, 0x51, 0x83, 0xb5,
+                 0xd5, 0x2f, 0x91, 0xc0, 0xfd, 0xbb, 0x2d, 0xf8];
+  }
+
+  /// keccak256("WithdrawShielded(bytes32 account,address owner,uint64 authNonce,bytes32 color,uint128 amount,bytes32 recipientCoinPublicKey,bytes32 challenge)")
+  pure circuit type_hash_withdraw_shielded(): Bytes<32> {
+    return Bytes[0x7f, 0xc8, 0x13, 0x61, 0x46, 0x96, 0x96, 0xce,
+                 0x1c, 0x85, 0x15, 0x67, 0x3e, 0x5c, 0x2c, 0xaf,
+                 0xa8, 0xc2, 0x58, 0xa1, 0x4a, 0x1f, 0x8a, 0xba,
+                 0x37, 0x37, 0x30, 0xf8, 0x85, 0x34, 0x02, 0xb6];
+  }
+
+  /// keccak256("WithdrawShieldedToContract(bytes32 account,address owner,uint64 authNonce,bytes32 color,uint128 amount,bytes32 recipientContract,bytes32 challenge)")
+  pure circuit type_hash_withdraw_shielded_to_contract(): Bytes<32> {
+    return Bytes[0x68, 0xbd, 0x67, 0xf8, 0xe1, 0xf8, 0x1f, 0xad,
+                 0x3d, 0xc1, 0x2a, 0x5b, 0x0d, 0xdb, 0x47, 0x0f,
+                 0xea, 0xe4, 0xa2, 0xdb, 0x53, 0x8d, 0xe9, 0x04,
+                 0x80, 0x20, 0x4b, 0xea, 0x9e, 0xaf, 0x40, 0x23];
+  }
+
+  /// keccak256("AppendInbox(bytes32 account,address owner,uint64 authNonce,bytes32 entryHash,bytes32 challenge)")
+  pure circuit type_hash_append_inbox(): Bytes<32> {
+    return Bytes[0x3e, 0x6b, 0xc4, 0x42, 0xf4, 0x8f, 0xa4, 0x29,
+                 0xc9, 0x4e, 0xe6, 0x37, 0x0d, 0xa2, 0xf6, 0xb0,
+                 0xd1, 0x07, 0x8d, 0xe1, 0x66, 0xb6, 0x62, 0xb8,
+                 0x0e, 0xf8, 0x77, 0xfc, 0x11, 0xb3, 0xe5, 0x52];
+  }
+
+  /// keccak256("RotateEncKey(bytes32 account,address owner,uint64 authNonce,bytes32 newKey,bytes32 challenge)")
+  pure circuit type_hash_rotate_enc_key(): Bytes<32> {
+    return Bytes[0x5a, 0x2c, 0x31, 0xc1, 0x8a, 0x54, 0xb8, 0x84,
+                 0x94, 0x88, 0xbc, 0xae, 0x5a, 0xf2, 0x29, 0x3b,
+                 0xdc, 0xde, 0x10, 0x18, 0x78, 0xe4, 0xc3, 0x6e,
+                 0x78, 0x3d, 0xaa, 0x60, 0xa1, 0x29, 0x52, 0xa1];
+  }
+
+  /// keccak256("AddDevice(bytes32 account,address owner,uint64 authNonce,bytes32 newEntry,bytes32 challenge)")
+  pure circuit type_hash_add_device(): Bytes<32> {
+    return Bytes[0x8f, 0xcd, 0x6e, 0x27, 0xa8, 0x8f, 0x18, 0x3f,
+                 0xb4, 0xc2, 0xab, 0xfd, 0x19, 0x05, 0xa7, 0x91,
+                 0xdd, 0xb0, 0x45, 0x88, 0xb7, 0x85, 0xe9, 0x73,
+                 0xc4, 0xdb, 0xfc, 0x12, 0xab, 0xb4, 0xd7, 0xe4];
+  }
+
+  /// keccak256("RemoveDevice(bytes32 account,address owner,uint64 authNonce,bytes32 entry,bytes32 challenge)")
+  pure circuit type_hash_remove_device(): Bytes<32> {
+    return Bytes[0xc1, 0x32, 0x90, 0x1a, 0xc5, 0xa7, 0x12, 0xb2,
+                 0xc6, 0x27, 0xc8, 0xe9, 0xeb, 0x6c, 0xd5, 0x87,
+                 0x96, 0x6f, 0xb0, 0x21, 0x4e, 0x7b, 0xe3, 0x6c,
+                 0xc0, 0xe3, 0x63, 0xe3, 0xb0, 0x54, 0x17, 0xd4];
+  }
+
+  /// keccak256("OpenSwapShielded(bytes32 account,address owner,uint64 authNonce,bytes32 giveColor,uint128 giveAmount,uint8 recipientKind,bytes32 recipient,bytes32 wantNonce,bytes32 wantColor,uint128 wantAmount,uint64 validUntil,bytes32 challenge)")
+  ///
+  /// The V1 byte contract's eighth and last type, added by project 00034 PR-B. It is the only one
+  /// that carries a `validUntil` (Q8-B: nonce-only freshness everywhere else, an optional deadline
+  /// here because an offer sits unexecuted until a taker settles it) and the only one with a
+  /// `uint8`. The other seven type strings are UNCHANGED, so every signature and every vector frozen
+  /// in A1 still verifies.
+  pure circuit type_hash_open_swap_shielded(): Bytes<32> {
+    return Bytes[0x34, 0x62, 0x67, 0x93, 0xab, 0xd7, 0xc6, 0x7d,
+                 0x21, 0xe1, 0xa6, 0x1a, 0x99, 0xf1, 0xcf, 0xff,
+                 0x4f, 0x82, 0xae, 0x0e, 0x23, 0x25, 0xa6, 0xba,
+                 0x9d, 0xfd, 0xc4, 0xff, 0x12, 0xd6, 0x68, 0xae];
+  }
+
+  /// keccak256("BridgeDepositStart(bytes32 account,address owner,uint64 authNonce,address erc20,uint128 amount,uint64 evmNonce,uint64 gasLimit,uint128 maxFeePerGas,uint128 maxPriorityFeePerGas,uint8 keyVersion,bytes32 challenge)")
+  ///
+  /// The bridge deposit start (project 00034 PR-G, spec FR-021). Eleven fields: the frame, the
+  /// ERC20 and amount the vault will sweep, and the five parameters of the Ethereum transaction the
+  /// MPC will sign FROM THE USER'S OWN DERIVED DEPOSIT ADDRESS — which is why they are signed
+  /// rather than supplied by the relayer: they spend that address's ETH.
+  pure circuit type_hash_bridge_deposit_start(): Bytes<32> {
+    return Bytes[0x67, 0x37, 0xc6, 0x8b, 0x20, 0xd3, 0xdf, 0x2b,
+                 0x20, 0xb6, 0x65, 0x3c, 0x7b, 0x69, 0x98, 0x36,
+                 0x31, 0xae, 0xe7, 0x20, 0x7f, 0xd8, 0x1e, 0x40,
+                 0x14, 0xbd, 0x26, 0x8b, 0x01, 0x76, 0x25, 0xee];
+  }
+
+  /// keccak256("BridgeWithdrawStart(bytes32 account,address owner,uint64 authNonce,address dest,bytes32 color,uint128 amount,uint64 evmNonce,uint64 gasLimit,uint128 maxFeePerGas,uint128 maxPriorityFeePerGas,uint8 keyVersion,bytes32 challenge)")
+  ///
+  /// The bridge withdraw start (spec FR-027). Twelve fields. `color` is the vault colour being
+  /// surrendered — it IS the asset's identity on this side, and it determines the ERC20 (the colour
+  /// is `tokenType(vaultTokenDomainSeparator(erc20), vault)`), so the ERC20 address itself is bound
+  /// through `challenge` rather than shown twice. The witness coin and the change inbox entry are
+  /// likewise bound through `challenge`: a wallet cannot display either (one is private, the other
+  /// is ciphertext), and AUTH-10 pinning is what makes them unsubstitutable.
+  pure circuit type_hash_bridge_withdraw_start(): Bytes<32> {
+    return Bytes[0x7f, 0xca, 0x5f, 0x3b, 0x9c, 0x61, 0xd7, 0x9b,
+                 0xec, 0xef, 0xf0, 0x9f, 0xb2, 0x10, 0x16, 0x88,
+                 0xa7, 0x42, 0x2e, 0xea, 0xab, 0x25, 0x05, 0xb1,
+                 0x58, 0xb8, 0x07, 0x60, 0xc2, 0x78, 0xb2, 0x60];
+  }
+
+  // ── Domain ───────────────────────────────────────────────────────────────────────────────────
+
+  /// The account's EVM-shaped `verifyingContract`: the low 20 bytes of keccak256 over its 32-byte
+  /// Midnight address. A Midnight contract has no EVM address and a wallet's domain needs one; this
+  /// is a deterministic, collision-resistant alias, and nobody holds its private key on Ethereum.
+  export pure circuit evm_account_alias(account: Bytes<32>): Bytes<20> {
+    return slice<20>(keccak256<Bytes<32>>(account), 12);
+  }
+
+  /// keccak256 over the five domain words. `salt` is the account's `evm_domain_salt`, the
+  /// network/deployment domain fixed at construction — EIP-712's `chainId` has no meaning here, and
+  /// the salt takes its place (the MIP-0008 CAIP-2 style binding MIP-0013 §5.1 recommends).
+  export pure circuit evm_domain_separator_for(account: Bytes<32>, salt: Bytes<32>): Bytes<32> {
+    const preimage: Bytes<160> = slice<160>([
+      ...domain_type_hash(), ...domain_name_hash(), ...domain_version_hash(),
+      ...ByteCodec_addressWord(evm_account_alias(account)), ...salt
+    ], 0) as Bytes<160>;
+    return keccak256<Bytes<160>>(preimage);
+  }
+
+  // ── Struct hashes ────────────────────────────────────────────────────────────────────────────
+  //
+  // Every type has the same frame — account, owner, authNonce, <action fields>, challenge — so the
+  // three withdraw types hash 8 words (256 bytes) and the other four hash 6 (192 bytes). The action
+  // fields are readable so a wallet shows the operation; `challenge` binds the same fields a second
+  // time, together with the witness values the wallet cannot see (AUTH-10).
+
+  /// `WithdrawUnshielded(bytes32 account,address owner,uint64 authNonce,bytes32 color,uint128 amount,bytes32 recipient,bytes32 challenge)`
+  export pure circuit evm_struct_hash_withdraw_unshielded(
+    account:    Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    color:      Bytes<32>,
+    amount:     Uint<128>,
+    recipient:  Bytes<32>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    const preimage: Bytes<256> = slice<256>([
+      ...type_hash_withdraw_unshielded(), ...account, ...ByteCodec_addressWord(owner),
+      ...ByteCodec_uint64Word(auth_nonce_value), ...color, ...ByteCodec_uint128Word(amount),
+      ...recipient, ...challenge
+    ], 0) as Bytes<256>;
+    return keccak256<Bytes<256>>(preimage);
+  }
+
+  /// `WithdrawShielded(bytes32 account,address owner,uint64 authNonce,bytes32 color,uint128 amount,bytes32 recipientCoinPublicKey,bytes32 challenge)`
+  export pure circuit evm_struct_hash_withdraw_shielded(
+    account:    Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    color:      Bytes<32>,
+    amount:     Uint<128>,
+    recipient_coin_public_key: Bytes<32>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    const preimage: Bytes<256> = slice<256>([
+      ...type_hash_withdraw_shielded(), ...account, ...ByteCodec_addressWord(owner),
+      ...ByteCodec_uint64Word(auth_nonce_value), ...color, ...ByteCodec_uint128Word(amount),
+      ...recipient_coin_public_key, ...challenge
+    ], 0) as Bytes<256>;
+    return keccak256<Bytes<256>>(preimage);
+  }
+
+  /// `WithdrawShieldedToContract(bytes32 account,address owner,uint64 authNonce,bytes32 color,uint128 amount,bytes32 recipientContract,bytes32 challenge)`
+  export pure circuit evm_struct_hash_withdraw_shielded_to_contract(
+    account:    Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    color:      Bytes<32>,
+    amount:     Uint<128>,
+    recipient_contract: Bytes<32>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    const preimage: Bytes<256> = slice<256>([
+      ...type_hash_withdraw_shielded_to_contract(), ...account, ...ByteCodec_addressWord(owner),
+      ...ByteCodec_uint64Word(auth_nonce_value), ...color, ...ByteCodec_uint128Word(amount),
+      ...recipient_contract, ...challenge
+    ], 0) as Bytes<256>;
+    return keccak256<Bytes<256>>(preimage);
+  }
+
+  /// `AppendInbox(bytes32 account,address owner,uint64 authNonce,bytes32 entryHash,bytes32 challenge)`
+  /// `entry_hash` is keccak256 of the 192-byte InboxEntry v1 container: the entry is ciphertext, so
+  /// nothing readable is lost by hashing it, and every field stays one word. The challenge binds all
+  /// 192 bytes, so the entry behind the hash cannot be substituted.
+  export pure circuit evm_struct_hash_append_inbox(
+    account:    Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    entry_hash: Bytes<32>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    const preimage: Bytes<192> = slice<192>([
+      ...type_hash_append_inbox(), ...account, ...ByteCodec_addressWord(owner),
+      ...ByteCodec_uint64Word(auth_nonce_value), ...entry_hash, ...challenge
+    ], 0) as Bytes<192>;
+    return keccak256<Bytes<192>>(preimage);
+  }
+
+  /// `RotateEncKey(bytes32 account,address owner,uint64 authNonce,bytes32 newKey,bytes32 challenge)`
+  export pure circuit evm_struct_hash_rotate_enc_key(
+    account:    Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    new_key:    Bytes<32>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    const preimage: Bytes<192> = slice<192>([
+      ...type_hash_rotate_enc_key(), ...account, ...ByteCodec_addressWord(owner),
+      ...ByteCodec_uint64Word(auth_nonce_value), ...new_key, ...challenge
+    ], 0) as Bytes<192>;
+    return keccak256<Bytes<192>>(preimage);
+  }
+
+  /// `AddDevice(bytes32 account,address owner,uint64 authNonce,bytes32 newEntry,bytes32 challenge)`
+  export pure circuit evm_struct_hash_add_device(
+    account:    Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    new_entry:  Bytes<32>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    const preimage: Bytes<192> = slice<192>([
+      ...type_hash_add_device(), ...account, ...ByteCodec_addressWord(owner),
+      ...ByteCodec_uint64Word(auth_nonce_value), ...new_entry, ...challenge
+    ], 0) as Bytes<192>;
+    return keccak256<Bytes<192>>(preimage);
+  }
+
+  /// `RemoveDevice(bytes32 account,address owner,uint64 authNonce,bytes32 entry,bytes32 challenge)`
+  export pure circuit evm_struct_hash_remove_device(
+    account:    Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    entry:      Bytes<32>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    const preimage: Bytes<192> = slice<192>([
+      ...type_hash_remove_device(), ...account, ...ByteCodec_addressWord(owner),
+      ...ByteCodec_uint64Word(auth_nonce_value), ...entry, ...challenge
+    ], 0) as Bytes<192>;
+    return keccak256<Bytes<192>>(preimage);
+  }
+
+  /// `OpenSwapShielded(bytes32 account,address owner,uint64 authNonce,bytes32 giveColor,uint128 giveAmount,uint8 recipientKind,bytes32 recipient,bytes32 wantNonce,bytes32 wantColor,uint128 wantAmount,uint64 validUntil,bytes32 challenge)`
+  ///
+  /// TWELVE fields — a 416-byte preimage, the largest in this codec — because an offer is the one
+  /// operation whose terms a counterparty reads and a wallet must therefore show in full: what
+  /// leaves (`giveColor`, `giveAmount`), where it goes (`recipientKind` 0 = open / 1 = a named coin
+  /// public key; `recipient`), what must arrive (`wantNonce`, `wantColor`, `wantAmount`) and until
+  /// when the authorisation is live (`validUntil`, 0 = no deadline).
+  ///
+  /// The two 192-byte inbox entries are NOT here. They are ciphertext — nothing readable is lost —
+  /// and adding them as `keccak` words would cost two more words plus two keccak calls for a value a
+  /// wallet cannot interpret; the challenge below binds all 384 bytes of them, exactly as it binds
+  /// the witness coin the wallet cannot see either.
+  export pure circuit evm_struct_hash_open_swap_shielded(
+    account:    Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    give_color: Bytes<32>,
+    give_amount: Uint<128>,
+    recipient_kind: Uint<8>,
+    recipient:  Bytes<32>,
+    want_nonce: Bytes<32>,
+    want_color: Bytes<32>,
+    want_amount: Uint<128>,
+    valid_until: Uint<64>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    const preimage: Bytes<416> = slice<416>([
+      ...type_hash_open_swap_shielded(), ...account, ...ByteCodec_addressWord(owner),
+      ...ByteCodec_uint64Word(auth_nonce_value), ...give_color,
+      ...ByteCodec_uint128Word(give_amount), ...ByteCodec_uint8Word(recipient_kind),
+      ...recipient, ...want_nonce, ...want_color, ...ByteCodec_uint128Word(want_amount),
+      ...ByteCodec_uint64Word(valid_until), ...challenge
+    ], 0) as Bytes<416>;
+    return keccak256<Bytes<416>>(preimage);
+  }
+
+  /// `BridgeDepositStart(bytes32 account,address owner,uint64 authNonce,address erc20,uint128 amount,uint64 evmNonce,uint64 gasLimit,uint128 maxFeePerGas,uint128 maxPriorityFeePerGas,uint8 keyVersion,bytes32 challenge)`
+  ///
+  /// Twelve words, 384 bytes — three keccak permutations rather than the two the six- and
+  /// eight-word types pay (the sponge absorbs 136 bytes at a time).
+  ///
+  /// `key_version` is a `uint8` in the type string and uses `ByteCodec_uint8Word`, which PR-B added
+  /// for the swap circuit's `recipientKind`. EIP-712 gives every unsigned integer one big-endian
+  /// 32-byte word whatever its declared width, so this is the same 32 bytes the uint64 encoder would
+  /// produce — with one variable byte instead of eight for the backend to charge for.
+  export pure circuit evm_struct_hash_bridge_deposit_start(
+    account:    Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    erc20:      Bytes<20>,
+    amount:     Uint<128>,
+    evm_nonce:  Uint<64>,
+    gas_limit:  Uint<64>,
+    max_fee:    Uint<128>,
+    max_priority_fee: Uint<128>,
+    key_version: Uint<8>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    const preimage: Bytes<384> = slice<384>([
+      ...type_hash_bridge_deposit_start(), ...account, ...ByteCodec_addressWord(owner),
+      ...ByteCodec_uint64Word(auth_nonce_value), ...ByteCodec_addressWord(erc20),
+      ...ByteCodec_uint128Word(amount), ...ByteCodec_uint64Word(evm_nonce),
+      ...ByteCodec_uint64Word(gas_limit), ...ByteCodec_uint128Word(max_fee),
+      ...ByteCodec_uint128Word(max_priority_fee), ...ByteCodec_uint8Word(key_version),
+      ...challenge
+    ], 0) as Bytes<384>;
+    return keccak256<Bytes<384>>(preimage);
+  }
+
+  /// `BridgeWithdrawStart(bytes32 account,address owner,uint64 authNonce,address dest,bytes32 color,uint128 amount,uint64 evmNonce,uint64 gasLimit,uint128 maxFeePerGas,uint128 maxPriorityFeePerGas,uint8 keyVersion,bytes32 challenge)`
+  ///
+  /// Thirteen words, 416 bytes — four keccak permutations. `dest` is the Ethereum address the ERC20
+  /// leaves to, and it is the one field a user must read carefully: it is the only one the account
+  /// cannot recover from if it is wrong.
+  export pure circuit evm_struct_hash_bridge_withdraw_start(
+    account:    Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    dest:       Bytes<20>,
+    color:      Bytes<32>,
+    amount:     Uint<128>,
+    evm_nonce:  Uint<64>,
+    gas_limit:  Uint<64>,
+    max_fee:    Uint<128>,
+    max_priority_fee: Uint<128>,
+    key_version: Uint<8>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    const preimage: Bytes<416> = slice<416>([
+      ...type_hash_bridge_withdraw_start(), ...account, ...ByteCodec_addressWord(owner),
+      ...ByteCodec_uint64Word(auth_nonce_value), ...ByteCodec_addressWord(dest), ...color,
+      ...ByteCodec_uint128Word(amount), ...ByteCodec_uint64Word(evm_nonce),
+      ...ByteCodec_uint64Word(gas_limit), ...ByteCodec_uint128Word(max_fee),
+      ...ByteCodec_uint128Word(max_priority_fee), ...ByteCodec_uint8Word(key_version),
+      ...challenge
+    ], 0) as Bytes<416>;
+    return keccak256<Bytes<416>>(preimage);
+  }
+
+  // ── Digests ──────────────────────────────────────────────────────────────────────────────────
+
+  pure circuit eip712_digest(separator: Bytes<32>, struct_hash: Bytes<32>): Bytes<32> {
+    const preimage: Bytes<66> = slice<66>([0x19, 0x01, ...separator, ...struct_hash], 0) as Bytes<66>;
+    return keccak256<Bytes<66>>(preimage);
+  }
+
+  export pure circuit evm_digest_withdraw_unshielded(
+    account:    Bytes<32>,
+    salt:       Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    color:      Bytes<32>,
+    amount:     Uint<128>,
+    recipient:  Bytes<32>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    return eip712_digest(
+      evm_domain_separator_for(account, salt),
+      evm_struct_hash_withdraw_unshielded(account, owner, auth_nonce_value, color, amount, recipient, challenge)
+    );
+  }
+
+  export pure circuit evm_digest_withdraw_shielded(
+    account:    Bytes<32>,
+    salt:       Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    color:      Bytes<32>,
+    amount:     Uint<128>,
+    recipient_coin_public_key: Bytes<32>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    return eip712_digest(
+      evm_domain_separator_for(account, salt),
+      evm_struct_hash_withdraw_shielded(account, owner, auth_nonce_value, color, amount, recipient_coin_public_key, challenge)
+    );
+  }
+
+  export pure circuit evm_digest_withdraw_shielded_to_contract(
+    account:    Bytes<32>,
+    salt:       Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    color:      Bytes<32>,
+    amount:     Uint<128>,
+    recipient_contract: Bytes<32>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    return eip712_digest(
+      evm_domain_separator_for(account, salt),
+      evm_struct_hash_withdraw_shielded_to_contract(account, owner, auth_nonce_value, color, amount, recipient_contract, challenge)
+    );
+  }
+
+  export pure circuit evm_digest_append_inbox(
+    account:    Bytes<32>,
+    salt:       Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    entry_hash: Bytes<32>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    return eip712_digest(
+      evm_domain_separator_for(account, salt),
+      evm_struct_hash_append_inbox(account, owner, auth_nonce_value, entry_hash, challenge)
+    );
+  }
+
+  export pure circuit evm_digest_rotate_enc_key(
+    account:    Bytes<32>,
+    salt:       Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    new_key:    Bytes<32>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    return eip712_digest(
+      evm_domain_separator_for(account, salt),
+      evm_struct_hash_rotate_enc_key(account, owner, auth_nonce_value, new_key, challenge)
+    );
+  }
+
+  export pure circuit evm_digest_add_device(
+    account:    Bytes<32>,
+    salt:       Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    new_entry:  Bytes<32>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    return eip712_digest(
+      evm_domain_separator_for(account, salt),
+      evm_struct_hash_add_device(account, owner, auth_nonce_value, new_entry, challenge)
+    );
+  }
+
+  export pure circuit evm_digest_open_swap_shielded(
+    account:    Bytes<32>,
+    salt:       Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    give_color: Bytes<32>,
+    give_amount: Uint<128>,
+    recipient_kind: Uint<8>,
+    recipient:  Bytes<32>,
+    want_nonce: Bytes<32>,
+    want_color: Bytes<32>,
+    want_amount: Uint<128>,
+    valid_until: Uint<64>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    return eip712_digest(
+      evm_domain_separator_for(account, salt),
+      evm_struct_hash_open_swap_shielded(
+        account, owner, auth_nonce_value, give_color, give_amount, recipient_kind, recipient,
+        want_nonce, want_color, want_amount, valid_until, challenge)
+    );
+  }
+
+  export pure circuit evm_digest_remove_device(
+    account:    Bytes<32>,
+    salt:       Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    entry:      Bytes<32>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    return eip712_digest(
+      evm_domain_separator_for(account, salt),
+      evm_struct_hash_remove_device(account, owner, auth_nonce_value, entry, challenge)
+    );
+  }
+
+  export pure circuit evm_digest_bridge_deposit_start(
+    account:    Bytes<32>,
+    salt:       Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    erc20:      Bytes<20>,
+    amount:     Uint<128>,
+    evm_nonce:  Uint<64>,
+    gas_limit:  Uint<64>,
+    max_fee:    Uint<128>,
+    max_priority_fee: Uint<128>,
+    key_version: Uint<8>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    return eip712_digest(
+      evm_domain_separator_for(account, salt),
+      evm_struct_hash_bridge_deposit_start(account, owner, auth_nonce_value, erc20, amount,
+        evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, challenge)
+    );
+  }
+
+  export pure circuit evm_digest_bridge_withdraw_start(
+    account:    Bytes<32>,
+    salt:       Bytes<32>,
+    owner:      Bytes<20>,
+    auth_nonce_value: Uint<64>,
+    dest:       Bytes<20>,
+    color:      Bytes<32>,
+    amount:     Uint<128>,
+    evm_nonce:  Uint<64>,
+    gas_limit:  Uint<64>,
+    max_fee:    Uint<128>,
+    max_priority_fee: Uint<128>,
+    key_version: Uint<8>,
+    challenge:  Bytes<32>,
+  ): Bytes<32> {
+    return eip712_digest(
+      evm_domain_separator_for(account, salt),
+      evm_struct_hash_bridge_withdraw_start(account, owner, auth_nonce_value, dest, color, amount,
+        evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, challenge)
+    );
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "testId": "G0O",
+  "name": "offline-exec",
+  "description": "Offline pre-flight: compact-runtime 0.19.0 executes every Gate 0 call tree (depth-2 chain, mint-in-callee claimed by the root, the withdraw shape) and the re-entrancy guard, with no network and no proving",
+  "verdict": "PASS",
+  "note": "DEPTH 2 executes at runtime level: [signBidirectional@signet(present), request@mid(present), forward@root(absent)] — one trace entry per source-level call, communication commitments on the sub-calls only, the root bare. The self-call was refused: \"Contract re-entrancy detected: '25788efa19a4aef5b8660fb38d1e7954987dc3664c8f8b56dd8fbd20a5882789' is already executing on the call stack; re-entrant cross-contract calls are not yet supported\". MINT IN A CALLEE executes: Mint.mint_to minted to right(kernel.self()) of Root2 and Root2's receiveShielded claimed it in the same execution (claimed_total 1000). Issue #658's blank callee Zswap state is not reproduced on runtime 0.19.0. The WITHDRAW SHAPE executes: Root sends, Mid claims that exact coin and calls the singleton in one tree (mid.shielded_received 100, held nonce == sent nonce: true). This is a RUNTIME-LEVEL result only: no proof was generated and no transaction was submitted, so it does not settle the ledger's verdict — the on-node probes G0/G1/G1B do.",
+  "details": {
+    "depth2Trace": [
+      {
+        "circuitId": "signBidirectional",
+        "at": "signet",
+        "commCommData": "present"
+      },
+      {
+        "circuitId": "request",
+        "at": "mid",
+        "commCommData": "present"
+      },
+      {
+        "circuitId": "forward",
+        "at": "root",
+        "commCommData": "absent"
+      }
+    ],
+    "depth2Ledgers": {
+      "midRequests": "1",
+      "rootForwards": "1"
+    },
+    "depth2Events": [
+      "misc"
+    ],
+    "reentrancy": {
+      "refused": true,
+      "message": "Contract re-entrancy detected: '25788efa19a4aef5b8660fb38d1e7954987dc3664c8f8b56dd8fbd20a5882789' is already executing on the call stack; re-entrant cross-contract calls are not yet supported"
+    },
+    "claimTrace": [
+      {
+        "circuitId": "mint_to",
+        "at": "mint",
+        "commCommData": "present"
+      },
+      {
+        "circuitId": "claim_minted",
+        "at": "root2",
+        "commCommData": "absent"
+      }
+    ],
+    "claimLedgers": {
+      "root2Claims": "1",
+      "root2ClaimedTotal": "1000",
+      "mintMints": "1",
+      "lastNonceHex": "9e2dfbd72f354b0f6a725db5332e275859ffdbc44f8debac8f6e42e1d3b4bb54",
+      "lastValue": "1000"
+    },
+    "claimZswapLocalState": {
+      "inputs": 0,
+      "outputs": 1
+    },
+    "offlineFundedCoin": {
+      "nonceHex": "2cd7c116a18505b044a2130080e5a7207c093932d3a7550597b87b5c013e3b83",
+      "colorHex": "78b50d67d2f31665de719b5ea55579e6baa11d0b894008df5efe643e7fafc293",
+      "value": "1000"
+    },
+    "withdrawTrace": [
+      {
+        "circuitId": "signBidirectional",
+        "at": "signet",
+        "commCommData": "present"
+      },
+      {
+        "circuitId": "take_and_request",
+        "at": "mid",
+        "commCommData": "present"
+      },
+      {
+        "circuitId": "pay_and_forward",
+        "at": "root",
+        "commCommData": "absent"
+      }
+    ],
+    "withdrawLedgers": {
+      "midShieldedClaims": "1",
+      "midShieldedReceived": "100",
+      "midRequests": "1",
+      "midHeldNonceHex": "c4b3a0ec1834ab4048757fa985bb8ec7ace2dc717ce0de7f3f7e0ba63c417400"
+    },
+    "withdrawResult": {
+      "sentNonceHex": "c4b3a0ec1834ab4048757fa985bb8ec7ace2dc717ce0de7f3f7e0ba63c417400",
+      "sentValue": "100",
+      "changeValue": "900",
+      "midHeldNonceEqualsSent": true
+    },
+    "problems": []
+  },
+  "ranAt": "2026-09-16T03:40:03.106Z",
+  "stack": {
+    "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
+    "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",
+    "proofServer": "midnightntwrk/proof-server:9.0.0-rc.6",
+    "compactc": "0.34.0 (--feature-zkir-v3)",
+    "compactRuntime": "0.19.0",
+    "compactJs": "2.5.5-rc.8",
+    "midnightJs": "5.0.0-beta.7",
+    "ledgerV9": "1.0.0-rc.3",
+    "signetModule": "@sig-net/midnight 0.22.0-rc.1",
+    "signetSingleton": "@sig-net/midnight-contract 0.22.0-rc.1 (dist/managed)"
+  }
+}

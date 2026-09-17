@@ -4,17 +4,77 @@
   "type": "module",
   "private": true,
   "description": "Reference implementation of the Midnight account custody standard: MIP-0012 (contract custody of native assets) with the authorisation seam carried as co-resident arms: JubJub Schnorr (the MIP-0013 scheme) and an interim ECDSA-secp256k1 engineering arm.",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "browser": "./dist/src/browser.js",
+      "import": "./dist/src/index.js"
+    },
+    "./browser": {
+      "types": "./dist/src/browser.d.ts",
+      "import": "./dist/src/browser.js"
+    },
+    "./node": {
+      "types": "./dist/src/node/wallet.d.ts",
+      "import": "./dist/src/node/wallet.js"
+    },
+    "./node/roster": {
+      "types": "./dist/src/node/roster.d.ts",
+      "import": "./dist/src/node/roster.js"
+    },
+    "./offer": {
+      "types": "./dist/src/wallet/offer.d.ts",
+      "import": "./dist/src/wallet/offer.js"
+    },
+    "./bridge": {
+      "types": "./dist/src/wallet/bridge.d.ts",
+      "import": "./dist/src/wallet/bridge.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/src",
+    "docs",
+    "contracts/account.compact",
+    "contracts/modules",
+    "README.md"
+  ],
   "scripts": {
-    "compile": "compact compile +0.33.0-rc.2 --feature-zkir-v3 contracts/account.compact contracts/managed/account && compact compile +0.33.0-rc.2 --feature-zkir-v3 contracts/control.compact contracts/managed/control && compact compile +0.33.0-rc.2 --feature-zkir-v3 contracts/faucet.compact contracts/managed/faucet",
-    "build": "tsc",
+    "link-callees": "bash scripts/link-callees.sh",
+    "compile:account": "npm run link-callees && COMPACT_PATH=node_modules compact compile +0.34.0 --feature-zkir-v3 --compact-path node_modules:contracts/managed contracts/account.compact contracts/managed/account",
+    "compile": "npm run compile:account && compact compile +0.34.0 --feature-zkir-v3 contracts/control.compact contracts/managed/control && compact compile +0.34.0 --feature-zkir-v3 contracts/faucet.compact contracts/managed/faucet",
+    "build": "tsc && node scripts/copy-artifacts.mjs && node scripts/bundle-signet-sdk.mjs",
+    "measure-k": "node scripts/measure-k.mjs",
+    "fixtures:evm": "tsx src/tests/fixtures/generate-evm-v1.ts",
+    "deploy-budget": "tsx src/tests/deploy-budget.ts",
+    "test:eip712-evm": "tsx src/tests/eip712-evm-offline.ts",
+    "link-runtime": "bash scripts/link-runtime.sh",
+    "test:exports": "npm run build && node dist/src/tests/exports-offline.js",
+    "test:bridge-offline": "npm run link-runtime && tsx src/tests/bridge-offline.ts",
+    "test:bridge-e2e": "npm run link-runtime && tsx src/tests/bridge-e2e.ts",
+    "test:eip712-oracles": "tsx src/tests/eip712-evm-oracles.ts",
+    "test:client-offline": "tsx src/tests/client-offline.ts",
+    "test:evm-deploy": "tsx src/tests/evm-account-deploy.ts",
+    "fixtures:swap": "tsx src/tests/fixtures/generate-evm-v1-swap.ts",
+    "test:swap-primitives": "tsx src/tests/swap-primitives-offline.ts",
+    "test:swap-shapes": "tsx src/tests/swap-shapes-offline.ts",
+    "test:swap-eip712": "tsx src/tests/swap-eip712-offline.ts",
+    "test:swap-offer": "tsx src/tests/swap-offer-offline.ts",
+    "test:swap-ladder": "tsx src/tests/swap-ladder.ts",
+    "test:swap-deploy-budget": "tsx src/tests/swap-deploy-budget.ts",
+    "probe:swap-placement": "tsx src/tests/swap-placement-probe.ts",
     "test:unit": "tsx src/tests/unit-offline.ts",
     "test:crossimpl-offline": "tsx src/tests/crossimpl-offline.ts",
     "test:auth-crossimpl": "tsx src/tests/auth-crossimpl.ts",
     "test:auth": "tsx src/tests/auth-conformance.ts",
     "test:auth-coinless": "tsx src/tests/auth-coinless.ts",
+    "test:evm-auth-coinless": "tsx src/tests/evm-auth-coinless.ts",
     "test:auth-lifecycle": "tsx src/tests/auth-lifecycle.ts",
     "test:auth-replay": "tsx src/tests/auth-replay.ts",
     "test:custody-shielded": "tsx src/tests/custody-shielded.ts",
+    "test:evm-custody-shielded": "tsx src/tests/evm-custody-shielded.ts",
     "test:custody-discovery": "tsx src/tests/custody-discovery.ts",
     "test:custody-unshielded": "tsx src/tests/custody-unshielded.ts",
     "test:custody-payments": "tsx src/tests/custody-payments.ts",
@@ -24,19 +84,20 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.1",
+    "ethers": "6.17.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@midnight-ntwrk/compact-js": "2.5.5-rc.6",
-    "@midnight-ntwrk/compact-runtime": "0.18.0-rc.1",
-    "@midnight-ntwrk/midnight-js-contracts": "5.0.0-beta.4",
-    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "5.0.0-beta.4",
-    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "5.0.0-beta.4",
-    "@midnight-ntwrk/midnight-js-level-private-state-provider": "5.0.0-beta.4",
-    "@midnight-ntwrk/midnight-js-network-id": "5.0.0-beta.4",
-    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "5.0.0-beta.4",
-    "@midnight-ntwrk/midnight-js-types": "5.0.0-beta.4",
+    "@midnight-ntwrk/compact-js": "2.5.5-rc.8",
+    "@midnight-ntwrk/compact-runtime": "0.19.0",
+    "@midnight-ntwrk/midnight-js-contracts": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-http-client-proof-provider": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-level-private-state-provider": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-network-id": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-node-zk-config-provider": "5.0.0-beta.7",
+    "@midnight-ntwrk/midnight-js-types": "5.0.0-beta.7",
     "@midnightntwrk/ledger-v9": "1.0.0-rc.3",
     "@midnightntwrk/wallet-sdk-dust-wallet": "5.0.0-beta.2",
     "@midnightntwrk/wallet-sdk-facade": "5.0.0-beta.2",
@@ -44,6 +105,8 @@
     "@midnightntwrk/wallet-sdk-shielded": "4.0.0-beta.2",
     "@midnightntwrk/wallet-sdk-unshielded-wallet": "4.0.0-beta.2",
     "@noble/curves": "2.2.0",
+    "@noble/hashes": "2.2.0",
+    "@sig-net/midnight": "0.22.0-rc.1",
     "rxjs": "^7.8.2",
     "ws": "^8.19.0"
   }

@@ -18,6 +18,18 @@
 //! hash, read little-endian, is strictly below the JubJub subgroup order
 //! (§5.2), then emits (R, s, grind_nonce) with s = r + c·sk.
 //!
+//! Arm evm. The device is an ordinary Ethereum EOA, the identity the account
+//! enrols is its 20-byte address, and what it signs is EIP-712 typed data:
+//!
+//!   challenge = persistentHash([DST_CIRCUIT, self, address, ...args, auth_nonce])
+//!   digest    = keccak256(0x1901 || domainSeparator || structHash)
+//!
+//! with DST_CIRCUIT over "midnight:account:auth:evm:v1:<circuit>" and the
+//! challenge carried as the LAST field of the operation's EIP-712 struct. The
+//! keccak layer is written out in `sign_evm` from the frozen type strings
+//! alone, so this binary reproduces the byte contract independently of the
+//! TypeScript codec, of ethers, and of the contract's own oracles.
+//!
 //! Arm k256. Challenge preimage, for a gated circuit:
 //!
 //!   persistentHash([DST_CIRCUIT, self, pk_x, pk_y, ...args, auth_nonce])
@@ -59,6 +71,10 @@
 //!        "challenge":"…64 hex…","attempts":18}
 //!   {"cmd":"sign","arm":"k256",…same fields…}
 //!     → {"pk":{…},"sig":{"r":"0x…","s":"0x…"},"challenge":"…64 hex…"}
+//!   {"cmd":"sign","arm":"evm",…same fields…,"evm_domain_salt":"…64 hex…"}
+//!     → {"pk":{…},"address":"0x…20 bytes…","sig":{…},"challenge":"…",
+//!        "account_alias":"0x…","domain_separator":"…","struct_hash":"…",
+//!        "digest":"…"}
 //!
 //! All bigint fields are 0x-prefixed big-endian hex; raw byte strings are
 //! plain hex.
@@ -157,6 +173,7 @@ fn circuit_dst(arm: &Arm, circuit: &str) -> Result<[u8; 32]> {
     let tag = match arm {
         Arm::Jubjub => format!("midnight:account:auth:v1:{circuit}"),
         Arm::K256 => format!("midnight:account:auth:k1:v1:{circuit}"),
+        Arm::Evm => format!("midnight:account:auth:evm:v1:{circuit}"),
     };
     if tag.len() > 64 {
         bail!("circuit tag longer than 64 bytes: {tag}");
@@ -249,6 +266,7 @@ fn bytes32_from_hex(s: &str) -> Result<[u8; 32]> {
 enum Arm {
     Jubjub,
     K256,
+    Evm,
 }
 
 #[derive(Deserialize)]
@@ -274,6 +292,11 @@ struct SignRequest {
     /// Ignored by the jubjub arm.
     #[serde(default)]
     envelope: u8,
+    /// Arm evm only: the account's constructor-sealed `evm_domain_salt`, the
+    /// EIP-712 domain's `salt` field (64 hex characters). Ignored by the other
+    /// two arms, which have no domain.
+    #[serde(default)]
+    evm_domain_salt: String,
 }
 
 /// The connector's mandatory signing prefix for a 32-byte payload
@@ -315,9 +338,21 @@ fn main() -> Result<()> {
                 "pk": k256_point_json(sk.verifying_key())?,
             })
         }
+        Request::Keygen { arm: Arm::Evm } => {
+            // The same curve as k256; what differs is the identity the account
+            // enrols, so the keygen also reports the Ethereum address.
+            let sk = SigningKey::random(&mut rand::rngs::OsRng);
+            let (x_be, y_be) = pk_coords_be(sk.verifying_key())?;
+            json!({
+                "sk": format!("0x{}", hex::encode(sk.to_bytes())),
+                "pk": k256_point_json(sk.verifying_key())?,
+                "address": format!("0x{}", hex::encode(ethereum_address(&x_be, &y_be))),
+            })
+        }
         Request::Sign(req) => match req.arm {
             Arm::Jubjub => sign_jubjub(&req)?,
             Arm::K256 => sign_k256(&req)?,
+            Arm::Evm => sign_evm(&req)?,
         },
     };
     println!("{response}");
@@ -441,6 +476,154 @@ fn sign_k256(req: &SignRequest) -> Result<serde_json::Value> {
         "challenge": hex::encode(challenge),
         "digest": hex::encode(digest),
         "envelope": req.envelope,
+    }))
+}
+
+// ── Arm evm: EIP-712 over secp256k1 ─────────────────────────────────────────
+//
+// The third arm signs neither the challenge nor an envelope of it: the
+// challenge is ONE FIELD of a per-operation EIP-712 struct, and the wallet
+// signs keccak256(0x1901 || domainSeparator || structHash). Everything below
+// keccak is written out here rather than imported, so this binary is a genuinely
+// independent implementation of `docs/AUTH-EIP712-PASSPORT-EVM-V1.md` — the
+// type strings and the frozen constants are the only shared inputs, exactly
+// what a third party would be handed.
+//
+// Two layers, and they are independent:
+//
+//   * the CHALLENGE CORE is the k256 arm's SHA-256 preimage with the key
+//     encoded as the device's 20-byte Ethereum address instead of its two
+//     affine coordinates — so it goes through the same fab machinery as the
+//     other two arms, and a drift in the compiler's encoding is caught here;
+//   * the EIP-712 LAYER is keccak over big-endian ABI words, which has nothing
+//     to do with Midnight's encoding at all.
+
+/// The device's affine coordinates, big-endian (SEC1 order) — the encoding
+/// keccak takes for the Ethereum address, and the byte-reverse of the
+/// little-endian pair the k256 arm binds.
+fn pk_coords_be(vk: &VerifyingKey) -> Result<([u8; 32], [u8; 32])> {
+    let point = vk.to_encoded_point(false);
+    let x = point.x().ok_or_else(|| anyhow!("point at infinity"))?;
+    let y = point.y().ok_or_else(|| anyhow!("point at infinity"))?;
+    Ok(((*x).into(), (*y).into()))
+}
+
+fn keccak256(parts: &[&[u8]]) -> [u8; 32] {
+    use sha3::{Digest, Keccak256};
+    let mut hasher = Keccak256::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    hasher.finalize().into()
+}
+
+/// `secp256k1EthereumAddress(pk)`: the low 20 bytes of keccak256(x || y).
+fn ethereum_address(x_be: &[u8; 32], y_be: &[u8; 32]) -> [u8; 20] {
+    let h = keccak256(&[x_be, y_be]);
+    let mut out = [0u8; 20];
+    out.copy_from_slice(&h[12..]);
+    out
+}
+
+/// A 20-byte address as an ABI `address` word: twelve zero bytes, then the
+/// address.
+fn address_word(address: &[u8; 20]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[12..].copy_from_slice(address);
+    out
+}
+
+/// An unsigned integer as a big-endian 32-byte word.
+fn uint_word(value: u128) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[16..].copy_from_slice(&value.to_be_bytes());
+    out
+}
+
+const DOMAIN_ENCODE_TYPE: &str =
+    "EIP712Domain(string name,string version,address verifyingContract,bytes32 salt)";
+const DOMAIN_NAME: &str = "Midnight Passport Account";
+const DOMAIN_VERSION: &str = "1";
+const TYPE_WITHDRAW_UNSHIELDED: &str = "WithdrawUnshielded(bytes32 account,address owner,uint64 authNonce,bytes32 color,uint128 amount,bytes32 recipient,bytes32 challenge)";
+
+/// The account's EVM-shaped `verifyingContract`: the low 20 bytes of keccak256
+/// over its 32-byte Midnight address.
+fn account_alias(account: &[u8; 32]) -> [u8; 20] {
+    let h = keccak256(&[account]);
+    let mut out = [0u8; 20];
+    out.copy_from_slice(&h[12..]);
+    out
+}
+
+fn domain_separator(account: &[u8; 32], salt: &[u8; 32]) -> [u8; 32] {
+    keccak256(&[
+        &keccak256(&[DOMAIN_ENCODE_TYPE.as_bytes()]),
+        &keccak256(&[DOMAIN_NAME.as_bytes()]),
+        &keccak256(&[DOMAIN_VERSION.as_bytes()]),
+        &address_word(&account_alias(account)),
+        salt,
+    ])
+}
+
+fn eip712_digest(separator: &[u8; 32], struct_hash: &[u8; 32]) -> [u8; 32] {
+    keccak256(&[&[0x19u8, 0x01u8], separator, struct_hash])
+}
+
+fn sign_evm(req: &SignRequest) -> Result<serde_json::Value> {
+    let p = call_params(req)?;
+    let salt = bytes32_from_hex(&req.evm_domain_salt)
+        .context("arm evm needs the account's evm_domain_salt")?;
+    let sk = k256_signing_key_from_hex(&req.sk)?;
+    let vk = sk.verifying_key();
+    let (x_be, y_be) = pk_coords_be(vk)?;
+    let address = ethereum_address(&x_be, &y_be);
+    let dst = circuit_dst(&Arm::Evm, &req.circuit)?;
+
+    // The challenge core: the k256 preimage with the key as the address.
+    let challenge = persistent_hash(&[
+        el_bytes(32, &dst),
+        el_bytes(32, &p.contract_address),
+        el_bytes(20, &address),
+        el_bytes(32, &p.color),
+        el_uint(16, p.amount),
+        el_bytes(32, &p.recipient),
+        el_uint(8, u128::from(p.auth_nonce)),
+    ])?;
+
+    // The EIP-712 struct the wallet displays, with the challenge as its last
+    // field. Eight words for this type: the type hash plus seven fields.
+    let struct_hash = keccak256(&[
+        &keccak256(&[TYPE_WITHDRAW_UNSHIELDED.as_bytes()]),
+        &p.contract_address,
+        &address_word(&address),
+        &uint_word(u128::from(p.auth_nonce)),
+        &p.color,
+        &uint_word(p.amount),
+        &p.recipient,
+        &challenge,
+    ]);
+    let separator = domain_separator(&p.contract_address, &salt);
+    let digest = eip712_digest(&separator, &struct_hash);
+
+    let sig: Signature = sk
+        .sign_prehash(&digest)
+        .map_err(|_| anyhow!("signing failed"))?;
+    vk.verify_prehash(&digest, &sig)
+        .map_err(|_| anyhow!("self-verification failed"))?;
+
+    let (sig_r, sig_s) = sig.split_bytes();
+    Ok(json!({
+        "pk": k256_point_json(vk)?,
+        "address": format!("0x{}", hex::encode(address)),
+        "sig": {
+            "r": format!("0x{}", hex::encode(sig_r)),
+            "s": format!("0x{}", hex::encode(sig_s)),
+        },
+        "challenge": hex::encode(challenge),
+        "account_alias": format!("0x{}", hex::encode(account_alias(&p.contract_address))),
+        "domain_separator": hex::encode(separator),
+        "struct_hash": hex::encode(struct_hash),
+        "digest": hex::encode(digest),
     }))
 }
 
@@ -651,6 +834,80 @@ mod tests {
     }
 
     #[test]
+    fn evm_eip712_constants_match_the_frozen_byte_contract() {
+        // The ten constants AUTH-EIP712-PASSPORT-EVM-V1 freezes, recomputed
+        // here from the type strings. If the strings are ever edited, this
+        // fails before any signature is produced.
+        assert_eq!(
+            hex::encode(keccak256(&[DOMAIN_ENCODE_TYPE.as_bytes()])),
+            "36c25de3e541d5d970f66e4210d728721220fff5c077cc6cd008b3a0c62adab7"
+        );
+        assert_eq!(
+            hex::encode(keccak256(&[DOMAIN_NAME.as_bytes()])),
+            "64d1c923e59da20d02c92dc0d6caa0868cb5c8ab17ee0658aafc5f0b72d56c85"
+        );
+        assert_eq!(
+            hex::encode(keccak256(&[DOMAIN_VERSION.as_bytes()])),
+            "c89efdaa54c0f20c7adf612882df0950f5a951637e0307cdcb4c672f298b8bc6"
+        );
+        assert_eq!(
+            hex::encode(keccak256(&[TYPE_WITHDRAW_UNSHIELDED.as_bytes()])),
+            "3aacc36e8b18ccfd9f416129bb8918b17f3ef1e90f5183b5d52f91c0fdbb2df8"
+        );
+    }
+
+    #[test]
+    fn evm_address_of_the_generator_is_the_well_known_one() {
+        // sk = 1: the Ethereum address of the secp256k1 generator, a value
+        // every EVM stack agrees on.
+        let sk = k256_signing_key_from_hex("0x01").unwrap();
+        let (x_be, y_be) = pk_coords_be(sk.verifying_key()).unwrap();
+        assert_eq!(
+            hex::encode(ethereum_address(&x_be, &y_be)),
+            "7e5f4552091a69125d5dfcb7b8c2659029395bdf"
+        );
+    }
+
+    #[test]
+    fn evm_challenge_core_is_the_k256_preimage_with_the_address() {
+        // The evm challenge is a pure Bytes tuple, so its field-aligned
+        // encoding is each element zero-padded to its declared width — the
+        // Bytes<20> address included. Recomputed by hand, as for k256.
+        let dst = circuit_dst(&Arm::Evm, "withdraw_unshielded").unwrap();
+        let self_addr = [0x11u8; 32];
+        let address = [0xabu8; 20];
+        let color = [0u8; 32];
+        let recipient = [0x33u8; 32];
+        let via_fab = persistent_hash(&[
+            el_bytes(32, &dst),
+            el_bytes(32, &self_addr),
+            el_bytes(20, &address),
+            el_bytes(32, &color),
+            el_uint(16, 500),
+            el_bytes(32, &recipient),
+            el_uint(8, 3),
+        ])
+        .unwrap();
+        let by_hand = sha256_concat(&[
+            dst.to_vec(),
+            self_addr.to_vec(),
+            address.to_vec(),
+            color.to_vec(),
+            pad_to(16, &500u128.to_le_bytes()[..2]),
+            recipient.to_vec(),
+            pad_to(8, &[3u8]),
+        ]);
+        assert_eq!(via_fab, by_hand);
+        assert_eq!(
+            hex::encode(circuit_dst(&Arm::Evm, "withdraw_unshielded").unwrap()),
+            hex::encode(sha256_concat(&[pad_to(
+                64,
+                b"midnight:account:auth:evm:v1:withdraw_unshielded"
+            )]))
+        );
+    }
+
+    #[test]
     fn jubjub_signature_selfverifies_over_a_ground_challenge() {
         // End-to-end sanity of the jubjub signing flow with a fixed sk;
         // challenge bit-exactness against the compiled contract is
@@ -665,6 +922,7 @@ mod tests {
             recipient: hex::encode([0x33u8; 32]),
             auth_nonce: "3".into(),
             envelope: 0,
+            evm_domain_salt: String::new(),
         };
         let out = sign_jubjub(&req).unwrap();
         assert!(out.get("sig_s").is_some());

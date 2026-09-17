@@ -146,10 +146,23 @@ await runScenario('auth-coinless (both arms)', async () => {
     // term vanishes and any s yields a passing r = x((z·s⁻¹)·G). Plant the
     // identity's entry (do_add_device takes an already-derived entry, so this
     // is permitted), then present a genuine forgery against it.
+    // The two encodings of O. compact-runtime 0.19.0 refuses the FLAGGED one
+    // inside the built-in itself (`secp256k1PointX` throws
+    // "cannot extract the x-coordinate of the secp256k1 identity point"; on
+    // 0.18.0-rc.1 it returned the zero coordinate and only the contract's own
+    // guard refused it), so every off-chain derivation below goes through the
+    // UNFLAGGED twin — which produces the same bytes, is what the contract's
+    // coordinate guard exists for, and is the encoding a caller controls.
     const identity: Secp256k1Point = { x: 0n, y: 0n, identity: true };
+    const identityUnflagged: Secp256k1Point = { x: 0n, y: 0n, identity: false };
     const lPre = await s.account.ledgerState();
+    details.identityFlaggedDeriveAbort = await expectAbort(
+      'derive_device_entry_with_k256 under the FLAGGED identity (runtime built-in)', async () =>
+        pureCircuits.derive_device_entry_with_k256(
+          { bytes: s.account.addressBytes }, identity, K256_ENVELOPE_NONE, lPre.device_epoch, 0n,
+        ));
     const identityEntry = pureCircuits.derive_device_entry_with_k256(
-      { bytes: s.account.addressBytes }, identity, K256_ENVELOPE_NONE, lPre.device_epoch, 0n,
+      { bytes: s.account.addressBytes }, identityUnflagged, K256_ENVELOPE_NONE, lPre.device_epoch, 0n,
     );
     const planted = await s.account.addDeviceEntry(j1, identityEntry);
     const lPlanted = await waitForLedger(
@@ -162,20 +175,13 @@ await runScenario('auth-coinless (both arms)', async () => {
     const ctx = await s.account.callContext();
     const probe = K256Device.generate();
     const newEntry = probe.entryAt(s.account.addressBytes, lPlanted.device_epoch, 0n);
-    const challenge = k256Challenges.addDevice(ctx, identity, newEntry);
+    const challenge = k256Challenges.addDevice(ctx, identityUnflagged, newEntry);
     // Forge: choose s freely, then derive the r that closes the equation
     // over the digest the seam verifies (envelope 0: SHA-256(challenge)).
     const z = bytesToScalarBE(pureCircuits.envelope_digest(K256_ENVELOPE_NONE, challenge));
     const sForged = 0xdeadbeefn;
     const w = secp256k1ScalarInv(sForged);
     const rForged = secp256k1PointX(secp256k1MulGenerator(secp256k1ScalarMul(z, w))) % SECP256K1_N;
-    const forged: K256Authorisation = {
-      arm: 'k256', pk: identity, use_counter: 0n, sig: { r: rForged, s: sForged },
-      envelope: K256_ENVELOPE_NONE,
-    };
-    details.identityForgeryAbort = await expectAbort('forged signature under pk = O', () =>
-      s.account.addDeviceWithAuth(newEntry, forged));
-
     // BOTH encodings must be refused. Secp256k1Point carries an identity flag,
     // and a flag-based guard (`pk != default<Secp256k1Point>`) lets the
     // unflagged twin {0,0,identity:false} through: the structural comparison
@@ -184,17 +190,20 @@ await runScenario('auth-coinless (both arms)', async () => {
     // reaches the very same planted entry — which is why the guard compares
     // coordinates instead. Presenting only the flagged form would leave this
     // untested, which is exactly how the gap survived its first fix.
-    const identityUnflagged: Secp256k1Point = { x: 0n, y: 0n, identity: false };
-    const unflaggedEntry = pureCircuits.derive_device_entry_with_k256(
-      { bytes: s.account.addressBytes }, identityUnflagged, K256_ENVELOPE_NONE, lPlanted.device_epoch, 0n,
-    );
-    if (Buffer.compare(Buffer.from(unflaggedEntry), Buffer.from(identityEntry)) !== 0) {
-      throw new Error('the two identity encodings no longer share an entry; revisit this test');
-    }
-    const forgedUnflagged: K256Authorisation = { ...forged, pk: identityUnflagged };
+    const forgedUnflagged: K256Authorisation = {
+      arm: 'k256', pk: identityUnflagged, use_counter: 0n, sig: { r: rForged, s: sForged },
+      envelope: K256_ENVELOPE_NONE,
+    };
     details.identityUnflaggedForgeryAbort = await expectAbort(
       'forged signature under the UNFLAGGED twin {0,0,identity:false}', () =>
         s.account.addDeviceWithAuth(newEntry, forgedUnflagged));
+
+    // The flagged form reaches the same planted entry; under runtime 0.19.0 it
+    // is refused by the built-in before the contract's guard runs, under
+    // 0.18.0-rc.1 by the guard. Either way the call never executes.
+    const forged: K256Authorisation = { ...forgedUnflagged, pk: identity };
+    details.identityForgeryAbort = await expectAbort('forged signature under pk = O', () =>
+      s.account.addDeviceWithAuth(newEntry, forged));
 
     const untouched = await s.account.ledgerState();
     if (untouched.auth_nonce !== lPlanted.auth_nonce) {

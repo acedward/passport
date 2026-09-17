@@ -1,0 +1,129 @@
+pragma language_version 0.26;
+
+// VaultClaimer — the throwaway stand-in for a Passport account, for the F4 end-to-end run
+// of project 00034 PR-F. NOT a deliverable: the real caller is PR-G's account contract
+// (spec FR-025/FR-027, sub-brief Part B). This exists so F4 can exercise the vault from
+// the position it will actually be called from — as a CALLEE — rather than only as a
+// transaction root, because the two positions obey different ledger rules and only the
+// callee position is what the bridge uses.
+//
+// Two circuits, one per direction of the deposit flow:
+//
+//   start_deposit   root -> vault.startDeposit -> SignetSigner.signBidirectional.
+//                   The depth-2 chain. `recipient` is right(kernel.self()), so the MPC
+//                   derivation path — and therefore the EVM address the depositor funds —
+//                   is bound to THIS contract and to nothing else.
+//
+//   claim_deposit   root -> vault.completeDeposit, which mints to this contract, and this
+//                   contract claims the minted coin with receiveShielded in the SAME
+//                   transaction. Gate 0's G1 proved the mechanism with a toy minter; this
+//                   proves it against the real vault, with a real MPC attestation as the
+//                   gate. The inbox insert mirrors Passport's `deposit_shielded`, so the
+//                   claim-plus-entry shape PR-G needs is exercised too.
+//
+// Witness-free, like everything in this package: this contract is a transaction ROOT, so a
+// witness would be legal, but it has nothing private to hold — the claimed coin is left
+// where it lands (the F4 withdraw leg uses a separate wallet-held coin, so nothing here
+// needs to spend).
+//
+// Compile AFTER the vault: the compiler resolves `Erc20Vault` to managed/Erc20Vault and
+// embeds a fingerprint of its verifier keys.
+
+import CompactStandardLibrary;
+
+// The vault's cross-contract surface, exactly as PR-G's account will declare it
+// (sub-brief B.1). Every type here is shared: RequestId and RespondBidirectionalEvent come
+// from the Signet module, the rest from the standard library — no vault-local struct
+// crosses the boundary.
+import "@sig-net/midnight/src/Signet";
+
+contract Erc20Vault {
+  circuit startDeposit(
+    evmNonce: Uint<64>,
+    gasLimit: Uint<64>,
+    maxFeePerGas: Uint<128>,
+    maxPriorityFeePerGas: Uint<128>,
+    keyVersion: Uint<8>,
+    erc20Address: Bytes<20>,
+    amount: Uint<128>,
+    recipient: Either<ZswapCoinPublicKey, ContractAddress>
+  ): [];
+  circuit completeDeposit(
+    requestId: RequestId,
+    respondBidirectionalEvent: RespondBidirectionalEvent,
+    serializedOutput: Bytes<1>,
+    mintNonce: Bytes<32>
+  ): Maybe<ShieldedCoinInfo>;
+}
+
+export ledger vault: Erc20Vault;
+
+// The account-encrypted inbox, in the shape Passport's `deposit_shielded` uses: the coin's
+// description is private, the ciphertext is public. F4 only needs the shape.
+export ledger inbox: Map<Uint<64>, Bytes<192>>;
+export ledger inbox_next: Counter;
+
+export ledger starts: Counter;
+export ledger claims: Counter;
+export ledger claimed_total: Uint<128>;
+
+// Public read-back of the last claimed coin, so the harness can check from PUBLIC state
+// that the coin the vault minted is the coin this contract claimed.
+export ledger last_nonce: Bytes<32>;
+export ledger last_color: Bytes<32>;
+export ledger last_value: Uint<128>;
+
+constructor(erc20Vault: Erc20Vault) {
+  vault = disclose(erc20Vault);
+  claimed_total = 0 as Uint<128>;
+  last_value = 0 as Uint<128>;
+}
+
+// Depth 2: this contract -> vault -> Signet singleton, one transaction, three calls.
+export circuit start_deposit(
+  evmNonce: Uint<64>,
+  gasLimit: Uint<64>,
+  maxFeePerGas: Uint<128>,
+  maxPriorityFeePerGas: Uint<128>,
+  keyVersion: Uint<8>,
+  erc20Address: Bytes<20>,
+  amount: Uint<128>
+): [] {
+  vault.startDeposit(
+    disclose(evmNonce),
+    disclose(gasLimit),
+    disclose(maxFeePerGas),
+    disclose(maxPriorityFeePerGas),
+    disclose(keyVersion),
+    disclose(erc20Address),
+    disclose(amount),
+    right<ZswapCoinPublicKey, ContractAddress>(kernel.self())
+  );
+  starts.increment(1);
+}
+
+// The vault mints to this contract and this contract claims it, in one transaction.
+export circuit claim_deposit(
+  requestId: RequestId,
+  respondBidirectionalEvent: RespondBidirectionalEvent,
+  serializedOutput: Bytes<1>,
+  mintNonce: Bytes<32>,
+  entry: Bytes<192>
+): [] {
+  const minted = vault.completeDeposit(
+    disclose(requestId),
+    disclose(respondBidirectionalEvent),
+    disclose(serializedOutput),
+    disclose(mintNonce)
+  );
+  if (disclose(minted.is_some)) {
+    receiveShielded(minted.value);
+    inbox.insert(inbox_next as Uint<64>, disclose(entry));
+    inbox_next.increment(1);
+    claims.increment(1);
+    claimed_total = ((claimed_total + minted.value.value) as Uint<128>);
+    last_nonce = minted.value.nonce;
+    last_color = minted.value.color;
+    last_value = minted.value.value;
+  }
+}

@@ -1,0 +1,176 @@
+pragma language_version 0.26;
+
+// Root2 — the claiming ROOT of the Gate 0 G1 pair (project 00034, spec FR-023(b)).
+//
+// Stands in for the Passport account's permissionless `bridge_deposit_complete`
+// (brief B.4): it drives the vault's completeDeposit, receiveShieldeds the coin the vault
+// minted to it, and appends the account-encrypted inbox entry that makes the coin
+// discoverable — all in one transaction.
+//
+//   claim_minted           the headline: callee mints to right(kernel.self()), the root
+//                          claims it with receiveShielded and appends an inbox entry.
+//   claim_minted_noclaim   the negative: the same mint with NO receiveShielded. The
+//                          contract-addressed output nobody collects must fail.
+//   mint_to_wallet         the control: the callee mints to a user coin public key and the
+//                          root claims nothing. Shows mint-in-callee itself works where no
+//                          claim is needed, isolating the claim from the mint.
+//   spend_to_wallet        change continuity: the claimed coin is spent in a LATER
+//                          transaction through the held_coin witness.
+//
+// Root circuits MAY consume witnesses (Passport P7); only callees must be witness-free.
+//
+// Compile SECOND, after Mint.
+
+import CompactStandardLibrary;
+
+contract Mint {
+  circuit mint_to(
+    domain: Bytes<32>,
+    amount: Uint<64>,
+    nonce: Bytes<32>,
+    recipient: Either<ZswapCoinPublicKey, ContractAddress>
+  ): ShieldedCoinInfo;
+}
+
+export ledger minter: Mint;
+
+// The account-encrypted inbox (MIP-0012: the coin's description is private, the ciphertext
+// is public). Gate 0 only needs the shape, so `entry` is opaque bytes.
+export ledger inbox: Map<Uint<64>, Bytes<192>>;
+export ledger inbox_next: Counter;
+
+export ledger claims: Counter;
+export ledger claimed_total: Uint<128>;
+export ledger spent_total: Uint<128>;
+export ledger ops: Counter;
+
+// Public read-back of the last coin claimed, so the probe can verify from PUBLIC state
+// that the coin the callee minted is the coin the root claimed.
+export ledger last_nonce: Bytes<32>;
+export ledger last_color: Bytes<32>;
+export ledger last_value: Uint<128>;
+
+witness held_coin(color: Bytes<32>): QualifiedShieldedCoinInfo;
+
+constructor(m: Mint) {
+  minter = disclose(m);
+  claimed_total = 0 as Uint<128>;
+  spent_total = 0 as Uint<128>;
+  last_value = 0 as Uint<128>;
+}
+
+// THE Gate 0 G1 question: a callee mints a shielded coin addressed to this contract and
+// this contract claims it in the same transaction.
+export circuit claim_minted(
+  domain: Bytes<32>,
+  amount: Uint<64>,
+  nonce: Bytes<32>,
+  entry: Bytes<192>
+): ShieldedCoinInfo {
+  const coin = minter.mint_to(
+    disclose(domain),
+    disclose(amount),
+    disclose(nonce),
+    right<ZswapCoinPublicKey, ContractAddress>(kernel.self())
+  );
+  receiveShielded(coin);
+  inbox.insert(inbox_next as Uint<64>, disclose(entry));
+  inbox_next.increment(1);
+  claims.increment(1);
+  claimed_total = ((claimed_total + coin.value) as Uint<128>);
+  last_nonce = coin.nonce;
+  last_color = coin.color;
+  last_value = coin.value;
+  return coin;
+}
+
+// Negative: no receiveShielded. The minted output is addressed to this contract and never
+// claimed, so the transaction must not be accepted.
+export circuit claim_minted_noclaim(
+  domain: Bytes<32>,
+  amount: Uint<64>,
+  nonce: Bytes<32>
+): ShieldedCoinInfo {
+  const coin = minter.mint_to(
+    disclose(domain),
+    disclose(amount),
+    disclose(nonce),
+    right<ZswapCoinPublicKey, ContractAddress>(kernel.self())
+  );
+  ops.increment(1);
+  last_nonce = coin.nonce;
+  last_color = coin.color;
+  last_value = coin.value;
+  return coin;
+}
+
+// Control: the callee mints to a USER key, so nothing needs claiming. Isolates
+// "mintShieldedToken executes at all inside a callee" from "a contract-addressed mint can
+// be claimed by the root".
+export circuit mint_to_wallet(
+  domain: Bytes<32>,
+  amount: Uint<64>,
+  nonce: Bytes<32>,
+  recipient: ZswapCoinPublicKey
+): ShieldedCoinInfo {
+  const coin = minter.mint_to(
+    disclose(domain),
+    disclose(amount),
+    disclose(nonce),
+    left<ZswapCoinPublicKey, ContractAddress>(disclose(recipient))
+  );
+  ops.increment(1);
+  last_nonce = coin.nonce;
+  last_color = coin.color;
+  last_value = coin.value;
+  return coin;
+}
+
+// Second control, added after the first on-node run: the ROOT mints to a user key
+// directly, with no callee involved. The callee-minted wallet-addressed mint
+// (mint_to_wallet) was rejected by the node with
+//   Malformed(EffectsCheck(AllCommitmentsSubsetCheckFailure))
+//   "claimed_shielded_spends is not a subset of all_commitments"
+// and this circuit is what tells us whether that is a property of minting to a
+// non-root recipient FROM A CALLEE, or of minting to a wallet key at all. The
+// distinction decides whether the bridge's fallback shape (the vault minting to
+// a wallet key the account owner controls, G2 option (b)) exists.
+export circuit mint_to_wallet_root(
+  domain: Bytes<32>,
+  amount: Uint<64>,
+  nonce: Bytes<32>,
+  recipient: ZswapCoinPublicKey
+): ShieldedCoinInfo {
+  const coin = mintShieldedToken(
+    disclose(domain),
+    disclose(amount),
+    disclose(nonce),
+    left<ZswapCoinPublicKey, ContractAddress>(disclose(recipient))
+  );
+  ops.increment(1);
+  last_nonce = coin.nonce;
+  last_color = coin.color;
+  last_value = coin.value;
+  return coin;
+}
+
+// Change continuity: spend the claimed coin to a user key in a LATER transaction.
+export circuit spend_to_wallet(
+  color: Bytes<32>,
+  amount: Uint<128>,
+  recipient: ZswapCoinPublicKey
+): [ShieldedCoinInfo, Maybe<ShieldedCoinInfo>] {
+  const coin = held_coin(color);
+  const value = disclose(amount);
+  const result = sendShielded(
+    disclose(coin),
+    left<ZswapCoinPublicKey, ContractAddress>(disclose(recipient)),
+    value
+  );
+  spent_total = ((spent_total + value) as Uint<128>);
+  ops.increment(1);
+  if (disclose(result.change.is_some)) {
+    return [disclose(result.sent), some<ShieldedCoinInfo>(disclose(result.change.value))];
+  }
+  return [disclose(result.sent), none<ShieldedCoinInfo>()];
+}

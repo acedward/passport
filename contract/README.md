@@ -72,6 +72,63 @@ once, below every arm.
   device was enrolled with. Unknown ids abort. The challenge preimages
   (`midnight:account:auth:k1:v1:*`) are unchanged.
 
+- **Arm `evm`** — the same curve and the same in-circuit
+  `secp256k1EcdsaVerify`, but the device is an **ordinary Ethereum EOA**
+  and the message is **EIP-712 typed data**, so the signature is one
+  MetaMask already knows how to produce and a user reads the operation
+  rather than a hash. Like `k256` it is **not** a MIP-0013 conforming
+  scheme (R2 rejects secp256k1 ECDSA for account authorisation); it is
+  registered locally under the draft signature-schemes MIP's registry
+  rules — one circuit per scheme, an arm-marked tag family, no
+  in-circuit scheme conditional — and proposed upstream rather than
+  assumed. DST families `midnight:account:{device,boot}:evm:v1` and
+  `midnight:account:auth:evm:v1:*`. Gated ABIs are
+  `(…args, pk, use_counter, sig)` — no envelope: an EIP-712 digest is
+  already a complete, unambiguous envelope.
+
+  **The device is its address.** Entries and boot commitments bind the
+  20-byte `secp256k1EthereumAddress(pk)` rather than the curve point:
+  it is the identity the wallet exposes, the identity the signed message
+  carries in its `owner` field, and the identity a user can compare with
+  the device roster. The seam derives it from the presented point, so a
+  point that does not hash to the enrolled address fails the membership
+  assert before any signature is examined. The point at infinity is
+  refused on the POINT first, by the same coordinate guard the `k256`
+  arm uses.
+
+  **What is signed** is not the challenge. The challenge is one field of
+  a per-operation EIP-712 struct, and the wallet signs
+  `keccak256(0x1901 || domainSeparator || structHash)`, which the circuit
+  recomputes with in-circuit `keccak256`. The action fields are readable
+  — colour, amount, recipient — so approval is meaningful; the challenge
+  binds the same arguments a second time **together with the witness
+  values the wallet cannot see** (AUTH-10, e.g. which qualified coin a
+  shielded withdrawal spends). Readability alone would leave the private
+  half unbound; the challenge alone would show the user opaque hex.
+  There is no `validUntil`: freshness is `auth_nonce`, as on the other
+  arms. The byte contract — domain, the seven primary types, their
+  frozen type hashes, the transport rules, a known-answer test and 63
+  vectors — is `docs/AUTH-EIP712-PASSPORT-EVM-V1.md`; the codec is
+  `contracts/modules/Eip712.compact`, re-exported as pure oracles
+  (`evm_domain_separator_for`, `evm_struct_hash_<op>`, `evm_digest_<op>`)
+  so a signer, a relayer or an auditor takes the contract's own answer.
+  `src/tests/eip712-evm-offline.ts` reproduces every vector with
+  **ethers alone** and `src/tests/eip712-evm-oracles.ts` checks the
+  contract against the same set.
+
+  The arm carries a **constructor-sealed `evm_domain_salt`**: EIP-712's
+  `chainId` has no meaning for a Midnight contract, so the domain binds
+  this 32-byte network/deployment value instead (recommended value
+  `keccak256("midnight:" || networkId)`). Sealed, because a mutable
+  domain would silently invalidate signatures a wallet had already
+  produced. **This changes the constructor signature**, which is a
+  breaking change for any existing deploy tooling.
+
+  Cost: the arm's gated circuits are **k=18** (147,602–188,532 rows,
+  570 MB prover keys) against the `k256` twins' k=16–17. The premium is
+  roughly 76,500 rows of in-circuit keccak, of which about 28,300
+  recompute a domain separator that is constant for the deployment.
+
 Per-arm circuits instead of one circuit with an in-circuit scheme
 conditional: Compact compiles every exported circuit to its own proof, so
 a proof through a `_with_jubjub` circuit pays only the Schnorr
@@ -134,16 +191,17 @@ measured, it is live on both arms, and deriving the entry in-circuit does not
 prevent it. See erratum 8, which is the substantive open defect in this
 implementation and in MIP-0013 §3 and §6.
 
-Toolchain: the k256 arm requires the ZKIR v3 pre-release stack, so the
-whole contract compiles with it. The one coherent all-published set
-today — the set this package pins — is compactc 0.33.0-rc.2 (generates
-for compact-runtime 0.18.0-rc.1), compact-js 2.5.5-rc.6, and midnight-js
-5.0.0-beta.4, on the node 2.1.0 / ledger 9.1 localnet images with fresh
-volumes (see `infra/docker-compose.yml`). midnight-js 5.0.0-beta.6
-requires an unpublished compact-js interface (per-call Zswap local
-state), and the newer compactc 0.34.0-rc.0 / compact-runtime 0.19.0-rc.0
-line has no published midnight-js consumer; mixing the lines fails at
-deploy or call time on runtime-instance checks. The full experiment
+Toolchain: the k256 arm requires ZKIR v3, so the whole contract compiles
+with it. The set this package pins is compactc 0.34.0 (language 0.26.0,
+generates for compact-runtime 0.19.0), compact-js 2.5.5-rc.8 and
+midnight-js 5.0.0-beta.7, on the node 2.1.0 / ledger 9 localnet images
+with fresh volumes (see `infra/docker-compose.yml`). This line is now
+fully published and is the one the stagenet Passport demo and the
+mint-test-tokens stack run; the whole set moves together, because mixing
+lines fails at deploy or call time on runtime-instance checks. The
+earlier pin (compactc 0.33.0-rc.2 / compact-runtime 0.18.0-rc.1 /
+compact-js 2.5.5-rc.6 / midnight-js 5.0.0-beta.4) produced byte-identical
+circuits: the bump changed generated JavaScript and version strings only. The full experiment
 behind this verdict (`experiments/secp256k1-in-compact/`) is not yet on
 the main branch; until it lands, the summary above is the citable form.
 
@@ -152,40 +210,79 @@ the main branch; until it lands, the summary above is the citable form.
 | Path | Content |
 |---|---|
 | `contracts/account.compact` | The standard contract (both MIPs, one deployment). |
+| `contracts/modules/Eip712.compact` | The `evm` arm's EIP-712 codec: frozen type hashes, domain separator, struct hashes, digests. Re-exported by the contract as pure oracles. |
+| `contracts/modules/ByteCodec.compact` | Big-endian ABI word encoders, used by `Eip712` and nobody else. |
 | `contracts/control.compact` | Public-map control for the observer leak audit (test scaffolding, **not** part of the standard). |
 | `contracts/faucet.compact` | Token origins on localnet (test scaffolding). |
-| `src/wallet/` | Client library: two-arm signers, InboxEntry v1 codec, coin store witness, discovery walk, capture, account wrapper, wave deployment. |
+| `docs/AUTH-EIP712-PASSPORT-EVM-V1.md` | The `evm` arm's frozen byte contract: what a wallet signs, with type hashes, transport rules and a KAT. |
+| `docs/OPEN-SWAP-OFFERS.md` | Open ZSwap offers: the two shapes, `valid_until`, the one-live-offer limitation, the envelope and the taker's gates. |
+| `docs/CLIENT-API.md` | The client's API mapped one-to-one to the AA console's jobs (register, deposit, withdraw, offer, bridge), and the console jobs that have no counterpart. |
+| `src/wallet/` | Client library: per-arm signers, the EIP-712 codec and signature transport, InboxEntry v1 codec, coin store witness, discovery walk, capture, account wrapper, wave deployment. |
+| `src/wallet/bridge.ts` | The ERC20 bridge client: deposit-address derivation, the two starts, the relayer loop, the three settles, and the circuit lists a bridge account deploys with. |
+| `src/wallet/deposit.ts` | Third-party deposits, and the portable (browser-safe) InboxEntry codec — `@noble` + WebCrypto instead of `node:crypto`. |
+| `src/browser.ts`, `src/index.ts` | The package's two entry points: the browser-safe surface, and the full one (which pulls in `node:crypto` through the reference inbox codec). |
+| `src/node/` | Node-only plumbing: wallet, providers and network configs (`local`, `stagenet`), and the roster/account-address JSON store. |
+| `browser-smoke/` | A headless-Chromium smoke: the built library, an injected EIP-1193 wallet, and register → deposit → withdraw against a localnet. Not published. |
+| `contracts/erc20-vault/` | The witness-free ERC20 vault fork the bridge calls (its own package, its own README). |
 | `src/tests/` | Conformance suites (see the map below). |
+| `src/tests/fixtures/` | `passport-evm-v1.json`, the 63 frozen EIP-712 vectors, and the deterministic generator that writes it. |
+| `scripts/measure-k.mjs` | (k, rows) per compiled circuit, through the pinned `zkir-v3`. Measurement only. |
 | `signer-rs/` | Independent Rust signer (conformance test 7): ledger crates only, no TypeScript/WASM/npm. |
 | `infra/` | Localnet compose files (node, indexer, proof server). |
 
 ## Running
 
-The compile script pins the RC toolchain (`compact compile +0.33.0-rc.2
---feature-zkir-v3`); install it once by unzipping the release asset from
-LFDT-Minokawa/compact into
-`~/.compact/versions/0.33.0-rc.2/aarch64-darwin/` (the `compact update`
-manager only sees the stable line).
+The compile script pins `compact compile +0.34.0 --feature-zkir-v3`
+(language 0.26.0, ZKIR v3, generated code for compact-runtime 0.19.0);
+`compact update 0.34.0` installs it from the stable line. The move off
+0.33.0-rc.2 changed no circuit: all 18 `.zkir` files and all 36 proving
+and verifying keys are byte-identical between the two compilers (only the
+version strings, a type-alias spelling in `contract-info.json` and the
+generated JavaScript differ).
+
+`npm run measure-k` reports (k, rows) per circuit from the compiled
+`.zkir` files, through the same pinned `zkir-v3`; it generates no keys.
+
+The localnet's indexer reads `infra/.env` (gitignored) and refuses to
+start without a wallet secret, so create it once:
+
+```sh
+echo 'APP__INFRA__SECRET=303132333435363738393031323334353637383930313233343536373839303132' > infra/.env
+```
+
+The suites talk to the compose file's published ports by default and
+honour `MIDNIGHT_NODE_URL`, `INDEXER_URL`, `INDEXER_WS_URL` and
+`MIDNIGHT_PROOF_SERVER_URL` when a host needs different ones.
 
 ```sh
 npm install
 npm run compile                      # compact compile → contracts/managed/
+npm run measure-k                    # (k, rows) per circuit — measurement only
 (cd signer-rs && cargo build)        # the independent Rust signer
 (cd infra && docker compose -f docker-compose.yml -f docker-compose.macos.yml up -d)
 
 export WALLET_SEED=0000000000000000000000000000000000000000000000000000000000000001
 export WALLET_SEED_SECONDARY=0000000000000000000000000000000000000000000000000000000000000002
 
-# Offline (no localnet needed; both suites run BOTH arms)
+# Offline (no localnet needed; both suites run all THREE arms)
 npm run test:unit                    # signer pipelines, codec, domain separation
-npx tsx src/tests/crossimpl-offline.ts  # Rust challenge bit-exactness per arm
+npm run test:crossimpl-offline       # Rust challenge bit-exactness per arm
+
+# Offline, arm `evm`: the frozen EIP-712 byte contract
+npm run fixtures:evm -- --check      # the 63 vectors regenerate byte-identically
+npm run test:eip712-evm              # ethers ALONE reproduces every digest (SC-006)
+npm run test:eip712-oracles          # the contract's pure circuits match the vectors
+npm run deploy-budget                # what each operation set costs to deploy
 
 # On-node, running on the v9 localnet (shielded flows and coinless calls)
-npm run test:auth-coinless           # BOTH seams on-node + cross-arm enrolment + tamper aborts
+npm run test:auth-coinless           # the jubjub and k256 seams + cross-arm enrolment + tamper aborts
+npm run test:evm-auth-coinless       # the evm seam on an EVM-born account: the full rejection matrix
 npm run test:custody-shielded        # MIP-0012 tests 1, 2, 3
+npm run test:evm-custody-shielded    # MIP-0012 tests 1, 2, 3 on an EVM-only account
 npm run test:custody-discovery      # MIP-0012 test 4
 npm run test:custody-payments        # MIP-0012 tests 7, 8
 npm run test:leak-audit              # MIP-0012 test 5
+npm run test:evm-deploy              # an EVM-only account: two-wave deploy + activation
 
 # On-node, currently BLOCKED by the localnet fee limit (see below):
 # every flow that carries an unshielded offer in a contract call.
@@ -219,11 +316,49 @@ single-arm account); wave 2 adds the other arm's 8 verifier keys in one
 batched `MaintenanceUpdate`, hand-built against the ledger API and signed
 with the maintenance authority key the deploy stored locally.
 
+With the third arm the contract exports **26** impure circuits and no
+account carries them all (26 keys price at 82,654 bytes written). Each
+account deploys the subset its devices need, and the client is built for
+that same subset — `compiledAccountContract(['evm'])`, see
+`contractForArms`: `findDeployedContract` verifies every circuit the
+compiled contract declares, so an unrestricted client cannot connect to
+any real account.
+
+**A second, sharper limit, measured on 2026-09-16** (node
+2.1.0-2e92c4ae642c, live localnet parameters). The `evm` arm's verifier
+keys are 3,321 bytes each (k=18) against `k256`'s 2,745 and `jubjub`'s
+2,313, and the node refuses an EVM-only ten-operation deploy —
+`Invalid Transaction: Transaction would exhaust the block limits` —
+although `feesWithMargin` prices it happily:
+
+| set | ops | tx bytes | block usage | bytes written | fee computation | node |
+|---|---|---|---|---|---|---|
+| jubjub | 10 | 23,522 | 23,449 | 28,289 | priced | accepted |
+| evm | 8 | 24,768 | 24,695 | 28,333 | priced | accepted |
+| k256 | 10 | 26,923 | 26,850 | 30,704 | priced | accepted |
+| evm | 9 | 28,144 | 28,071 | 31,817 | priced | **refused** |
+| evm | 10 | 31,543 | 31,470 | 35,817 | priced | **refused** |
+| evm + jubjub | 18 | 50,664 | 50,591 | 58,267 | **refused** | — |
+| all three arms | 26 | 73,173 | 73,100 | 82,654 | **refused** | — |
+
+So an EVM-only account deploys in two waves like every other: five of
+the arm's seven gated circuits in wave 1, the other two in the same
+maintenance update that retires the authority
+(`EVM_GATED_IN_WAVE_ONE`). The figures above price the UNBALANCED
+deploy; the node prices what the wallet submits — deploy plus funding
+offer plus dust actions — which is why the client-side number is a lower
+bound and cannot tell you a deploy will land. Second upstream-report
+item, alongside the parameter mismatch above.
+
+`npm run deploy-budget` reproduces the table offline, and
+`npm run test:evm-deploy` performs the deploy and activation on a
+localnet.
+
 Not through midnight-js's published circuit maintenance interface, for two
-reasons. It cannot produce a current key: compact-js 2.5.5-rc.6 hardcodes
-`ContractOperationVersion 'v3'`, whose raw keys carry the
-`midnight:verifier-key[v6]:` header, while compactc 0.33.0-rc.2 emits
-v7-headed keys (tag `'v4'`), so `insertVerifierKey` throws before a
+reasons. It cannot produce a current key: compact-js still hardcodes
+`ContractOperationVersion 'v3'` (measured again on 2.5.5-rc.8), whose raw
+keys carry the `midnight:verifier-key[v6]:` header, while compactc 0.34.0
+emits v7-headed keys (tag `'v4'`), so `insertVerifierKey` throws before a
 transaction exists. And it is per-circuit, so it would cost 8 transactions
 where the ledger API takes all 8 inserts in one. **This is the third
 upstream finding on this branch** (recorded under "Ecosystem dependencies
@@ -300,24 +435,30 @@ TTL within ~10 s of build time is rejected as
 
 | Suite | MIP-0012 Testing | MIP-0013 Testing | Invariants exercised |
 |---|---|---|---|
-| `unit-offline` | — (client halves of §5.2–5.3, §6.4) | — | AUTH-3, AUTH-9, AUTH-10 at the hash level; S10 non-vacuity — **both arms** |
+| `unit-offline` | — (client halves of §5.2–5.3, §6.4) | — | AUTH-3, AUTH-9, AUTH-10 at the hash level; S10 non-vacuity — **all three arms** |
 | `auth-coinless` | — | coinless halves of 1, 2(a), 6, 10 | AUTH-1, AUTH-2, AUTH-5 (via S13), AUTH-9 (entry roll under a second key), S12, S13, §3 bootstrap, wave deploy — **both seams on-node, cross-arm enrolment in both directions, per-arm tamper aborts, both seam guards through their real attacks** |
 | `auth-conformance` | — | 1, 2, 5, 10 | AUTH-1, AUTH-2, AUTH-3, AUTH-8, AUTH-9 (wrong-counter fault), INV-7, §3 bootstrap |
 | `auth-lifecycle` | — | 6, 9 | AUTH-4, AUTH-5, AUTH-7, AUTH-9 (entry roll observed) |
 | `auth-replay` | — | 3, 4 | AUTH-3 (address and circuit binding) |
 | `auth-crossimpl` + `crossimpl-offline` | — | 7 | AUTH-4 (approval/proving separation) |
+| `evm-auth-coinless` | — | coinless halves of 1, 2, 3, 4, 6, 10 | the same set as `auth-coinless`, on an EVM-BORN account, plus FR-003 (a point that does not hash to the enrolled address is an unknown device) and SIG-4 (the high-S twin lands, its low-S original then cannot) |
 | `custody-shielded` | 1, 2, 3 | — | INV-1, INV-2, INV-3, INV-4, INV-5 |
+| `evm-custody-shielded` | 1, 2, 3 | — | the same, on an EVM-ONLY account: AUTH-10 under EIP-712 (the wallet sees colour, amount and recipient; the challenge pins the qualified coin it cannot) |
 | `custody-discovery` | 4 | — | INV-4, INV-5 |
 | `leak-audit` | 5 | — | INV-2 (with positive control) |
 | `custody-unshielded` | 6 | — | INV-8 |
 | `custody-payments` | 7, 8 | — | INV-6 (one-hop); direct-transfer mode |
 
-Arm coverage: `unit-offline`, `crossimpl-offline`, and `auth-coinless`
-exercise BOTH arms; the remaining on-node suites drive the k256 arm (the
-account they set up is k256-born), with the custody suites scheme-agnostic
-below the seam by construction. The jubjub arm's full funded conformance
-matrix predates the co-residency restructure on the trunk's history; its
-seam is re-proven on-node by `auth-coinless`.
+Arm coverage: `unit-offline` and `crossimpl-offline` exercise all THREE
+arms; `auth-coinless` drives the jubjub and k256 seams on-node and
+`evm-auth-coinless` the evm seam, each on an account born on its own arm,
+with cross-arm enrolment proven in both directions in both suites. The
+shielded custody matrix runs twice, once per ECDSA-family arm
+(`custody-shielded`, `evm-custody-shielded`); the remaining on-node suites
+drive the k256 arm, with the custody chips scheme-agnostic below the seam
+by construction. The jubjub arm's full funded conformance matrix predates
+the co-residency restructure on the trunk's history; its seam is re-proven
+on-node by `auth-coinless`.
 
 Not covered here, by design:
 
@@ -512,9 +653,9 @@ To be folded back into the MIP texts:
   finalisation watch. Avoid on-chain calls for pure derivations; compute
   them client-side (`rawTokenType` for token colors).
 - **The published circuit-maintenance interface cannot insert a current
-  verifier key**: compact-js 2.5.5-rc.6 hardcodes
-  `ContractOperationVersion 'v3'` (v6-headed keys) while compactc
-  0.33.0-rc.2 emits v7-headed keys (tag `'v4'`), so
+  verifier key**: compact-js hardcodes `ContractOperationVersion 'v3'`
+  (v6-headed keys; still true at 2.5.5-rc.8) while compactc 0.34.0 emits
+  v7-headed keys (tag `'v4'`), so
   `CircuitMaintenanceTxInterface.insertVerifierKey` throws a header-tag
   mismatch before a transaction exists. A version-matrix gap between two
   published packages, not a misuse: nothing in the interface takes a
@@ -539,13 +680,309 @@ To be folded back into the MIP texts:
   the state it is amending and must pass a literal, which is why the
   wave-2 tag is pinned in source beside the toolchain pin.
 
+## What the `evm` arm costs, measured
+
+Every number here was produced by `npm run measure-k` and
+`npm run deploy-budget` on compactc 0.34.0 `--feature-zkir-v3`, and by
+submitting real transactions to a node `2.1.0-2e92c4ae642c` localnet. They
+are the arm's limits, and they are the reason for the two-wave deploy.
+
+| gated circuit | `evm` k / rows | prover key | `k256` twin k / rows | prover key |
+|---|---|---|---|---|
+| `withdraw_shielded_to_contract` | 18 / 188,532 | 570 MB | 17 / 80,290 | 235 MB |
+| `withdraw_shielded` | 18 / 182,809 | 570 MB | 17 / 74,587 | 235 MB |
+| `withdraw_unshielded` | 18 / 161,623 | 570 MB | 16 / 61,003 | 117 MB |
+| `append_inbox` | 18 / 160,236 | 570 MB | 16 / 64,924 | 117 MB |
+| `remove_device` | 18 / 151,466 | 570 MB | 16 / 65,404 | 117 MB |
+| `add_device` | 18 / 147,648 | 570 MB | 16 / 58,897 | 117 MB |
+| `rotate_enc_key` | 18 / 147,602 | 570 MB | 16 / 58,851 | 117 MB |
+| `activate_initial_device` | 16 / 40,282 | 143 MB | 14 / 14,094 | 29 MB |
+
+Verifier keys: `evm` 3,321 bytes, `k256` 2,745, `jubjub` 2,313. The largest
+`evm` circuit uses 72 % of the k=18 domain, so there is headroom but not a
+size class of it.
+
+**Where the premium goes.** Throwaway single-circuit probes on the same
+compiler: ECDSA verify plus `secp256k1EthereumAddress` is 60,288 rows
+(k=16); adding the domain separator and the 66-byte digest takes it to
+95,546 (k=17); adding the 256-byte struct hash takes it to 136,772 (k=18).
+The EIP-712 layer costs about 76,500 rows, of which about 28,300 recompute a
+domain separator that is constant for the whole deployment. Caching that in
+a ledger cell was measured and rejected: it moves only the three cheapest
+circuits to k=17 and would spend one of the very few deploy-budget slots
+the node allows.
+
+**The readable fields are not the expensive part.** Replacing
+`RotateEncKey`'s six-word struct with the minimal wrapper
+`MidnightAccountAuth(bytes32 account,string action,bytes32 challenge,uint64 authNonce)`
+— a scratch build, never committed — measures **135,943 rows against
+147,602**: 7.9 % saved, and still k=18. keccak-256 absorbs 136 bytes per
+permutation, so a 160-byte, a 192-byte and even the withdraw types'
+256-byte preimage are all TWO permutations; the readable colour, amount and
+recipient a wallet displays cost no extra keccak at all. The premium is the
+ECDSA-and-keccak layer as a whole, not the readability.
+
+**Deploy.** The ten-operation EVM-only set prices at 31,543 transaction
+bytes / 35,817 bytes written, well under the parameters' 50,000 budget, and
+`feesWithMargin` accepts it — but the node refuses it. The measured ceiling
+is eight operations (nine are refused with `1010: Transaction would exhaust
+the block limits`), so an EVM-only account deploys in two waves:
+
+| wave | operations |
+|---|---|
+| 1 | `deposit_unshielded`, `deposit_shielded`, `activate_initial_device_with_evm`, `withdraw_unshielded_with_evm`, `append_inbox_with_evm`, `withdraw_shielded_with_evm`, `withdraw_shielded_to_contract_with_evm`, `rotate_enc_key_with_evm` |
+| 2 | `add_device_with_evm`, `remove_device_with_evm`, in the maintenance update that retires the authority |
+
+Everything needed to receive, spend and re-key is live after wave 1; only
+enrolling or removing a device waits for wave 2. `EVM_GATED_IN_WAVE_ONE` in
+`src/wallet/wave-deploy.ts` carries the constant and the measured table.
+
+An EVM-born account that also wants the jubjub arm — what
+`evm-auth-coinless` deploys, so the cross-arm matrix can run in both
+directions — puts **ten** verifier keys in the wave-2 update (the jubjub
+arm's eight plus the evm overflow's two, 25,146 bytes of key material) and
+lands: a maintenance update is priced differently from a deploy, so the
+wall Q28 measured for deploys is not the wall for updates. Eighteen
+operations on one account, eight of them deployed and ten inserted.
+
+Proving cost, measured on this stack: a gated `evm` circuit takes the proof
+server to about **7.9 GB of RSS** at k=18, against about 1 GB idle. That is
+the number to plan a browser prover or a shared CI host around, more than
+the 570 MB key on disk.
+That the client-side fee computation accepts a set the node refuses is an
+upstream-report item in its own right: the client number is a lower bound,
+because the node prices the balanced transaction (deploy plus funding offer
+plus dust actions) and the client prices the deploy alone.
+
+## The ERC20 bridge: shielded tokens from an EVM chain
+
+An account can hold an ERC20 from an Ethereum chain as an ordinary shielded coin, by
+cross-contract call to the witness-free vault fork in `contracts/erc20-vault/` (project
+00034 PR-F), which reaches Sig Network's Signet MPC through their singleton contract. The
+account is the transaction ROOT of every call in both directions:
+
+```
+account (per user)  --C2C-->  ERC20 vault (one per stack/chain)  --C2C-->  Signet singleton
+      ^                              |
+      |  receiveShielded(minted)     |  mintShieldedToken(..., recipient = the account)
+      +------------------------------+
+```
+
+Five circuits, two device-gated and three permissionless:
+
+| Circuit | Gate | k | rows | What it does |
+|---|---|---|---|---|
+| `bridge_deposit_start_with_evm` | device (EIP-712 `BridgeDepositStart`) | 18 | 197,103 | asks the MPC to sweep the ERC20 from the user's derived deposit address into the vault |
+| `bridge_deposit_complete` | the MPC's attestation, verified inside the vault | 13 | 7,310 | the vault mints, this account claims the coin and files its inbox entry |
+| `bridge_withdraw_start_with_evm` | device (EIP-712 `BridgeWithdrawStart`) | 18 | 235,386 | sends the coin to the vault, which claims it and asks the MPC for `transfer(dest, amount)` |
+| `bridge_withdraw_complete` | the attestation | 13 | 7,310 | closes the request, or claims the re-mint of a transfer that returned false |
+| `bridge_withdraw_refund` | the attestation | 13 | 7,259 | claims the re-mint of a transfer that never executed |
+
+**Why the asymmetry.** A start is gated because the EVM transaction parameters it signs
+spend GAS from an MPC-derived Ethereum account — the user's own deposit address on the way
+in, the vault's on the way out — and a relayer free to choose them could drain it. The
+bridged VALUE needs no signature to be safe: the recipient is pinned to `kernel.self()`
+inside the circuit and no argument can move it. A settle is therefore permissionless, which
+is what lets a relayer finish a round trip its owner started.
+
+**Two Midnight transactions per direction, and that cannot be collapsed.** Nothing on
+Midnight can wait for an Ethereum transaction inside one proof. Between the two, the
+request is visible in the vault's public ledger state (`AccountBridge.pendingRequests`), and
+a console should show the pending state there.
+
+### The rules a caller must respect
+
+1. **Deploy the vault first, and freeze it.** The compiler embeds a fingerprint of every
+   callee circuit's verifier key in this contract's own operations, and the runtime compares
+   it against the deployed vault (`ContractInterfaceMismatchError`). A vault redeploy with
+   different keys orphans the bridge circuits of every account already compiled against it.
+   The order is vault → `initialise` → accounts, and every account deploy receipt records the
+   vault's address and artefact fingerprint (`contracts/erc20-vault/deploy/artefacts.ts`).
+2. **The vault's own Ethereum account needs ETH.** A withdrawal is paid out of the vault's
+   derived address (`AccountBridge.vaultEvmAddress()`), and the MPC signs a transaction from
+   it; with no gas there, nothing executes and every withdrawal ends in the refund path.
+3. **The surrendered coin is locked, not burned.** The vault claims a withdrawn coin and
+   creates no output, because a callee may not pay a wallet key — see the vault's README and
+   question Q24. The economics are a burn's; an explorer shows the vault holding the value.
+4. **A bridge account carries five more operations, and they ride wave 2.** Wave 1 stays at
+   the eight the node accepts; `bridgeWaves()` in `src/wallet/bridge.ts` produces the split
+   and `contractForBridgeAccount()` the matching client contract. The offer circuit is opt-in
+   on the same update — `bridgeWaves({ withSwap: true })`, eight verifier keys instead of
+   seven (question Q35) — so an account that will never post an offer does not pay for its
+   key. Measured on a node: the 8 + 7 split deploys and activates in 65.5 s, and every bridge
+   circuit is callable immediately afterwards.
+5. **A gated call's shielded legs land in the call's own FALLIBLE segment, not in segment 0**
+   (question Q39, PR-B's finding on the offer circuit; `bridge_withdraw_start_with_evm`
+   inherits it — its `sendShielded` to the vault is such a leg). Nothing in this client
+   assumes otherwise: it submits through `callTx` and the wallet balances what it built. A
+   consumer that INSPECTS a built transaction — an offer exporter, a taker, a fee sponsor —
+   must read the segment from the transaction rather than assume a number.
+
+### The relayer
+
+Between a start and its settle, somebody has to put the MPC's signed transaction on the
+Ethereum chain. That somebody is untrusted: it can censor a request, and it cannot forge
+one, because the settle circuits verify the attestation in-circuit against the response key
+the vault pinned at `initialise`. `AccountBridge.relay()` is the whole loop — poll the
+singleton's events for a signature that recovers to the expected derived sender, broadcast,
+then poll until an attestation verifies over a recomputed output — and it is
+`contracts/erc20-vault/src/relayer.ts`, shared with the vault's own end-to-end driver.
+
+### The one argument the signature does not cover
+
+`bridge_withdraw_start_with_evm` takes a `change_entry`, and the challenge deliberately does
+not bind it (question Q46). The nonce the standard library gives the change coin of a
+`sendShielded` is not derivable before the call, so a client learns it by executing the call
+locally first — with the signature it already holds, which is only possible while the entry
+is unbound. A caller that will not do that passes 192 zero bytes and re-files later with
+`append_inbox_with_evm`. A wrong entry strands DISCOVERY of the change coin; the coin itself
+is created and spendable either way.
+
+### Running it
+
+```sh
+# offline: the whole three-contract tree in the compact-runtime simulator
+npm run test:bridge-offline
+
+# offline: every entry point in the exports map loads from dist/, `./bridge` included
+npm run test:exports
+
+# on a localnet with the fakenet MPC responder and a local EVM chain
+./run-g4.sh all          # compile + up + e2e + down  (claim the host's stack first)
+```
+
+**Compiling while a suite runs will break the suite.** `npm run compile` deletes and rewrites
+`contracts/managed/<target>/`, and a midnight-js provider looks a prover key up from there
+PER CALL — so a recompile started mid-run kills it several minutes in with `ENOENT …
+<circuit>.prover`, and nothing about the failure points at the real cause (question Q37). On
+a machine where two things run at once, point the long run at an immutable snapshot:
+
+```sh
+cp -R contracts/managed /tmp/managed-snapshot
+MIDNIGHT_MANAGED_PATH=/tmp/managed-snapshot npm run test:bridge-e2e
+```
+
+The bridge adds a second reason to be careful: `contracts/managed/{Erc20Vault,SignetSigner}`
+are directories of symlinks into the vault package's own `managed/` (`scripts/link-callees.sh`,
+run by `npm run compile`), so recompiling the VAULT moves the ground under the account too.
+
+The package exports the client as `./bridge`. Publishing it needs one build step nothing else
+needs (`scripts/bundle-signet-sdk.mjs`): the Signet SDK cannot be imported by package name on
+this runtime, so the vault's shim reaches its modules by file path, and that path has to exist
+inside `dist/` too (question Q47). `npm run test:exports` is what keeps that honest.
+
+`npm run test:bridge-offline` runs the account, the vault and the singleton in-process:
+both round trips, both refund paths and the negatives, with no node and no proving. It also
+links the two packages' Compact runtimes (`scripts/link-runtime.sh`), without which a
+cross-contract call in the simulator fails on WASM class identity rather than on anything
+about the contracts.
+
 ## Client-library notes
 
-- Clients maintain a device roster (public key → use counter) per
+### Using the package
+
+Two entry points, and the difference is not cosmetic:
+
+```ts
+import { EvmDevice, deployEvmAccount, depositAsThirdParty } from 'midnight-account-custody';
+import { CONFIG, createWallet, createProviders } from 'midnight-account-custody/node';
+import { saveAccount, loadAccountRoster } from 'midnight-account-custody/node/roster';
+import { buildOpenSwapOffer, encodeEnvelope } from 'midnight-account-custody/offer';
+```
+
+* **`.`** is the full surface. In a browser a bundler resolves it to
+  **`./browser`** through the `browser` condition, because the full one
+  re-exports Passport's reference InboxEntry codec (`src/wallet/inbox.ts`) and
+  its `discovery.ts` walk, both of which import `node:crypto` — and a bundler's
+  browser shim for that module throws on the first property access. The browser
+  entry exports the same 192-byte container through `sealEntryPortable` /
+  `openEntryPortable` / `inboxWalkPortable` (`@noble` + WebCrypto), and the
+  offline suite walks the import graph on every run so the split cannot rot.
+* **`./node`** is the wallet, the providers and the network configuration; it is
+  Node-only by construction (wallet SDK, `ws`, `node:fs`).
+* **`./node/roster`** persists what the chain does not hold: the account
+  ADDRESS (a Passport account is its own contract, so nothing enumerates
+  accounts by owner) and the S11 use counters.
+* **`./offer`** is the open-swap builder and the 00006 envelope.
+
+`docs/CLIENT-API.md` maps every function to the job it performs for the AA
+console, and lists the console jobs that have no counterpart here.
+
+### Networks
+
+`MIDNIGHT_NETWORK` selects `local` (the compose file's ports) or `stagenet`
+(the public indexer and RPC, with proving still LOCAL — there is no hosted
+proof server). Every endpoint is overridable per service — `INDEXER_URL`,
+`INDEXER_WS_URL`, `MIDNIGHT_NODE_URL`, `MIDNIGHT_PROOF_SERVER_URL` — as is the
+network id itself (`MIDNIGHT_NETWORK_ID`), and `MIDNIGHT_MANAGED_PATH` points a
+long run at an immutable snapshot of `contracts/managed` so a concurrent
+recompile cannot kill it mid-proof.
+
+### Depositing into somebody else's account
+
+`depositAsThirdParty(account, coin)` is the permissionless half of MIP-0012
+§6.2 as one call: it reads the account's advertised `enc_key` off the chain,
+seals the coin description into a 192-byte entry for it, and calls
+`deposit_shielded`. The depositor needs nothing secret and learns nothing; the
+owner finds the coin by walking the inbox. This is how a console funds a user's
+account, and how a second wallet pays one.
+
+### Paying somebody who is not paying the fee
+
+`withdrawShielded` covers the ordinary case, because midnight-js attaches the
+coin's ciphertext for the balancing wallet automatically. A THIRD-PARTY
+recipient needs their encryption key mapped explicitly, which `callTx` cannot
+carry — `withdrawShieldedToWallet(device, coinPk, colour, amount, keys)` does it
+through `createUnprovenCallTx` + prove + balance + submit. Implemented in
+PR-C/C1 and **not yet exercised on-node**; see the questions file (Q42).
+
+### In a browser
+
+`browser-smoke/` is a page that imports the BUILT library, injects a
+deterministic EIP-1193 wallet, and runs register → deposit → withdraw against a
+localnet under headless Chromium. It measured the split a browser forces today:
+the page does every client-side step (the challenge, the EIP-712 message, the
+wallet prompt, the signature, the point recovery, the inbox entry, the circuit
+arguments), and a sidecar pays the DUST fee and submits, because a page holds no
+Midnight wallet. One EIP-191 prompt at enrolment and one typed-data prompt per
+call is the whole wallet interaction — measured, `["eth_requestAccounts",
+"personal_sign", "eth_signTypedData_v4"]` for a full deploy-deposit-withdraw
+session.
+
+
+- **The `evm` arm's client is `EvmDevice`** (`src/wallet/signer.ts`). It is
+  built from a raw key (offline checks), an ethers wallet (suites) or an
+  EIP-1193 provider (browsers) through one small backend interface, so
+  `ethers` stays a devDependency and never enters the library's import
+  graph. A device knows only its **20-byte address** until it signs: the
+  entry, the boot commitment, the challenge and the EIP-712 `owner` field
+  all take the address, and the public point the circuits need is
+  **recovered from the device's own signature** and cached. An ordinary call
+  therefore costs exactly one wallet prompt and no wallet ever has to expose
+  a public key.
+- **One prompt is needed before the first call**, and only for browser
+  wallets: `activate_initial_device_with_evm` is permissionless, so it
+  carries a point and no signature. `device.enrol()` covers it — free for a
+  backend that publishes its verifying key, otherwise one EIP-191
+  `personal_sign` whose text names no operation and moves no funds. That
+  message is **not** part of the byte contract; no circuit ever verifies it.
+- **A call is described once, not twice.** `CustodyAccount` builds one
+  arm-independent `AuthRequest` and hands it to `authorise(device, ctx,
+  request, counter)`. On the `evm` arm that one object yields both the
+  challenge the circuit binds and the readable EIP-712 message the wallet
+  displays, which is what makes "the wallet shows what executes" a property
+  of the code rather than a convention. `CallContext` also carries the
+  account's sealed `evm_domain_salt`, read from the same ledger state the
+  nonce comes from.
+- Clients maintain a device roster (device → use counter) per
   MIP-0013 S11: the rolling entry consumed by each call is
-  `persistentHash([DST_DEVICE, self, pk, epoch, use_counter])`, and an
-  unknown or stale counter is recovered by probing ledger membership of
-  candidate entries (`CustodyAccount.resolveUseCounter`).
+  `persistentHash([DST_DEVICE, self, key, epoch, use_counter])` — with
+  `key` the affine coordinates on the jubjub and k256 arms and the 20-byte
+  Ethereum address on the `evm` arm — and an unknown or stale counter is
+  recovered by probing ledger membership of candidate entries
+  (`CustodyAccount.resolveUseCounter`). **The counter is client state**: the
+  chain holds only the current entry, never the position, so a client that
+  loses its roster recovers by rescan and never by reading it back.
 - For witness-consuming circuits the approver signs over the exact
   qualified coin the spend will consume (AUTH-10); the client pipeline
   hands the witness values to the signer, and a candidate `mt_index`

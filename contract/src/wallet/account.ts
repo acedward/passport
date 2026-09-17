@@ -2,24 +2,72 @@
 // contract (MIP-0012 asset surface + MIP-0013 authorisation seam).
 //
 // The contract exports every gated operation once per authorisation arm
-// (`<operation>_with_jubjub`, `<operation>_with_k256`); this client is
-// arm-generic: a call takes any device, builds the challenge with that
-// device's arm's builders, and targets the arm's circuit. Every authorised
-// call follows the same shape: read the live auth_nonce, resolve the
-// device's current use counter (the rolling-entry position, AUTH-9),
-// collect the witness values the call will consume (AUTH-10), build the
-// per-circuit challenge, have the device sign it, and pass the arm's
-// authorising material as the circuit's trailing arguments. Low-level
-// `*WithAuth` variants accept a pre-built Authorisation so conformance
-// tests can inject faults (wrong s, stale nonce, wrong counter, replays).
+// (`<operation>_with_jubjub`, `<operation>_with_k256`, `<operation>_with_evm`);
+// this client is arm-generic: a call takes any device, describes itself as one
+// arm-independent `AuthRequest`, and `authorise` (signer.ts) turns that into
+// the arm's own challenge — and, on the `evm` arm, into the EIP-712 message the
+// wallet displays. Every authorised call follows the same shape: read the live
+// auth_nonce (and the account's evm_domain_salt, which the `evm` arm's domain
+// needs), resolve the device's current use counter (the rolling-entry position,
+// AUTH-9), collect the witness values the call will consume (AUTH-10), build
+// the request, have the device sign it, and pass the arm's authorising material
+// as the circuit's trailing arguments. Low-level `*WithAuth` variants accept a
+// pre-built Authorisation so conformance tests can inject faults (wrong s,
+// stale nonce, wrong counter, replays).
 //
-// The client tracks a device roster (pk → use counter) per MIP-0013 S11:
+// The client tracks a device roster (device → use counter) per MIP-0013 S11:
 // counters advance on every successful gated call, and an unknown counter
-// is recovered by rescanning ledger membership of candidate entries.
+// is recovered by rescanning ledger membership of candidate entries. The
+// roster and the counter in it are CLIENT state, not ledger state — the chain
+// holds only the current entry, so a client that loses the counter recovers it
+// by rescan (`resolveUseCounter`) and never by reading it back.
 
 import { findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
+import { getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 
-import { deployAccountInWaves } from './wave-deploy.js';
+import { contractForArms, deployAccountInWaves } from './wave-deploy.js';
+import { evmDomainSaltFor } from './eip712.js';
+
+/** Deploy-time choices. `evmDomainSalt` is the `evm` arm's EIP-712 domain
+ *  (constructor-sealed); `armsInWaveTwo` overrides which arms the maintenance
+ *  update adds; `vaultAddress` is the ERC20 bridge vault this account binds
+ *  (also constructor-sealed). All default per the notes at their use sites. */
+export interface DeployOptions {
+  retireAuthority?: boolean;
+  evmDomainSalt?: Uint8Array;
+  armsInWaveTwo?: Arm[];
+  /**
+   * The ERC20 vault (project 00034 PR-G) this account may bridge through, as its
+   * contract address — hex string or the raw 32 bytes.
+   *
+   * It is sealed at construction and it goes into the constructor TWICE, as the
+   * callable contract reference and as the raw address a shielded send targets;
+   * the contract's `vault` cell explains why the language needs both. Passing one
+   * value here is what keeps them equal.
+   *
+   * The default is the zero address: an account with no bridge. That is not a
+   * placeholder to be fixed later — the binding is sealed — but it costs nothing,
+   * because the five bridge circuits are deployed only when asked for (they are
+   * wave-2 operations, see `src/wallet/bridge.ts`) and an account that does not
+   * carry them can never call the vault anyway.
+   */
+  vaultAddress?: Uint8Array | string;
+  /** The exact circuit ids each wave deploys, when the caller knows better than the
+   *  defaults — a bridge account names them from `bridge.ts`'s `bridgeWaves()`, because
+   *  the five bridge operations are not in `wave-deploy.ts`'s lists (question Q39). */
+  waveOneCircuits?: string[];
+  waveTwoCircuits?: string[];
+}
+
+/** A ContractAddress / contract-reference circuit argument: `{ bytes }`. */
+function contractArg(address?: Uint8Array | string): { bytes: Uint8Array } {
+  if (address === undefined) return { bytes: new Uint8Array(32) };
+  const bytes = typeof address === 'string' ? addressToBytes(address) : Uint8Array.from(address);
+  if (bytes.length !== 32) {
+    throw new RangeError(`a contract address is 32 bytes, got ${bytes.length}`);
+  }
+  return { bytes };
+}
 
 import { ledger, type Ledger, type ShieldedCoin, type QualifiedCoin } from './contract.js';
 import {
@@ -30,10 +78,14 @@ import {
 } from './witnesses.js';
 import { bytesToHex, hexToBytes } from './hex.js';
 import {
-  jubjubChallenges,
-  k256Challenges,
   authArgs,
+  activationArgs,
+  authorise,
+  deviceRosterKey,
+  ensureEnrolled,
+  pointRosterKey,
   type AnyDevice,
+  type Arm,
   type Authorisation,
   type CallContext,
 } from './signer.js';
@@ -110,6 +162,10 @@ export class CustodyAccount {
     readonly providers: any,
     readonly privateStateId: string,
     private readonly handle: any,
+    /** The compiled contract this client was built with. Kept because the
+     *  manual build/prove/balance/submit path (`withdrawShieldedToWallet`)
+     *  needs it — `callTx` hides it, `createUnprovenCallTx` requires it. */
+    private readonly compiled: any = null,
   ) {}
 
   static async deploy(
@@ -118,7 +174,7 @@ export class CustodyAccount {
     initialDevice: AnyDevice,
     encKeys: EncKeyPair,
     /** See wave-deploy's authority note; the default retires it. */
-    opts?: { retireAuthority?: boolean },
+    opts?: DeployOptions,
   ): Promise<CustodyAccount> {
     const dormant = await CustodyAccount.deployDormant(
       providers, compiledContract, initialDevice, encKeys, opts,
@@ -141,7 +197,7 @@ export class CustodyAccount {
     compiledContract: any,
     initialDevice: AnyDevice,
     encKeys: EncKeyPair,
-    opts?: { retireAuthority?: boolean },
+    opts?: DeployOptions,
   ): Promise<{
     address: string;
     salt: Uint8Array;
@@ -161,12 +217,29 @@ export class CustodyAccount {
     // The 18-operation deploy exceeds per-block limits, so the account
     // deploys in waves: the initial device's arm first, the other arm's
     // verifier keys by maintenance update (see wave-deploy.ts).
+    // The `evm` arm's EIP-712 domain salt (sealed at construction). The default
+    // is the network's recommended value; a deployer that wants a per-account
+    // domain passes its own 32 bytes. It is public and carries no secret, and
+    // an account whose devices are all jubjub or k256 never reads it.
+    const evmDomainSalt = opts?.evmDomainSalt ?? evmDomainSaltFor(String(getNetworkId()));
+    // The vault binding (PR-G): one address, two constructor arguments — the callable
+    // `Erc20Vault` reference and the raw `ContractAddress` a `sendShielded` targets.
+    // Compact has no cast between the two, so they are named twice and derived once.
+    const vaultRef = contractArg(opts?.vaultAddress);
     const address = await deployAccountInWaves(providers, compiledContract, {
       firstArm: initialDevice.arm,
-      args: [boot, encKeys.publicKey],
+      args: accountConstructorArgs({
+        bootCommitment: boot,
+        encryptionPublicKey: encKeys.publicKey,
+        evmDomainSalt,
+        vaultAddress: vaultRef.bytes,
+      }),
       privateStateId,
       initialPrivateState,
       retireAuthority: opts?.retireAuthority,
+      armsInWaveTwo: opts?.armsInWaveTwo,
+      waveOneCircuits: opts?.waveOneCircuits,
+      waveTwoCircuits: opts?.waveTwoCircuits,
     });
     const found = await (findDeployedContract as any)(providers, {
       contractAddress: address,
@@ -177,22 +250,29 @@ export class CustodyAccount {
     return {
       address,
       salt,
-      activate: (device, s) => {
+      activate: async (device, s) => {
+        // Activation is permissionless: it carries the POINT and no signature,
+        // so an `evm` device that has never signed must reveal its point first
+        // (free for a backend that publishes its key; one EIP-191 signature
+        // otherwise). Every other call recovers the point from its own
+        // signature and needs nothing here.
+        await ensureEnrolled(device);
         const name = `activate_initial_device_with_${device.arm}`;
-        return submitWithDustRetry(name, () => (found as any).callTx[name](device.pk, s));
+        return submitWithDustRetry(name, () => (found as any).callTx[name](...activationArgs(device, s)));
       },
       finish: () => {
-        const account = new CustodyAccount(address, addressToBytes(address), providers, privateStateId, found);
-        account.counters.set(pkKey(initialDevice.pk), 0n);
+        const account = new CustodyAccount(address, addressToBytes(address), providers, privateStateId, found, compiledContract);
+        account.counters.set(deviceRosterKey(initialDevice), 0n);
         return account;
       },
     };
   }
 
   /** Low-level activation call against a live account (bootstrap probes). */
-  activateInitialDevice(device: AnyDevice, salt: Uint8Array): Promise<unknown> {
+  async activateInitialDevice(device: AnyDevice, salt: Uint8Array): Promise<unknown> {
+    await ensureEnrolled(device);
     const name = `activate_initial_device_with_${device.arm}`;
-    return submitWithDustRetry(name, () => this.handle.callTx[name](device.pk, salt));
+    return submitWithDustRetry(name, () => this.handle.callTx[name](...activationArgs(device, salt)));
   }
 
   static async connect(
@@ -208,7 +288,7 @@ export class CustodyAccount {
       privateStateId,
       initialPrivateState: initialState,
     });
-    return new CustodyAccount(address, addressToBytes(address), providers, privateStateId, found);
+    return new CustodyAccount(address, addressToBytes(address), providers, privateStateId, found, compiledContract);
   }
 
   // ── Ledger reads ──────────────────────────────────────────────────────────
@@ -219,10 +299,18 @@ export class CustodyAccount {
     return ledger(state.data);
   }
 
-  /** The signing context for the next authorised call (MIP-0013 §5.1). */
+  /** The signing context for the next authorised call (MIP-0013 §5.1). The
+   *  `evm` arm's EIP-712 domain also binds the account's sealed
+   *  `evm_domain_salt`, so it is read here rather than passed around: it is
+   *  public, constant for the account's lifetime, and already on the state
+   *  this call reads anyway. */
   async callContext(): Promise<CallContext> {
     const l = await this.ledgerState();
-    return { contractAddress: this.addressBytes, authNonce: l.auth_nonce };
+    return {
+      contractAddress: this.addressBytes,
+      authNonce: l.auth_nonce,
+      evmDomainSalt: l.evm_domain_salt,
+    };
   }
 
   // ── Device roster (MIP-0013 S11) ──────────────────────────────────────────
@@ -236,28 +324,76 @@ export class CustodyAccount {
    */
   async resolveUseCounter(device: AnyDevice): Promise<bigint> {
     const l = await this.ledgerState();
-    const known = this.counters.get(pkKey(device.pk));
-    if (known !== undefined) {
-      const entry = device.entryAt(this.addressBytes, l.device_epoch, known);
-      if (l.devices.member(entry)) return known;
+    const key = deviceRosterKey(device);
+    const found = findUseCounter({
+      devices: l.devices,
+      entryAt: (counter) => device.entryAt(this.addressBytes, l.device_epoch, counter),
+      known: this.counters.get(key),
+    });
+    if (found === null) {
+      throw new Error('device entry not found on-ledger (rescan limit reached) — not a registered device?');
     }
-    for (let k = known ?? 0n; k < (known ?? 0n) + RESCAN_LIMIT; k++) {
-      const entry = device.entryAt(this.addressBytes, l.device_epoch, k);
-      if (l.devices.member(entry)) {
-        this.counters.set(pkKey(device.pk), k);
-        return k;
-      }
-    }
-    throw new Error('device entry not found on-ledger (rescan limit reached) — not a registered device?');
+    this.counters.set(key, found);
+    return found;
   }
 
-  private advanceCounter(pk: { x: bigint; y: bigint }, used: bigint): void {
-    this.counters.set(pkKey(pk), used + 1n);
+  /**
+   * Forget what the roster believes about a device and rescan the ledger for
+   * its current entry (MIP-0013 S11).
+   *
+   * `resolveUseCounter` already self-heals when the remembered counter no
+   * longer matches a live entry, so this is for the case it cannot see: a
+   * roster that is AHEAD of the chain. That happens after an optimistic
+   * advance whose transaction never landed, or when a restored roster snapshot
+   * is newer than the state a fresh indexer has caught up to — the rescan only
+   * ever probes FORWARD from what it knows, so a stale-high counter would scan
+   * past every live entry and fail. Resetting first makes the scan authoritative.
+   */
+  async refreshCounter(device: AnyDevice): Promise<bigint> {
+    this.counters.delete(deviceRosterKey(device));
+    return this.resolveUseCounter(device);
   }
 
-  /** Record a freshly registered device (entry at use counter 0). */
+  /** The device roster as plain JSON — device key → use counter (S11 client
+   *  state). Persist it beside the account address and a restarted client
+   *  resumes without a full rescan; losing it costs a rescan, never funds. */
+  exportRoster(): RosterSnapshot {
+    return {
+      account: this.address,
+      counters: Object.fromEntries([...this.counters].map(([k, v]) => [k, v.toString()])),
+    };
+  }
+
+  /** Adopt a persisted roster. Entries are HINTS: every one of them is still
+   *  verified against ledger membership before it is used, so a stale or
+   *  hostile snapshot costs a rescan and cannot make a call. */
+  importRoster(snapshot: RosterSnapshot): void {
+    if (snapshot.account && snapshot.account !== this.address) {
+      throw new Error(
+        `this roster belongs to account ${snapshot.account}, not to ${this.address}`,
+      );
+    }
+    for (const [key, value] of Object.entries(snapshot.counters ?? {})) {
+      this.counters.set(key, BigInt(value));
+    }
+  }
+
+  private advanceCounterOf(device: AnyDevice, used: bigint): void {
+    this.counters.set(deviceRosterKey(device), used + 1n);
+  }
+
+  /** Record a freshly registered device by its public point (entry at use
+   *  counter 0). Kept for callers that hold a point and no device object —
+   *  the cross-implementation suite enrols a Rust-generated key this way. */
   registerDevice(pk: { x: bigint; y: bigint }): void {
-    this.counters.set(pkKey(pk), 0n);
+    this.counters.set(pointRosterKey(pk), 0n);
+  }
+
+  /** Record a freshly registered device (entry at use counter 0), keyed the
+   *  way that device's arm identifies itself — the `evm` arm by its address,
+   *  which is all a client knows before the device has ever signed. */
+  registerDeviceOf(device: AnyDevice): void {
+    this.counters.set(deviceRosterKey(device), 0n);
   }
 
   // ── Wallet-local coin store (MIP-0012 §6.5) ───────────────────────────────
@@ -313,11 +449,9 @@ export class CustodyAccount {
   ): Promise<TxResult> {
     const ctx = await this.callContext();
     const counter = await this.resolveUseCounter(device);
-    const auth = device.arm === 'jubjub'
-      ? device.sign(jubjubChallenges.withdrawUnshielded(ctx, device.pk, color, amount, recipient), counter)
-      : device.sign(k256Challenges.withdrawUnshielded(ctx, device.pk, color, amount, recipient), counter);
+    const auth = await authorise(device, ctx, { op: 'withdrawUnshielded', color, amount, recipient }, counter);
     const r = await this.withdrawUnshieldedWithAuth(color, amount, recipient, auth);
-    this.advanceCounter(device.pk, counter);
+    this.advanceCounterOf(device, counter);
     return r;
   }
 
@@ -332,11 +466,9 @@ export class CustodyAccount {
     // AUTH-10: the approver signs over the exact qualified coin the spend
     // will consume, read from the same store the witness serves.
     const coin = await this.heldCoin(color);
-    const auth = device.arm === 'jubjub'
-      ? device.sign(jubjubChallenges.withdrawShielded(ctx, device.pk, recipient, color, amount, coin), counter)
-      : device.sign(k256Challenges.withdrawShielded(ctx, device.pk, recipient, color, amount, coin), counter);
+    const auth = await authorise(device, ctx, { op: 'withdrawShielded', recipient, color, amount, coin }, counter);
     const r = await this.withdrawShieldedWithAuth(recipient, color, amount, auth);
-    this.advanceCounter(device.pk, counter);
+    this.advanceCounterOf(device, counter);
     return r;
   }
 
@@ -349,33 +481,107 @@ export class CustodyAccount {
     const ctx = await this.callContext();
     const counter = await this.resolveUseCounter(device);
     const coin = await this.heldCoin(color);
-    const auth = device.arm === 'jubjub'
-      ? device.sign(jubjubChallenges.withdrawShieldedToContract(ctx, device.pk, recipient, color, amount, coin), counter)
-      : device.sign(k256Challenges.withdrawShieldedToContract(ctx, device.pk, recipient, color, amount, coin), counter);
+    const auth = await authorise(device, ctx, { op: 'withdrawShieldedToContract', recipient, color, amount, coin }, counter);
     const r = await this.withdrawShieldedToContractWithAuth(recipient, color, amount, auth);
-    this.advanceCounter(device.pk, counter);
+    this.advanceCounterOf(device, counter);
     return r;
+  }
+
+  /**
+   * Pay a shielded coin to a recipient who is NOT the wallet paying the fee.
+   *
+   * `withdrawShielded` above is the ordinary path and covers the common case,
+   * because midnight-js attaches the coin's ciphertext for the balancing
+   * wallet automatically. A THIRD-PARTY recipient needs their encryption key
+   * mapped explicitly (`additionalCoinEncPublicKeyMappings`), and the `callTx`
+   * surface has no parameter for it — so this method builds the call, proves
+   * it, balances it and submits it by hand. The circuit, the challenge, the
+   * signature and the arguments are identical to `withdrawShielded`'s; only
+   * the transport differs (questions file, Q42).
+   *
+   * Without the mapping the transaction still lands and the coin still belongs
+   * to the recipient — they simply cannot SEE it, because nothing in the
+   * transaction is encrypted to them. That silent failure is why this exists.
+   *
+   * Implemented in PR-C/C1, exercised offline there, and first proven ON NODE by the
+   * local Test 3 rehearsal (sub-plan `00034-sub-s-stagenet-bridge.md`, phase S-L), which
+   * is where the `bind()` defect below was found and fixed.
+   */
+  async withdrawShieldedToWallet(
+    device: AnyDevice,
+    recipientCoinPublicKey: Uint8Array,
+    color: Uint8Array,
+    amount: bigint,
+    keys: { coinPublicKey: unknown; encryptionPublicKey: unknown },
+  ): Promise<SpendOutcome> {
+    if (!this.compiled) {
+      throw new Error(
+        'this account client was built without its compiled contract, which the '
+        + 'third-party-recipient path needs (use CustodyAccount.deploy/connect)',
+      );
+    }
+    const { createUnprovenCallTx } = await import('@midnight-ntwrk/midnight-js-contracts');
+    const ctx = await this.callContext();
+    const counter = await this.resolveUseCounter(device);
+    const coin = await this.heldCoin(color);
+    const auth = await authorise(
+      device, ctx, { op: 'withdrawShielded', recipient: recipientCoinPublicKey, color, amount, coin }, counter,
+    );
+    const name = `withdraw_shielded_with_${auth.arm}`;
+    const built: any = await (createUnprovenCallTx as any)(this.providers, {
+      compiledContract: this.compiled,
+      contractAddress: this.address,
+      circuitId: name,
+      args: [{ bytes: recipientCoinPublicKey }, color, amount, ...authArgs(auth)],
+      privateStateId: this.privateStateId,
+      additionalCoinEncPublicKeyMappings: new Map([[keys.coinPublicKey, keys.encryptionPublicKey]]),
+    });
+    // prove → balance → submit, in that order and with NOTHING in between.
+    //
+    // An earlier version of this method called `proven.bind()` before balancing, by analogy
+    // with the shapes the swap work builds by hand. That is wrong here and the on-node
+    // rehearsal of Test 3 (sub-plan phase S-L) is what found it: the wallet balances through
+    // `balanceUnboundTransaction`, so a transaction whose intent is already bound is refused
+    // with `Wallet.Transacting: Intent at segment <n> is already bound` — after a successful
+    // proof, which is why the failure reads like an unsatisfiable witness and is not one.
+    // midnight-js's own `submitTxCore` is exactly these three lines; this path differs from
+    // it only in passing `additionalCoinEncPublicKeyMappings`, so it must not differ here.
+    const result = await submitWithDustRetry(name, async () => {
+      const proven: any = await this.providers.proofProvider.proveTx(built.private.unprovenTx);
+      const balanced: any = await this.providers.walletProvider.balanceTx(proven);
+      const submitted: any = await this.providers.midnightProvider.submitTx(balanced);
+      return { balanced, submitted };
+    });
+    this.advanceCounterOf(device, counter);
+    const change = changeOf(built.private) ?? changeOf(built);
+    const balanced: any = result?.balanced;
+    const submitted: unknown = result?.submitted;
+    return {
+      txId: String(
+        (typeof submitted === 'string' ? submitted : (submitted as any)?.txId)
+        ?? balanced?.transactionHash?.()?.toString?.()
+        ?? balanced?.transactionHash
+        ?? '',
+      ),
+      change,
+    };
   }
 
   async appendInbox(device: AnyDevice, entry: Uint8Array): Promise<TxResult> {
     const ctx = await this.callContext();
     const counter = await this.resolveUseCounter(device);
-    const auth = device.arm === 'jubjub'
-      ? device.sign(jubjubChallenges.appendInbox(ctx, device.pk, entry), counter)
-      : device.sign(k256Challenges.appendInbox(ctx, device.pk, entry), counter);
+    const auth = await authorise(device, ctx, { op: 'appendInbox', entry }, counter);
     const r = await this.appendInboxWithAuth(entry, auth);
-    this.advanceCounter(device.pk, counter);
+    this.advanceCounterOf(device, counter);
     return r;
   }
 
   async rotateEncKey(device: AnyDevice, newKey: Uint8Array): Promise<TxResult> {
     const ctx = await this.callContext();
     const counter = await this.resolveUseCounter(device);
-    const auth = device.arm === 'jubjub'
-      ? device.sign(jubjubChallenges.rotateEncKey(ctx, device.pk, newKey), counter)
-      : device.sign(k256Challenges.rotateEncKey(ctx, device.pk, newKey), counter);
+    const auth = await authorise(device, ctx, { op: 'rotateEncKey', newKey }, counter);
     const r = await this.rotateEncKeyWithAuth(newKey, auth);
-    this.advanceCounter(device.pk, counter);
+    this.advanceCounterOf(device, counter);
     return r;
   }
 
@@ -390,7 +596,7 @@ export class CustodyAccount {
     const l = await this.ledgerState();
     const newEntry = newDevice.entryAt(this.addressBytes, l.device_epoch, 0n);
     const r = await this.addDeviceEntry(device, newEntry);
-    this.registerDevice(newDevice.pk);
+    this.registerDeviceOf(newDevice);
     return r;
   }
 
@@ -399,11 +605,9 @@ export class CustodyAccount {
   async addDeviceEntry(device: AnyDevice, newEntry: Uint8Array): Promise<TxResult> {
     const ctx = await this.callContext();
     const counter = await this.resolveUseCounter(device);
-    const auth = device.arm === 'jubjub'
-      ? device.sign(jubjubChallenges.addDevice(ctx, device.pk, newEntry), counter)
-      : device.sign(k256Challenges.addDevice(ctx, device.pk, newEntry), counter);
+    const auth = await authorise(device, ctx, { op: 'addDevice', newEntry }, counter);
     const r = await this.addDeviceWithAuth(newEntry, auth);
-    this.advanceCounter(device.pk, counter);
+    this.advanceCounterOf(device, counter);
     return r;
   }
 
@@ -420,11 +624,9 @@ export class CustodyAccount {
   async removeDeviceEntry(device: AnyDevice, entry: Uint8Array): Promise<TxResult> {
     const ctx = await this.callContext();
     const counter = await this.resolveUseCounter(device);
-    const auth = device.arm === 'jubjub'
-      ? device.sign(jubjubChallenges.removeDevice(ctx, device.pk, entry), counter)
-      : device.sign(k256Challenges.removeDevice(ctx, device.pk, entry), counter);
+    const auth = await authorise(device, ctx, { op: 'removeDevice', entry }, counter);
     const r = await this.removeDeviceEntryWithAuth(entry, auth);
-    this.advanceCounter(device.pk, counter);
+    this.advanceCounterOf(device, counter);
     return r;
   }
 
@@ -511,8 +713,110 @@ export class CustodyAccount {
   }
 }
 
-function pkKey(pk: { x: bigint; y: bigint }): string {
-  return `${pk.x.toString(16)}:${pk.y.toString(16)}`;
+
+
+/** A persisted device roster (S11 client state). Counters are decimal strings
+ *  so the snapshot is plain JSON — no BigInt serialisation trap. */
+export interface RosterSnapshot {
+  account: string;
+  counters: Record<string, string>;
+}
+
+/**
+ * The S11 rescan, as a pure function over a ledger's device set.
+ *
+ * The chain holds only a device's CURRENT rolling entry, never its position,
+ * so a client that does not know the counter recovers it by probing membership
+ * of the entries a device would have at successive counters. Extracted from
+ * `resolveUseCounter` so it can be tested against a device set directly —
+ * including the case that matters, a roster that has fallen behind the chain.
+ *
+ * Returns the counter, or null when no candidate within `limit` is a member.
+ */
+export function findUseCounter(o: {
+  devices: { member(entry: Uint8Array): boolean };
+  entryAt: (counter: bigint) => Uint8Array;
+  known?: bigint;
+  limit?: bigint;
+}): bigint | null {
+  const known = o.known ?? 0n;
+  const limit = o.limit ?? RESCAN_LIMIT;
+  if (o.known !== undefined && o.devices.member(o.entryAt(known))) return known;
+  for (let k = known; k < known + limit; k++) {
+    if (o.devices.member(o.entryAt(k))) return k;
+  }
+  return null;
+}
+
+/**
+ * The account contract's constructor arguments, in its declared order.
+ *
+ * One place, because a wrong ORDER here is undetectable until an account is
+ * deployed and unusable: the three 32-byte values are indistinguishable to the
+ * type checker, and a boot commitment stored as the encryption key produces an
+ * account nobody can activate and nobody can deposit into.
+ *
+ * (PR-G's bridge seals a vault binding as two further arguments — the callable
+ * reference and the raw address; when that lands, this function gains them and
+ * stays the one place they are assembled.)
+ */
+export function accountConstructorArgs(o: {
+  bootCommitment: Uint8Array;
+  encryptionPublicKey: Uint8Array;
+  evmDomainSalt: Uint8Array;
+  /** The ERC20 bridge vault's contract address (PR-G). It goes in TWICE — as the
+   *  callable `Erc20Vault` reference and as the raw `ContractAddress` a shielded
+   *  send targets — because Compact has no cast between the two. Passing one value
+   *  here is what keeps them equal. Omitted means the zero address: an account with
+   *  no bridge, which is exactly what an account that never carries the five bridge
+   *  circuits wants. */
+  vaultAddress?: Uint8Array;
+}): unknown[] {
+  if (o.bootCommitment.length !== 32) throw new RangeError('boot commitment must be 32 bytes');
+  if (o.encryptionPublicKey.length !== 32) throw new RangeError('encryption key must be 32 bytes');
+  if (o.evmDomainSalt.length !== 32) throw new RangeError('evm domain salt must be 32 bytes');
+  const vault = o.vaultAddress ?? new Uint8Array(32);
+  if (vault.length !== 32) throw new RangeError('vault address must be 32 bytes');
+  return [
+    o.bootCommitment, o.encryptionPublicKey, o.evmDomainSalt,
+    { bytes: vault }, { bytes: Uint8Array.from(vault) },
+  ];
+}
+
+/** Everything `deployEvmAccount` needs. `compiledContract` defaults to the
+ *  contract restricted to the `evm` arm, which is what makes the client's
+ *  verifier-key check match what the two waves actually deployed. */
+export interface EvmAccountDeployOptions extends DeployOptions {
+  providers: any;
+  device: AnyDevice;
+  encKeys: EncKeyPair;
+  compiledContract?: any;
+  /** Extra circuit ids for either wave — how PR-B's offer and PR-G's bridge
+   *  reach an account without every account paying for them (Q35, Q39). */
+  waveOneCircuits?: string[];
+  waveTwoCircuits?: string[];
+}
+
+/**
+ * Deploy and activate an account whose device is an Ethereum wallet — the AA
+ * console's `register` job, as one call.
+ *
+ * What it does, and what an integrator has to know it does:
+ *   1. builds the client against `contractForArms(['evm'])`, so the local
+ *      verifier keys match the operations the waves actually insert;
+ *   2. wave 1 — the eight operations the node accepts (Q28's measured ceiling);
+ *   3. `enrol()` if needed (one EIP-191 signature for a browser wallet, free
+ *      for a backend that publishes its key) and `activate_initial_device_with_evm`;
+ *   4. wave 2 — the device-lifecycle pair, and the maintenance authority retired.
+ *
+ * That is THREE transactions and minutes of proving, not one call: the account
+ * id an integrator gets back is the contract address, which does not exist
+ * until wave 1 has landed.
+ */
+export async function deployEvmAccount(o: EvmAccountDeployOptions): Promise<CustodyAccount> {
+  const { providers, device, encKeys, compiledContract, ...deployOptions } = o;
+  const contract = compiledContract ?? contractForArms([device.arm]);
+  return CustodyAccount.deploy(providers, contract, device, encKeys, deployOptions as DeployOptions);
 }
 
 // ContractAddress circuit arguments are { bytes: Bytes<32> }; the hex form

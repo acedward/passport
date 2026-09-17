@@ -1,0 +1,212 @@
+{
+  "testId": "PRB-B3",
+  "name": "swap-ladder",
+  "description": "The 00006 offer ladder on a ledger-9 localnet: OFFER-2 (open) and OFFER-1 (named) each settled in one transaction by a wallet holding no maker key, then change continuity and the negatives",
+  "verdict": "PASS",
+  "note": "The maker proves and stops — no balancing, no signature, no DUST, no submission. The taker is a separate wallet seed with no account private state; it reads the envelope, checks the artefact against its own declared terms, balances with stock facade calls and submits.",
+  "details": {
+    "account": "25643ac9f3b75f47a59841b19f0b210409b5dff635d25e107412c097454bc073",
+    "ladderCircuits": [
+      "deposit_shielded",
+      "activate_initial_device_with_evm",
+      "open_swap_shielded_with_evm",
+      "withdraw_shielded_with_evm",
+      "append_inbox_with_evm"
+    ],
+    "owner": "0x0c957006661302000eda1121cb4f027bfbe695b2",
+    "colours": {
+      "A": "fc3ded2cdd31881b191fff7a99eea7cbca7274e66bbe132b07ba3c526d47bfb3",
+      "B": "baa6dab9b909c37c18e7134f9d3cb2fd02024ade81cbd696b4071c11fa57f2b8"
+    },
+    "offer2": {
+      "proveMs": 35914,
+      "bytes": 27429,
+      "contentAddress": "52f4e6622913f398d173504885a087f280ccadef3c8eea711abe8c39ec5dd0f0",
+      "imbalances": {
+        "0": {},
+        "745": {
+          "shielded:baa6dab9b909c37c18e7134f9d3cb2fd02024ade81cbd696b4071c11fa57f2b8": "-3",
+          "shielded:fc3ded2cdd31881b191fff7a99eea7cbca7274e66bbe132b07ba3c526d47bfb3": "2"
+        }
+      },
+      "legSegment": "745",
+      "attempts": [
+        "45: proved in 35914 ms"
+      ],
+      "mtIndex": "45"
+    },
+    "offer2Take": {
+      "stage": "settled",
+      "txId": "00cc2757ace658d8419038c256043d3bfb38f6327275b9ff63fa9c47d905db842d",
+      "txHash": "2a9938c8c9314c8c32016b098816a57219979d422eb03cd0d6221cabf5271b7a",
+      "fundability": {
+        "imbalances": {
+          "0": {},
+          "745": {
+            "shielded:baa6dab9b909c37c18e7134f9d3cb2fd02024ade81cbd696b4071c11fa57f2b8": "-3",
+            "shielded:fc3ded2cdd31881b191fff7a99eea7cbca7274e66bbe132b07ba3c526d47bfb3": "2"
+          }
+        },
+        "legSegment": "745",
+        "deficits": {
+          "745/shielded:baa6dab9b909c37c18e7134f9d3cb2fd02024ade81cbd696b4071c11fa57f2b8": "-3"
+        },
+        "surpluses": {
+          "745/shielded:fc3ded2cdd31881b191fff7a99eea7cbca7274e66bbe132b07ba3c526d47bfb3": "2"
+        },
+        "declared": {
+          "segment": "745",
+          "wants": "745/shielded:baa6dab9b909c37c18e7134f9d3cb2fd02024ade81cbd696b4071c11fa57f2b8",
+          "gives": "745/shielded:fc3ded2cdd31881b191fff7a99eea7cbca7274e66bbe132b07ba3c526d47bfb3"
+        },
+        "matchesTerms": true
+      },
+      "merged": {
+        "imbalances": {
+          "0": {
+            "dust": "39420757148334609"
+          },
+          "1": {},
+          "745": {}
+        },
+        "unswept": {},
+        "dustActions": {
+          "1": {
+            "spends": 1,
+            "registrations": 0
+          },
+          "745": {
+            "spends": 0,
+            "registrations": 0
+          }
+        },
+        "intentSegments": [
+          1,
+          745
+        ]
+      },
+      "validationRecorded": {
+        "passed": false,
+        "error": " <- call to non-existant contract ContractAddress(25643ac9f3b75f47a59841b19f0b210409b5dff635d25e107412c097454bc073)"
+      }
+    },
+    "afterOffer2": {
+      "inboxCount": "3",
+      "authNonce": "1",
+      "round": "3"
+    },
+    "takerBalances": {
+      "before": {
+        "0000000000000000000000000000000000000000000000000000000000000000": "250000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000001": "50000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000002": "50000000000000",
+        "baa6dab9b909c37c18e7134f9d3cb2fd02024ade81cbd696b4071c11fa57f2b8": "40"
+      },
+      "after": {
+        "0000000000000000000000000000000000000000000000000000000000000000": "250000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000001": "50000000000000",
+        "baa6dab9b909c37c18e7134f9d3cb2fd02024ade81cbd696b4071c11fa57f2b8": "37",
+        "fc3ded2cdd31881b191fff7a99eea7cbca7274e66bbe132b07ba3c526d47bfb3": "2",
+        "0000000000000000000000000000000000000000000000000000000000000002": "50000000000000"
+      }
+    },
+    "settledCandidates": [
+      "46",
+      "47",
+      "48",
+      "49"
+    ],
+    "offer1": {
+      "proveMs": 29548,
+      "bytes": 27248,
+      "contentAddress": "9840d7d02438b944e8b8e01ee760c8347d06569baec4f22b6c59609fb35ee5ce",
+      "imbalances": {
+        "0": {
+          "shielded:baa6dab9b909c37c18e7134f9d3cb2fd02024ade81cbd696b4071c11fa57f2b8": "-7"
+        },
+        "26722": {}
+      },
+      "legSegment": "0",
+      "attempts": [
+        "46: proved in 29548 ms"
+      ]
+    },
+    "offer1Take": {
+      "stage": "settled",
+      "txId": "00b1ebba42549e01621cfbe08f5e8fff604c3ba1c606a503d4620d4a324d99e0af",
+      "fundability": {
+        "imbalances": {
+          "0": {
+            "shielded:baa6dab9b909c37c18e7134f9d3cb2fd02024ade81cbd696b4071c11fa57f2b8": "-7"
+          },
+          "26722": {}
+        },
+        "legSegment": "0",
+        "deficits": {
+          "0/shielded:baa6dab9b909c37c18e7134f9d3cb2fd02024ade81cbd696b4071c11fa57f2b8": "-7"
+        },
+        "surpluses": {},
+        "declared": {
+          "segment": "0",
+          "wants": "0/shielded:baa6dab9b909c37c18e7134f9d3cb2fd02024ade81cbd696b4071c11fa57f2b8"
+        },
+        "matchesTerms": true
+      },
+      "merged": {
+        "imbalances": {
+          "0": {
+            "dust": "49256350998593957"
+          },
+          "1": {},
+          "26722": {}
+        },
+        "unswept": {},
+        "dustActions": {
+          "1": {
+            "spends": 1,
+            "registrations": 0
+          },
+          "26722": {
+            "spends": 0,
+            "registrations": 0
+          }
+        },
+        "intentSegments": [
+          1,
+          26722
+        ]
+      }
+    },
+    "afterOffer1": {
+      "inboxCount": "4",
+      "authNonce": "2"
+    },
+    "spendReceivedB": {
+      "txId": "006ce3a8ae13491f07419c5cacbc503e1b2543004eb07c8fcbeafeb75d26ce05eb",
+      "attempts": [
+        "46: Unexpected error submitting scoped transaction '<unnamed>': Error: 'prove' returned an err",
+        "47: accepted 006ce3a8ae13491f07419c5cacbc503e1b2543004eb07c8fcbeafeb75d26ce05eb"
+      ]
+    },
+    "negatives": {
+      "tamperedTerms": "offer 52f4e6622913f398… does not match its own terms:\n  - the terms want 1 of baa6dab9b909c37c18e7134f9d3cb2fd02024ade81cbd696b4071c11fa57f2b8 but the transaction's deficit at 745/shielded:baa6dab9b909c37c18e7134f9d3cb2fd02024ade81cbd696b4071c11fa57f2b8 is -3",
+      "replay": "settlement: Transaction submission error",
+      "tamperedArgument": "failed assert: invalid signature",
+      "contractTaker": "failed assert: swap to a contract taker is not supported"
+    },
+    "hashes": {
+      "mintA": "003ba8879d9a42b5c5beeaf9193adc433adafb35d5e3d326ebab47b67c3692d238",
+      "mintB": "006ea1c525378751b679048746c193aee8fafe2d9032847a92cf4f90cfddf2cee1",
+      "deposit": "00e5f352dc38c54bf86a74caf985492d8d002dc9ac837e3eb651af343bba063da0",
+      "offer2Settlement": "00cc2757ace658d8419038c256043d3bfb38f6327275b9ff63fa9c47d905db842d",
+      "offer1Settlement": "00b1ebba42549e01621cfbe08f5e8fff604c3ba1c606a503d4620d4a324d99e0af",
+      "spendReceivedB": "006ce3a8ae13491f07419c5cacbc503e1b2543004eb07c8fcbeafeb75d26ce05eb"
+    }
+  },
+  "ranAt": "2026-09-16T11:32:47.907Z",
+  "stack": {
+    "node": "midnightntwrk/midnight-node:2.1.0-2e92c4ae642c",
+    "indexer": "midnightntwrk/indexer-standalone:4.4.0-rc.2",
+    "proofServer": "midnightntwrk/proof-server:9.0.0-rc.6"
+  }
+}

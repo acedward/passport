@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Passport · evm arm · browser smoke</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0; padding: 28px 24px;
+        background: #000; color: #fff;
+        font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      h1 { font-size: 18px; margin: 0 0 2px; letter-spacing: -0.2px; }
+      h1 span { color: #e52321; }
+      p.sub { margin: 0 0 20px; color: #8a8a8a; }
+      ol { list-style: none; margin: 0; padding: 0; }
+      li { padding: 7px 0 7px 26px; border-bottom: 1px solid #191919; position: relative; }
+      li::before { position: absolute; left: 0; top: 7px; }
+      li.pending::before { content: '·'; color: #555; }
+      li.running::before { content: '›'; color: #ec641d; }
+      li.pass::before { content: '✓'; color: #06ff89; }
+      li.fail::before { content: '✗'; color: #e52321; }
+      li.skip::before { content: '–'; color: #666; }
+      li .detail { display: block; color: #7a7a7a; font-size: 12.5px; white-space: pre-wrap; word-break: break-all; }
+      li.fail .detail { color: #ff8a88; }
+      #verdict { margin-top: 22px; padding: 12px 14px; border: 1px solid #222; }
+      #verdict.pass { border-color: #06ff89; color: #06ff89; }
+      #verdict.fail { border-color: #e52321; color: #e52321; }
+      #verdict.running { border-color: #ec641d; color: #ec641d; }
+    </style>
+  </head>
+  <body>
+    <h1>Passport account · arm <span>evm</span> · browser smoke</h1>
+    <p class="sub" id="env">starting…</p>
+    <ol id="steps"></ol>
+    <div id="verdict" class="running">running…</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

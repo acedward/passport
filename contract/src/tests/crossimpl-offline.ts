@@ -5,6 +5,16 @@
 // pure circuit of the same arm, and that the signature verifies over that
 // challenge on an independent stack. The on-node half (auth-crossimpl.ts)
 // then submits a Rust-signed withdrawal.
+//
+// The `evm` arm is checked at BOTH of its layers, because they can drift
+// independently: the SHA-256 challenge core (the compiler's field-aligned
+// encoding, with the key as the 20-byte Ethereum address) and the keccak
+// EIP-712 layer above it (alias, domain separator, struct hash, digest). The
+// Rust binary writes the second one out from the frozen type strings alone, so
+// with `eip712-evm-offline.ts` (ethers) and `eip712-evm-oracles.ts` (the
+// contract's own pure circuits) the byte contract now has FOUR independent
+// implementations agreeing: our TypeScript codec, ethers, the circuit, and a
+// Rust binary that shares no line of code with any of them.
 
 import { execFileSync } from 'node:child_process';
 import * as path from 'node:path';
@@ -15,6 +25,8 @@ import { ecAdd, ecMul, ecMulGenerator } from '@midnight-ntwrk/compact-runtime';
 
 import { runScenario, step } from './runner.js';
 import { pureCircuits, type JubjubPoint, type Secp256k1Point } from '../wallet/contract.js';
+import { evmDomainSaltFor, fromHex, toHex } from '../wallet/eip712.js';
+import { ethereumAddress } from '../wallet/evm-signature.js';
 import {
   SECP256K1_N, JUBJUB_R, bytesToBigIntLE, type EcdsaSignature,
   K256_ENVELOPE_CONNECTOR, K256_ENVELOPE_NONE,
@@ -35,7 +47,12 @@ export interface CallParams {
   authNonce: bigint;
 }
 
-function signRequest(arm: 'jubjub' | 'k256', req: CallParams, envelope = 0): any {
+function signRequest(
+  arm: 'jubjub' | 'k256' | 'evm',
+  req: CallParams,
+  envelope = 0,
+  evmDomainSalt?: Uint8Array,
+): any {
   return JSON.parse(
     execFileSync(SIGNER_BIN, [], {
       input: JSON.stringify({
@@ -49,6 +66,7 @@ function signRequest(arm: 'jubjub' | 'k256', req: CallParams, envelope = 0): any
         recipient: bytesToHex(req.recipient),
         auth_nonce: req.authNonce.toString(),
         envelope,
+        evm_domain_salt: evmDomainSalt ? bytesToHex(evmDomainSalt) : '',
       }),
       encoding: 'utf-8',
     }),
@@ -81,6 +99,44 @@ export function rustSignWithdrawUnshieldedK256(req: CallParams): K256RustSignatu
     challenge: out.challenge,
     digest: out.digest,
     envelope: out.envelope,
+  };
+}
+
+// ── Arm evm ──────────────────────────────────────────────────────────────────
+
+export interface EvmRustSignature {
+  pk: Secp256k1Point;
+  address: string;
+  sig: EcdsaSignature;
+  challenge: string;
+  accountAlias: string;
+  domainSeparator: string;
+  structHash: string;
+  digest: string;
+}
+
+export function rustKeygenEvm(): { sk: string; pk: Secp256k1Point; address: string } {
+  const out = JSON.parse(
+    execFileSync(SIGNER_BIN, [], { input: '{"cmd":"keygen","arm":"evm"}', encoding: 'utf-8' }),
+  );
+  return {
+    sk: out.sk,
+    pk: { x: BigInt(out.pk.x), y: BigInt(out.pk.y), identity: false },
+    address: out.address,
+  };
+}
+
+export function rustSignWithdrawUnshieldedEvm(req: CallParams, salt: Uint8Array): EvmRustSignature {
+  const out = signRequest('evm', req, 0, salt);
+  return {
+    pk: { x: BigInt(out.pk.x), y: BigInt(out.pk.y), identity: false },
+    address: out.address,
+    sig: { r: BigInt(out.sig.r), s: BigInt(out.sig.s) },
+    challenge: out.challenge,
+    accountAlias: out.account_alias,
+    domainSeparator: out.domain_separator,
+    structHash: out.struct_hash,
+    digest: out.digest,
   };
 }
 
@@ -201,5 +257,83 @@ if (isMain) {
     );
     if (!cOk) throw new Error('Rust connector signature does not verify over the envelope digest');
     console.log('  ✓ verify(envelope digest, (r, s), pk) with the Rust-produced connector signature');
+
+    // ── Arm evm ─────────────────────────────────────────────────────────────
+
+    const salt = evmDomainSaltFor('undeployed');
+
+    step('[evm] Rust keygen: the identity is the Ethereum address of the key');
+    const e = rustKeygenEvm();
+    const derived = toHex(ethereumAddress({ x: e.pk.x, y: e.pk.y, identity: false }));
+    if (derived !== e.address.toLowerCase()) {
+      throw new Error(`address mismatch:\n  rust: ${e.address}\n  ours: ${derived}`);
+    }
+    console.log(`  ✓ identical: ${e.address}`);
+
+    step('[evm] Rust signature over fixed call parameters');
+    const eSig = rustSignWithdrawUnshieldedEvm(
+      { sk: e.sk, contractAddress, color, amount, recipient, authNonce }, salt,
+    );
+
+    step('[evm] challenge core bit-exactness: Rust stack vs the contract’s pure circuit');
+    const eAddress = fromHex(eSig.address, 20);
+    const eExpected = pureCircuits.challenge_withdraw_unshielded_with_evm(
+      { bytes: contractAddress }, eAddress, color, amount, { bytes: recipient }, authNonce,
+    );
+    const eExpectedHex = bytesToHex(eExpected);
+    if (eExpectedHex !== eSig.challenge) {
+      throw new Error(`challenge mismatch:\n  rust:     ${eSig.challenge}\n  contract: ${eExpectedHex}`);
+    }
+    console.log(`  ✓ identical: ${eSig.challenge.slice(0, 32)}…`);
+
+    step('[evm] EIP-712 layer bit-exactness: Rust keccak vs the contract’s oracles');
+    // The Rust binary builds the alias, the separator, the struct hash and the
+    // digest from the frozen type STRINGS, sharing no code with the codec, with
+    // ethers, or with the circuit. All four must agree byte for byte, or the
+    // arm verifies a digest no wallet will ever produce.
+    const oracleAlias = pureCircuits.evm_account_alias(contractAddress);
+    if (toHex(oracleAlias) !== eSig.accountAlias.toLowerCase()) {
+      throw new Error(`alias mismatch:\n  rust:     ${eSig.accountAlias}\n  contract: ${toHex(oracleAlias)}`);
+    }
+    const oracleSeparator = pureCircuits.evm_domain_separator_for(contractAddress, salt);
+    if (bytesToHex(oracleSeparator) !== eSig.domainSeparator) {
+      throw new Error(`domain separator mismatch:\n  rust:     ${eSig.domainSeparator}\n  contract: ${bytesToHex(oracleSeparator)}`);
+    }
+    const oracleStructHash = pureCircuits.evm_struct_hash_withdraw_unshielded(
+      contractAddress, eAddress, authNonce, color, amount, recipient, eExpected,
+    );
+    if (bytesToHex(oracleStructHash) !== eSig.structHash) {
+      throw new Error(`struct hash mismatch:\n  rust:     ${eSig.structHash}\n  contract: ${bytesToHex(oracleStructHash)}`);
+    }
+    const oracleDigest = pureCircuits.evm_digest_withdraw_unshielded(
+      contractAddress, salt, eAddress, authNonce, color, amount, recipient, eExpected,
+    );
+    if (bytesToHex(oracleDigest) !== eSig.digest) {
+      throw new Error(`digest mismatch:\n  rust:     ${eSig.digest}\n  contract: ${bytesToHex(oracleDigest)}`);
+    }
+    console.log(`  ✓ alias, domain separator, struct hash and digest all identical`);
+    console.log(`  ✓ digest ${eSig.digest.slice(0, 32)}…`);
+
+    step('[evm] the Rust signature verifies over the EIP-712 digest');
+    if (!(eSig.sig.r > 0n && eSig.sig.r < SECP256K1_N)) throw new Error('r outside [1, n)');
+    if (!(eSig.sig.s > 0n && eSig.sig.s < SECP256K1_N)) throw new Error('s outside [1, n)');
+    const eOk = secp256k1.verify(
+      new secp256k1.Signature(eSig.sig.r, eSig.sig.s).toBytes('compact'),
+      oracleDigest,
+      secp256k1.Point.fromAffine({ x: eSig.pk.x, y: eSig.pk.y }).toBytes(false),
+      { prehash: false, lowS: false }, // the circuit accepts both S forms
+    );
+    if (!eOk) throw new Error('Rust signature does not verify over the EIP-712 digest');
+    console.log('  ✓ verify(digest, (r, s), pk) with the Rust-produced signature');
+
+    step('[evm] the challenge core is NOT what the signature covers');
+    const overChallenge = secp256k1.verify(
+      new secp256k1.Signature(eSig.sig.r, eSig.sig.s).toBytes('compact'),
+      eExpected,
+      secp256k1.Point.fromAffine({ x: eSig.pk.x, y: eSig.pk.y }).toBytes(false),
+      { prehash: false, lowS: false },
+    );
+    if (overChallenge) throw new Error('the signature verifies over the raw challenge');
+    console.log('  ✓ the signature covers the EIP-712 digest only (the arm’s whole point)');
   });
 }

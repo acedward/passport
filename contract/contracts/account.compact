@@ -1,6 +1,132 @@
 pragma language_version >= 0.17.0;
 
 import CompactStandardLibrary;
+// The `evm` arm's EIP-712 codec: frozen type hashes, domain separator, struct
+// hashes and digests (docs/AUTH-EIP712-PASSPORT-EVM-V1.md). Its exported pure
+// circuits surface on this contract's artifact as free oracles; they emit no
+// proving key. `ByteCodec` is imported by that module and never directly.
+import "./modules/Eip712";
+// The two zswap primitives the pinned standard library keeps PRIVATE — the coin commitment and the
+// coin nullifier — plus the qualified-coin downcast. `open_swap_shielded_*`'s open shape releases
+// value with NO output, and `sendShielded` (the only exported route to a zswap input) always creates
+// one, so the open offer cannot be built out of exported pieces alone. Ported verbatim from AA-v3;
+// see the module header for why the two separators are frozen bytes we did not choose.
+import "./modules/ZswapPrimitives";
+// The Signet protocol's shared Compact library (Sig Network, resolved through node_modules
+// by COMPACT_PATH). It is imported for two TYPES only — `RequestId` and
+// `RespondBidirectionalEvent` — which are the settle circuits' arguments and therefore part
+// of the vault's cross-contract surface. This account never calls the Signet singleton
+// itself: the vault does, one level further down the same call tree.
+import "@sig-net/midnight/src/Signet";
+
+// A name imported from a module does not reach the compiled artifact's surface
+// on its own, so the codec's pure circuits are re-exported here explicitly.
+// They are FREE: `pure` circuits emit no proving key and cost no deploy budget,
+// and every one of them is a function of its arguments alone. A signer, a
+// relayer or an auditor therefore obtains the contract's OWN answer for the
+// domain separator, the struct hash and the digest instead of reimplementing
+// the byte contract (MIP-0013 §2's rule for challenge reproduction, applied to
+// the EIP-712 layer above it).
+export {
+  evm_account_alias,
+  evm_domain_separator_for,
+  evm_struct_hash_withdraw_unshielded,
+  evm_struct_hash_withdraw_shielded,
+  evm_struct_hash_withdraw_shielded_to_contract,
+  evm_struct_hash_append_inbox,
+  evm_struct_hash_rotate_enc_key,
+  evm_struct_hash_add_device,
+  evm_struct_hash_remove_device,
+  evm_digest_withdraw_unshielded,
+  evm_digest_withdraw_shielded,
+  evm_digest_withdraw_shielded_to_contract,
+  evm_digest_append_inbox,
+  evm_digest_rotate_enc_key,
+  evm_digest_add_device,
+  evm_digest_remove_device,
+  evm_struct_hash_open_swap_shielded,
+  evm_digest_open_swap_shielded,
+  evm_struct_hash_bridge_deposit_start,
+  evm_struct_hash_bridge_withdraw_start,
+  evm_digest_bridge_deposit_start,
+  evm_digest_bridge_withdraw_start
+};
+
+// The two zswap oracles of `ZswapPrimitives`, re-exported for the same reason and on the same terms
+// (`pure`, therefore free). They exist so that the contract's transcription of the standard library's
+// private `coinCommitment` / `coinNullifier` can be TESTED for equality against the values the
+// stdlib itself claims, rather than trusted (FR-008, `src/tests/swap-primitives-offline.ts`).
+export {
+  zswapNullifierOf,
+  zswapCommitmentOf
+};
+
+// ── The ERC20 vault's cross-contract surface (project 00034 PR-G, brief B.1) ─────────────
+//
+// The five circuits this account calls on the witness-free ERC20 vault fork
+// (`contracts/erc20-vault/`, PR-F). The declaration must match the vault's exported
+// signatures EXACTLY: the compiler resolves the contract type name `Erc20Vault` to
+// `<compact-path>/Erc20Vault` — the compiled artefact directory, whose NAME is the type
+// name — and embeds a fingerprint of each circuit's verifier key in this contract's own
+// operations. The runtime compares that fingerprint against the deployed vault's key and
+// refuses the call otherwise (`ContractInterfaceMismatchError`).
+//
+// Two consequences, both spec FR-022 and both operational rather than theoretical:
+//
+//   * the vault is deployed and FROZEN before any account that binds it is compiled;
+//     a vault redeploy with different keys orphans the bridge circuits of every account
+//     already deployed against it. Every account deploy receipt records the vault address
+//     and the artefact fingerprint (`contracts/erc20-vault/deploy/artefacts.ts`);
+//   * no vault-local struct may cross the boundary (it would have to be re-declared here,
+//     identically, forever), which is why the argument lists below are flat. `RequestId`
+//     and `RespondBidirectionalEvent` are the exception, and they are shared: they come
+//     from Sig Network's own module, imported above by both contracts.
+//
+// The callee is witness-free by construction (compact-runtime refuses witnesses in a
+// non-root contract). This contract, as the ROOT, keeps its `held_coin` witness — Passport
+// P7 settled that a root may consume witnesses and hold call sites.
+contract Erc20Vault {
+  circuit startDeposit(
+    evmNonce: Uint<64>,
+    gasLimit: Uint<64>,
+    maxFeePerGas: Uint<128>,
+    maxPriorityFeePerGas: Uint<128>,
+    keyVersion: Uint<8>,
+    erc20Address: Bytes<20>,
+    amount: Uint<128>,
+    recipient: Either<ZswapCoinPublicKey, ContractAddress>
+  ): [];
+  circuit completeDeposit(
+    requestId: RequestId,
+    respondBidirectionalEvent: RespondBidirectionalEvent,
+    serializedOutput: Bytes<1>,
+    mintNonce: Bytes<32>
+  ): Maybe<ShieldedCoinInfo>;
+  circuit startWithdraw(
+    evmNonce: Uint<64>,
+    gasLimit: Uint<64>,
+    maxFeePerGas: Uint<128>,
+    maxPriorityFeePerGas: Uint<128>,
+    keyVersion: Uint<8>,
+    erc20Address: Bytes<20>,
+    amount: Uint<128>,
+    destEvmAddress: Bytes<20>,
+    coin: ShieldedCoinInfo,
+    refundRecipient: Either<ZswapCoinPublicKey, ContractAddress>
+  ): [];
+  circuit completeWithdraw(
+    requestId: RequestId,
+    respondBidirectionalEvent: RespondBidirectionalEvent,
+    serializedOutput: Bytes<1>,
+    mintNonce: Bytes<32>
+  ): Maybe<ShieldedCoinInfo>;
+  circuit refundWithdraw(
+    requestId: RequestId,
+    respondBidirectionalEvent: RespondBidirectionalEvent,
+    serializedOutput: Bytes<5>,
+    mintNonce: Bytes<32>
+  ): ShieldedCoinInfo;
+}
 
 // ---------------------------------------------------------------------------
 // Midnight account custody contract — reference implementation.
@@ -110,6 +236,64 @@ import CompactStandardLibrary;
 //     pk, use_counter, sig, envelope). Cost: one extra persistentHash per
 //     k256 authorisation.
 //
+//   arm `evm` — ECDSA over secp256k1 again, but the device is an ORDINARY
+//     ETHEREUM EOA and the message is EIP-712 typed data, so the signature is
+//     one a wallet like MetaMask already knows how to produce. Like `k256` it
+//     is NOT a MIP-0013 conforming scheme (R2 rejects secp256k1 ECDSA for
+//     account authorisation); it is registered locally under the draft
+//     signature-schemes MIP's registry rules — one circuit per scheme, an
+//     arm-marked tag family, no in-circuit scheme conditional (SIG-1..SIG-5) —
+//     and is proposed upstream, not assumed. DST families:
+//     "midnight:account:device:evm:v1", "midnight:account:auth:evm:v1:*",
+//     "midnight:account:boot:evm:v1".
+//
+//     THE DEVICE IS ITS ADDRESS. Entries and boot commitments bind the 20-byte
+//     `secp256k1EthereumAddress(pk)`, not the curve point: it is the identity
+//     the wallet exposes, the identity the signed message carries in its
+//     `owner` field, and the identity a user can read off MetaMask and compare
+//     with the device roster. The seam derives the address from the presented
+//     point, so a point that does not hash to the enrolled address fails the
+//     membership assert before any signature is examined — that derivation IS
+//     the "presented key matches the enrolled device" check. The point at
+//     infinity is refused on the POINT, by the same coordinate guard the k256
+//     arm uses, before any address is derived.
+//
+//     WHAT IS SIGNED. Not the challenge: the challenge is one field of an
+//     EIP-712 struct, and the wallet signs
+//     keccak256(0x1901 || domainSeparator || structHash), which the circuit
+//     recomputes with in-circuit keccak256 before
+//     `secp256k1EcdsaVerify(digest, sig, pk)`. The domain is
+//     EIP712Domain(string name,string version,address verifyingContract,
+//     bytes32 salt) with name "Midnight Passport Account", version "1",
+//     `verifyingContract` the low 20 bytes of keccak256 over this contract's
+//     32-byte address, and `salt` the constructor-sealed `evm_domain_salt` —
+//     EIP-712's `chainId` has no meaning for a Midnight contract, and the salt
+//     takes its place. There is one primary type per gated operation, each
+//     `<Op>(bytes32 account,address owner,uint64 authNonce,<action fields>,
+//     bytes32 challenge)`, so a withdrawal signature can never be read as a
+//     device change: the separation is at the type-hash level.
+//
+//     WHY BOTH. The action fields are readable, so a user approving a
+//     withdrawal sees the colour, the amount and the recipient rather than a
+//     hash; the challenge binds those same arguments a second time TOGETHER
+//     WITH the witness values the wallet cannot see (AUTH-10, e.g. which
+//     qualified coin a shielded withdrawal spends). Readability alone would
+//     leave the private half unbound; the challenge alone would make the wallet
+//     display an opaque 32 bytes. There is no `validUntil`: freshness is
+//     `auth_nonce`, as on the other arms. Malleability is handled exactly as on
+//     `k256` — both S forms verify, the consumed single-use entry makes the
+//     twin inert — with the measured difference that Ethereum tooling (ethers)
+//     refuses to parse a high-S signature at all, so a twin cannot arrive
+//     through a wallet.
+//
+//     The byte contract is frozen, with its type hashes, its known-answer test
+//     and 63 vectors, in docs/AUTH-EIP712-PASSPORT-EVM-V1.md; the codec lives
+//     in contracts/modules/Eip712.compact and is re-exported here as pure
+//     oracles. Cost: the arm's gated circuits are k=18 (147,602-188,532 rows)
+//     against the k256 twins' k=16-17, the premium being roughly 76,500 rows of
+//     in-circuit keccak — about 28,300 of which recompute a domain separator
+//     that is constant for the deployment.
+//
 // Per-arm circuits instead of one circuit with an in-circuit scheme choice:
 // Compact compiles every exported circuit to its own proof, so a proof
 // through a `_with_jubjub` circuit pays only the Schnorr constraints and a
@@ -157,9 +341,15 @@ import CompactStandardLibrary;
 // §2).
 //
 // Toolchain: requires the ZKIR v3 backend (compile with --feature-zkir-v3,
-// Compact toolchain 0.33.0-rc or later; the secp256k1 surface lives in the
-// compiler's zkir-v3-library.compact and is loaded only when the v3 IR is
+// Compact toolchain 0.34.0; the secp256k1 and keccak256 surfaces live in the
+// compiler's zkir-v3-library.compact and are loaded only when the v3 IR is
 // enabled) and a ledger-9 network with a ZKIR-3.0-capable proof server.
+//
+// Deploy: the three arms export 26 impure circuits between them and NO account
+// carries them all — 26 verifier keys price at 82,654 bytes written against a
+// 50,000-byte block budget. Every account deploys the subset its owner's
+// devices need, in waves (src/wallet/wave-deploy.ts), and the client is built
+// for that same subset (contractForArms).
 // ---------------------------------------------------------------------------
 
 // ── Witness (MIP-0012 §6.3): the wallet-local coin store ────────────────────
@@ -235,6 +425,42 @@ export ledger booted: Boolean;
 // per account, so pre-activation state carries no cross-account-stable
 // device value.
 
+export sealed ledger evm_domain_salt: Bytes<32>;
+// The `evm` arm's EIP-712 domain salt (arm `evm` only; the other arms have no
+// notion of it). EIP-712's `chainId` has no meaning for a Midnight contract, so
+// the domain binds this 32-byte network/deployment value in its place — the
+// MIP-0008 CAIP-2 style binding MIP-0013 §5.1 recommends, and the replacement
+// for AA-v3's `deploymentDomain`. Sealed: fixed at construction, because a
+// mutable domain would silently invalidate every signature a wallet has already
+// produced. Deployments on one network SHOULD share it (the recommended value is
+// keccak256("midnight:" || networkId)); its only requirement is that a signature
+// intended for one network cannot be replayed on another, which the account
+// address in the domain alias already enforces between accounts.
+
+export sealed ledger vault: Erc20Vault;
+export sealed ledger vault_address: ContractAddress;
+// The ERC20 bridge vault this account is bound to (project 00034 PR-G, spec FR-021/FR-027),
+// named TWICE because the language has no cast between a contract reference and the raw
+// ContractAddress a shielded send targets (Gate 0 recorded the same limitation in its
+// root contract):
+//
+//   * `vault` is the CALLABLE reference — what `vault.startDeposit(...)` needs;
+//   * `vault_address` is the SEND target — what `sendShielded(coin, right(vault_address), n)`
+//     needs in `bridge_withdraw_start_*`, where the vault must claim that exact output with
+//     `receiveShielded` in the same transaction.
+//
+// Both are sealed: a mutable vault binding would be a second custody anchor above the
+// MIP-0013 seam (whoever could re-point it could redirect a withdrawal), and the compiled
+// verifier-key fingerprint pins the vault's CODE at compile time anyway, so a mutable
+// address could only ever point at a different deployment of that same code.
+//
+// The two are supplied by one client-side value (`CustodyAccount.deploy`'s `vaultAddress`
+// derives both), and a disagreement between them cannot pass silently: the withdraw would
+// address its output to a contract that does not claim it, and the node refuses the whole
+// transaction (an unclaimed contract-addressed output fails balancing — Gate 0's
+// `pay_and_forward_noclaim` control). An account with no bridge use deploys with the zero
+// address and simply never carries the bridge circuits (they live in wave 2).
+
 // ── Constructor ─────────────────────────────────────────────────────────────
 //
 // MIP-0013 §3 semantics via the boot commitment (see the `boot` cell): the
@@ -243,7 +469,13 @@ export ledger booted: Boolean;
 // activate_initial_device_with_<arm>(pk, salt) immediately after deploy to
 // insert the initial entry at epoch 0 and use counter 0.
 
-constructor(initial_device_boot: Bytes<32>, encryption_key: Bytes<32>) {
+constructor(
+  initial_device_boot: Bytes<32>,
+  encryption_key:      Bytes<32>,
+  evm_domain:          Bytes<32>,
+  vault_ref:           Erc20Vault,
+  vault_addr:          ContractAddress,
+) {
   round        = 0 as Uint<64>;
   enc_key      = disclose(encryption_key);
   inbox_count  = 0 as Uint<64>;
@@ -253,6 +485,16 @@ constructor(initial_device_boot: Bytes<32>, encryption_key: Bytes<32>) {
   device_epoch = 0 as Uint<32>;
   device_count = 0 as Uint<8>;
   auth_nonce   = 0 as Uint<64>;
+  // Arm `evm` only; the value is public and carries no secret. It cannot be
+  // derived here from the account's own address (kernel.self() is the ZERO
+  // address inside a constructor, the same reason the boot commitment exists),
+  // so the deploying client supplies it.
+  evm_domain_salt = disclose(evm_domain);
+  // The bridge binding (PR-G). Public by nature — the vault is a public contract and the
+  // deposit address a user funds is derived from THIS account's address and the vault's,
+  // both public — so there is nothing to hide here, only something to freeze.
+  vault         = disclose(vault_ref);
+  vault_address = disclose(vault_addr);
 }
 
 // ── Bootstrap (per arm) ─────────────────────────────────────────────────────
@@ -296,6 +538,21 @@ export circuit activate_initial_device_with_k256(
   ));
 }
 
+// Arm evm: the device is an Ethereum EOA, so the committed identity is its
+// 20-byte address rather than a curve point. The public point is still required
+// here, so that the identity check below (and so the whole arm) can refuse the
+// point at infinity, whose address is a perfectly ordinary 20 bytes.
+export circuit activate_initial_device_with_evm(pk: Secp256k1Point, salt: Bytes<32>): [] {
+  assert(!booted, "already activated");
+  require_live_k256_key(pk);
+  const address = secp256k1EthereumAddress(pk);
+  assert(derive_boot_commitment_with_evm(salt, address) == boot,
+         "boot commitment mismatch");
+  do_activate_initial_device(derive_device_entry_with_evm(
+    kernel.self(), address, device_epoch, 0 as Uint<64>
+  ));
+}
+
 // Boot commitments (arm-marked DST_BOOT, zero-padded to 32 bytes; to be
 // registered under the MPS-0027 registry).
 
@@ -320,6 +577,18 @@ export pure circuit derive_boot_commitment_with_k256(
     [pad(32, "midnight:account:boot:k1:v2"), salt,
      secp256k1PointX(pk) as Bytes<32>, secp256k1PointY(pk) as Bytes<32>,
      envelope]
+  );
+}
+
+// Arm evm: DST_BOOT = "midnight:account:boot:evm:v1". The key is bound as its
+// 20-byte Ethereum address — the identity the wallet, the EIP-712 `owner` field
+// and the device entry all agree on.
+export pure circuit derive_boot_commitment_with_evm(
+  salt:    Bytes<32>,
+  address: Bytes<20>,
+): Bytes<32> {
+  return persistentHash<[Bytes<32>, Bytes<32>, Bytes<20>]>(
+    [pad(32, "midnight:account:boot:evm:v1"), salt, address]
   );
 }
 
@@ -370,6 +639,36 @@ export pure circuit derive_device_entry_with_k256(
     [pad(32, "midnight:account:device:k1:v2"), self_addr,
      secp256k1PointX(pk) as Bytes<32>, secp256k1PointY(pk) as Bytes<32>,
      envelope, epoch, counter]
+  );
+}
+
+// Arm evm: DST_DEVICE = "midnight:account:device:evm:v1" zero-padded to
+// 32 bytes. The key is bound as its 20-byte ETHEREUM ADDRESS — the identity an
+// EVM wallet exposes, the identity the EIP-712 `owner` field carries, and the
+// identity a user can read off MetaMask and check against the device roster.
+// The seam derives the address from the presented point
+// (`secp256k1EthereumAddress`), so presenting a point that does not hash to the
+// enrolled address fails the membership assert before any signature is
+// examined: the address match of FR-003 IS this derivation, exactly as the
+// other arms bind their keys through their own entry preimages.
+//
+// The address collapses the point's two coordinates into keccak's 160-bit
+// image. That is the same identity Ethereum itself uses for an account, and it
+// is the point at infinity, not a collision, that the arm must refuse — see
+// `require_live_k256_key`, which the evm seam and bootstrap both call on the
+// presented POINT before deriving anything from it.
+//
+// No envelope id (the k256 arm's v2 preimages carry one): an EIP-712 digest is
+// already a complete, unambiguous envelope, agreed between wallet and contract
+// by the frozen byte contract.
+export pure circuit derive_device_entry_with_evm(
+  self_addr: ContractAddress,
+  address:   Bytes<20>,
+  epoch:     Uint<32>,
+  counter:   Uint<64>,
+): Bytes<32> {
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Uint<32>, Uint<64>]>(
+    [pad(32, "midnight:account:device:evm:v1"), self_addr, address, epoch, counter]
   );
 }
 
@@ -570,6 +869,36 @@ export pure circuit challenge_remove_device_with_jubjub(
   );
 }
 
+// The open-offer challenge. It binds MORE than any other circuit's because an offer is the one
+// authorisation that travels: the maker proves it, publishes it, and a stranger settles it minutes
+// later. Everything the settled transaction will contain is therefore in the preimage — both legs,
+// the recipient shape, the deadline, BOTH inbox entries in full, and the witness coin (AUTH-10) —
+// so "the offer that was approved" and "the offer that executed" cannot differ in any field.
+export pure circuit challenge_open_swap_shielded_with_jubjub(
+  self_addr:      ContractAddress,
+  sig_r:          JubjubPoint,
+  pk:             JubjubPoint,
+  give_color:     Bytes<32>,
+  give_amount:    Uint<128>,
+  recipient_kind: Uint<8>,
+  recipient:      Bytes<32>,
+  want:           ShieldedCoinInfo,
+  want_entry:     Bytes<192>,
+  change_entry:   Bytes<192>,
+  valid_until:    Uint<64>,
+  coin:           QualifiedShieldedCoinInfo,
+  nonce_value:    Uint<64>,
+  grind_nonce:    Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:v1:open_swap_shielded")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, JubjubPoint, JubjubPoint, Bytes<32>, Uint<128>, Uint<8>, Bytes<32>, ShieldedCoinInfo, Bytes<192>, Bytes<192>, Uint<64>, QualifiedShieldedCoinInfo, Uint<64>, Uint<64>]>(
+    [dst, self_addr, sig_r, pk, give_color, give_amount, recipient_kind, recipient, want,
+     want_entry, change_entry, valid_until, coin, nonce_value, grind_nonce]
+  );
+}
+
 // ── Challenge constructions, arm k256 ───────────────────────────────────────
 //
 // Preimage:
@@ -699,6 +1028,239 @@ export pure circuit challenge_remove_device_with_k256(
   );
 }
 
+// ── Challenge constructions, arm evm ────────────────────────────────────────
+//
+// Preimage:
+//   [DST_CIRCUIT, self, address, ...args, ...witness_values, auth_nonce]
+// The k256 arm's preimage with the key encoded as the device's 20-byte Ethereum
+// address instead of its two affine coordinates — the identity this arm enrols.
+// Everything else is identical: no signature term, no grinding nonce, the same
+// witness-value pinning (AUTH-10), the same one-DST-per-circuit rule (AUTH-3).
+//
+// The challenge is NOT what the wallet signs on this arm: it is one field of the
+// EIP-712 struct whose digest the wallet signs (docs/AUTH-EIP712-PASSPORT-EVM-V1.md).
+// That is what lets the wallet display readable action fields while the circuit
+// still binds the private witness values the wallet cannot see — the readable
+// fields and the challenge cover the same arguments, so a signature that looks
+// right in MetaMask and means something else in the circuit does not exist.
+
+export pure circuit challenge_withdraw_unshielded_with_evm(
+  self_addr:   ContractAddress,
+  address:     Bytes<20>,
+  color:       Bytes<32>,
+  amount:      Uint<128>,
+  recipient:   UserAddress,
+  nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:withdraw_unshielded")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<32>, Uint<128>, UserAddress, Uint<64>]>(
+    [dst, self_addr, address, color, amount, recipient, nonce_value]
+  );
+}
+
+export pure circuit challenge_withdraw_shielded_with_evm(
+  self_addr:   ContractAddress,
+  address:     Bytes<20>,
+  recipient:   ZswapCoinPublicKey,
+  color:       Bytes<32>,
+  amount:      Uint<128>,
+  coin:        QualifiedShieldedCoinInfo,
+  nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:withdraw_shielded")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, ZswapCoinPublicKey, Bytes<32>, Uint<128>, QualifiedShieldedCoinInfo, Uint<64>]>(
+    [dst, self_addr, address, recipient, color, amount, coin, nonce_value]
+  );
+}
+
+export pure circuit challenge_withdraw_shielded_to_contract_with_evm(
+  self_addr:   ContractAddress,
+  address:     Bytes<20>,
+  recipient:   ContractAddress,
+  color:       Bytes<32>,
+  amount:      Uint<128>,
+  coin:        QualifiedShieldedCoinInfo,
+  nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:withdraw_shielded_to_contract")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, ContractAddress, Bytes<32>, Uint<128>, QualifiedShieldedCoinInfo, Uint<64>]>(
+    [dst, self_addr, address, recipient, color, amount, coin, nonce_value]
+  );
+}
+
+export pure circuit challenge_append_inbox_with_evm(
+  self_addr:   ContractAddress,
+  address:     Bytes<20>,
+  entry:       Bytes<192>,
+  nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:append_inbox")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<192>, Uint<64>]>(
+    [dst, self_addr, address, entry, nonce_value]
+  );
+}
+
+export pure circuit challenge_rotate_enc_key_with_evm(
+  self_addr:   ContractAddress,
+  address:     Bytes<20>,
+  new_key:     Bytes<32>,
+  nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:rotate_enc_key")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<32>, Uint<64>]>(
+    [dst, self_addr, address, new_key, nonce_value]
+  );
+}
+
+export pure circuit challenge_add_device_with_evm(
+  self_addr:   ContractAddress,
+  address:     Bytes<20>,
+  new_entry:   Bytes<32>,
+  nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:add_device")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<32>, Uint<64>]>(
+    [dst, self_addr, address, new_entry, nonce_value]
+  );
+}
+
+export pure circuit challenge_remove_device_with_evm(
+  self_addr:   ContractAddress,
+  address:     Bytes<20>,
+  entry:       Bytes<32>,
+  nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:remove_device")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<32>, Uint<64>]>(
+    [dst, self_addr, address, entry, nonce_value]
+  );
+}
+
+// The `evm` twin of the open-offer challenge. Same preimage, the key encoded as the 20-byte
+// Ethereum address. Note what is here and NOT in the EIP-712 struct above it: the two 192-byte inbox
+// entries and the witness coin. They are the fields a wallet cannot render — ciphertext and a
+// private coin description — and the challenge is where they are pinned, which is the whole reason
+// this arm signs a struct that CONTAINS a challenge rather than a struct alone.
+export pure circuit challenge_open_swap_shielded_with_evm(
+  self_addr:      ContractAddress,
+  address:        Bytes<20>,
+  give_color:     Bytes<32>,
+  give_amount:    Uint<128>,
+  recipient_kind: Uint<8>,
+  recipient:      Bytes<32>,
+  want:           ShieldedCoinInfo,
+  want_entry:     Bytes<192>,
+  change_entry:   Bytes<192>,
+  valid_until:    Uint<64>,
+  coin:           QualifiedShieldedCoinInfo,
+  nonce_value:    Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:open_swap_shielded")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<32>, Uint<128>, Uint<8>, Bytes<32>, ShieldedCoinInfo, Bytes<192>, Bytes<192>, Uint<64>, QualifiedShieldedCoinInfo, Uint<64>]>(
+    [dst, self_addr, address, give_color, give_amount, recipient_kind, recipient, want,
+     want_entry, change_entry, valid_until, coin, nonce_value]
+  );
+}
+
+// ── Challenge constructions, arm evm: the ERC20 bridge (PR-G) ───────────────
+//
+// Same preimage rule as every other `evm` challenge — [DST_CIRCUIT, self, address, ...args,
+// ...witness_values, auth_nonce] — for the two device-gated bridge starts.
+//
+// Both bind EVERY parameter of the Ethereum transaction the MPC will sign (`evm_nonce`,
+// `gas_limit`, `max_fee`, `max_priority_fee`, `key_version`). That is the reason these two
+// circuits are gated at all, and it is not about the bridged value: the signed transaction
+// spends GAS from an account the MPC derives, and a relayer free to choose the gas fields
+// could drain that account by having the MPC sign a maximally expensive transaction. The
+// value itself is already safe — the recipient is pinned to `kernel.self()` inside the
+// circuit and cannot be influenced from outside.
+
+export pure circuit challenge_bridge_deposit_start_with_evm(
+  self_addr:        ContractAddress,
+  address:          Bytes<20>,
+  erc20:            Bytes<20>,
+  amount:           Uint<128>,
+  evm_nonce:        Uint<64>,
+  gas_limit:        Uint<64>,
+  max_fee:          Uint<128>,
+  max_priority_fee: Uint<128>,
+  key_version:      Uint<8>,
+  nonce_value:      Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:bridge_deposit_start")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<20>, Uint<128>,
+                         Uint<64>, Uint<64>, Uint<128>, Uint<128>, Uint<8>, Uint<64>]>(
+    [dst, self_addr, address, erc20, amount,
+     evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, nonce_value]
+  );
+}
+
+// The withdraw start binds two things the EIP-712 struct cannot show and therefore does not
+// carry: the ERC20 address (the colour already identifies the asset in the wallet prompt,
+// and this is the second binding), and the qualified coin the `held_coin` witness returned
+// (AUTH-10 — the approver signs over the exact coin the spend will consume, which the
+// wallet cannot see).
+//
+// The `change_entry` ARGUMENT of the circuit is deliberately NOT bound here, and this is
+// the one place in the whole arm where an argument escapes the challenge. The reason is
+// measured, not stylistic (question Q46): the nonce the standard library gives the change
+// coin of a `sendShielded` is NOT an `evolveNonce` of the spent coin's nonce on this
+// runtime — no index from 0 to 15, at one or two levels, reproduces it — so a client cannot
+// seal the change entry before the call. It CAN learn the nonce by executing the call
+// locally first (the execution is deterministic for the same state and arguments, also
+// measured), but only if it already holds a signature to execute WITH. Binding the entry
+// would therefore cost a second wallet prompt for every withdrawal that leaves change.
+//
+// What an unbound entry can and cannot do: it is ciphertext the contract never inspects, so
+// a wrong one strands DISCOVERY of the change coin and nothing else — the coin is created
+// either way, it stays in the client's own store, and it is spendable. `deposit_shielded`
+// has accepted an arbitrary entry from an arbitrary caller since MIP-0012 §6.2 for the same
+// reason. The change can always be re-filed later with `append_inbox_with_evm` (INV-4).
+export pure circuit challenge_bridge_withdraw_start_with_evm(
+  self_addr:        ContractAddress,
+  address:          Bytes<20>,
+  dest:             Bytes<20>,
+  color:            Bytes<32>,
+  amount:           Uint<128>,
+  evm_nonce:        Uint<64>,
+  gas_limit:        Uint<64>,
+  max_fee:          Uint<128>,
+  max_priority_fee: Uint<128>,
+  key_version:      Uint<8>,
+  erc20:            Bytes<20>,
+  coin:             QualifiedShieldedCoinInfo,
+  nonce_value:      Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>(
+    [pad(64, "midnight:account:auth:evm:v1:bridge_withdraw_start")]
+  );
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<20>, Bytes<32>, Uint<128>,
+                         Uint<64>, Uint<64>, Uint<128>, Uint<128>, Uint<8>, Bytes<20>,
+                         QualifiedShieldedCoinInfo, Uint<64>]>(
+    [dst, self_addr, address, dest, color, amount,
+     evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, erc20,
+     coin, nonce_value]
+  );
+}
+
 // ── The authorisation seam (MIP-0012 §4), one chip per arm ──────────────────
 //
 // One seam chip per arm gates every asset-releasing and state-changing
@@ -773,6 +1335,47 @@ circuit require_authorised_with_k256(
   // internally; both low-S and high-S signature forms are accepted (see
   // the malleability note in the header).
   const digest = envelope_digest(envelope, challenge);
+  assert(
+    secp256k1EcdsaVerify(digest, sig, pk),
+    "invalid signature"
+  );
+  auth_nonce = ((auth_nonce + (1 as Uint<64>)) as Uint<64>);
+  bump_round();
+}
+
+// Arm evm. The digest is computed by the CALLER (each gated export builds its
+// own EIP-712 struct), and `address` is the caller's already-computed
+// `secp256k1EthereumAddress(pk)` — the same value it put in the struct's `owner`
+// field. Passing it rather than recomputing it here keeps one keccak per call;
+// the obligation is local and holds for all seven call sites in this file, which
+// are the only ones this internal chip has.
+//
+// Consequences of binding the entry to the address: presenting a point that does
+// not hash to the enrolled address fails the membership assert, and so does a
+// point of the k256 or jubjub arm (different DST), an unenrolled address, a
+// stale epoch and a wrong use counter — all identically, before any signature is
+// examined.
+circuit require_authorised_with_evm(
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+  digest:      Bytes<32>,
+  address:     Bytes<20>,
+): [] {
+  require_live_k256_key(pk);
+  const entry = disclose(derive_device_entry_with_evm(
+    kernel.self(), address, device_epoch, use_counter
+  ));
+  assert(devices.member(entry), "unknown device entry");
+  devices.remove(entry);
+  devices.insert(disclose(derive_device_entry_with_evm(
+    kernel.self(), address, device_epoch,
+    ((use_counter + (1 as Uint<64>)) as Uint<64>)
+  )));
+  // The signature covers the EIP-712 digest, never the challenge itself. The
+  // verify interprets its digest as a big-endian integer and reduces it mod the
+  // curve order internally; both low-S and high-S forms are accepted (see the
+  // malleability note in the header).
   assert(
     secp256k1EcdsaVerify(digest, sig, pk),
     "invalid signature"
@@ -908,6 +1511,217 @@ circuit do_remove_device(entry: Bytes<32>, caller_entry: Bytes<32>): [] {
   device_count = ((device_count - (1 as Uint<8>)) as Uint<8>);
 }
 
+/// Parameter sanity for an offer, run BEFORE the seam so a malformed offer costs no signature
+/// verification and reports what is actually wrong. Pure arithmetic on the caller's own arguments
+/// plus the two fields of the witness coin the terms have to agree with; it reads no ledger state
+/// and leaks nothing. Ported from AA-v3's `assertActionEnvelope` selector-6 block, with the
+/// pooled-balance guards replaced by the two held-coin checks this stateless model needs instead.
+///
+/// NO CONTRACT TAKER (`recipient_kind == 2`), deliberately, and refused HERE rather than by the
+/// ledger. A contract-addressed shielded payout is accepted only if the recipient contract claims
+/// receipt in the SAME transaction — `commitments == claimed_shielded_receives` is an EQUALITY — and
+/// a taker composing its own transaction cannot reach inside the maker's call to claim one. Such an
+/// offer would be unsettleable by construction, and the maker would learn it only after minutes of
+/// proving, from a numeric node error. The range check is kept ahead of the refusal so an
+/// out-of-range kind still reports itself as out of range, and so this reads as what it is: a
+/// capability switched off, not a malformed field.
+export pure circuit assert_open_swap_terms(
+  give_color:     Bytes<32>,
+  give_amount:    Uint<128>,
+  recipient_kind: Uint<8>,
+  recipient:      Bytes<32>,
+  want:           ShieldedCoinInfo,
+  coin_color:     Bytes<32>,
+  coin_value:     Uint<128>,
+): [] {
+  assert(give_amount > (0 as Uint<128>), "swap must give a positive amount");
+  assert(want.value > (0 as Uint<128>), "swap must want a positive amount");
+  // Equal colours would let a maker "swap" a colour for itself, which is a withdrawal wearing an
+  // offer's clothes: the taker would fund the deficit and sweep the surplus of the SAME colour and
+  // the account would end up exactly where it started, minus nothing the taker paid for.
+  assert(give_color != want.color, "swap legs must be different colours");
+  assert(recipient_kind <= (2 as Uint<8>), "swap recipient kind is invalid");
+  assert(recipient_kind <= (1 as Uint<8>), "swap to a contract taker is not supported");
+  if (recipient_kind == (0 as Uint<8>)) {
+    assert(recipient == default<Bytes<32>>, "open swap recipient must be zero");
+  } else {
+    assert(recipient != default<Bytes<32>>, "named swap recipient must be nonzero");
+  }
+  // The witness is keyed by colour, so an honest client cannot return a coin of another colour; a
+  // DISHONEST one could, and the open shape builds its change coin from the input coin's own fields.
+  // Asserting the equality is what makes the offer's declared give colour the colour that actually
+  // moves, rather than a label.
+  assert(coin_color == give_color, "held coin colour does not match the give colour");
+  assert(coin_value >= give_amount, "held coin is smaller than the give amount");
+}
+
+/// The standard library's change rule, exported so a client can compute the surviving coin's nonce
+/// BEFORE the call instead of reading it from the result afterwards.
+///
+/// Every other spend on this contract lets the client backfill its change entry with a later
+/// `append_inbox`, so it never needs to predict the nonce. An offer cannot: its change entry is an
+/// argument, bound in the challenge and appended inside the same call, so the maker must know the
+/// coin at signing time. `pure`, therefore free — and it is the CONTRACT's own answer, not a client
+/// transcription of a rule it cannot see (`src/tests/swap-shapes-offline.ts` asserts on every run
+/// that the coin this predicts is the coin the circuit actually creates, for both shapes).
+export pure circuit swap_change_nonce(coin_nonce: Bytes<32>): Bytes<32> {
+  return evolveNonce(2, coin_nonce);
+}
+
+/// The offer deadline (Q8-B). ZERO MEANS NO DEADLINE, and this is the only circuit in the contract
+/// with one at all — every other operation relies on `auth_nonce` alone, which is enough exactly
+/// because a signature there is spent immediately.
+///
+/// The ledger op is GUARDED. A circuit has no control flow, but a guard over a PUBLIC value does
+/// suppress the ledger operations inside it, and it must: `blockTimeLt(0)` would bound the
+/// transaction to blocks with a timestamp below zero, i.e. to no block ever, so an offer with no
+/// deadline would be unsubmittable.
+///
+/// There is deliberately NO lower bound and therefore NO subtraction. AA-v3 pairs
+/// `blockTimeLt(validUntil)` with `blockTimeGte(validUntil - 3600)` to cap the horizon at an hour,
+/// and its own header records that the subtraction underflows on every call that does not reach it,
+/// so the value may never be routed into a hash or a cast. An offer's whole purpose is to stay live
+/// until a taker finds it, so an hour cap would be wrong here — and dropping it removes that hazard
+/// outright instead of clamping around it. The cost of having no lower bound is that the deadline
+/// bounds only the END of the window; nothing here needs it to bound the start.
+circuit assert_offer_live(valid_until: Uint<64>): [] {
+  const deadline = disclose(valid_until);
+  if (deadline != (0 as Uint<64>)) {
+    assert(blockTimeLt(deadline), "offer authorisation has expired");
+  }
+}
+
+// MIP-0012 §6.3, extended: THE OPEN ZSWAP OFFER.
+//
+// One proved call fuses a GIVE leg (a held coin leaves, in one of two shapes) and a WANT leg (a coin
+// this transaction does not fund is claimed into custody). The want leg is what makes the call
+// UNBALANCED — a deficit of `want.value` of `want.color` at the guaranteed segment — and THAT
+// DEFICIT IS THE OFFER. The maker proves the call and stops: no balancing, no signing, no DUST, no
+// submission. A taker who never knew the maker balances it with its own coins and submits one
+// atomic transaction, so the swap settles by construction rather than by two calls that could
+// diverge.
+//
+// `recipient_kind` picks between two genuinely different mechanisms, not a cosmetic flag:
+//
+//   KIND 0, THE OPEN OFFER — the held coin is consumed as a zswap INPUT and its nullifier claimed,
+//       and the only output created is the change back to this contract. The given value has NO
+//       OUTPUT AT ALL: it stands as a positive imbalance addressed to nobody, which any taker's
+//       stock balancer sweeps. That is what makes the offer usable by a holder whose keys the maker
+//       never knew — and why this contract transcribes the standard library's private coin
+//       commitment and nullifier (`modules/ZswapPrimitives.compact`): `sendShielded` is the only
+//       exported route to a zswap input and it always creates an output for the value it moves.
+//
+//   KIND 1, THE NAMED OFFER — an output for exactly the given value is created for a named coin
+//       public key, so the give leg is INTERNALLY BALANCED and the call's only imbalance is the
+//       want-side deficit.
+//       Naming a throwaway key whose secret ships with the offer turns this into a bearer offer,
+//       with no contract support beyond this branch.
+//
+//   KIND 2, a CONTRACT taker, is refused in `assert_open_swap_terms` — see the note there.
+//
+// STATELESS, like every other spend here: the coin comes from the `held_coin` witness and leaves as
+// zswap inputs and outputs; the only ledger writes are the inbox appends below and the seam's own
+// counters. There is no pool to re-pool into, which is the one structural difference from the AA-v3
+// circuit this is ported from.
+//
+// Returns the surviving change coin (none when the held coin is spent exactly), on the private
+// channel, exactly as `do_withdraw_shielded` does. The client needs its `nonce` BEFORE the call as
+// well — that is what `change_entry` is sealed to — so the same value is available ahead of time
+// through the free oracle `swap_change_nonce`.
+circuit do_open_swap(
+  coin:           QualifiedShieldedCoinInfo,
+  give_amount:    Uint<128>,
+  recipient_kind: Uint<8>,
+  recipient:      Bytes<32>,
+  want:           ShieldedCoinInfo,
+  want_entry:     Bytes<192>,
+  change_entry:   Bytes<192>,
+): Maybe<ShieldedCoinInfo> {
+  const self_addr = kernel.self();
+  const self_rcpt = right<ZswapCoinPublicKey, ContractAddress>(self_addr);
+  const c    = disclose(coin);
+  const give = disclose(give_amount);
+  const kind = disclose(recipient_kind);
+
+  // THE CLAMP. `assert_open_swap_terms` has already forced `c.value >= give`, so `safe_give == give`
+  // on every run that reaches this line and the clamp is the identity. It exists for the runs that
+  // do NOT reach it: a circuit has no control flow, so the guards below suppress their EFFECTS and
+  // ASSERTS but not their ARITHMETIC, and an unclamped `c.value - give` would be a negative field
+  // element, and both output coins below encode it as a `Uint<128>`. The witness VM refuses to
+  // encode that ("inputs did not match alignment"), which would cost the circuit its provable runs
+  // entirely. This is the clamp AA-v3's header warns about, kept.
+  const safe_give    = (c.value >= give ? give : 0) as Uint<128>;
+  const change_value = (c.value - safe_give) as Uint<128>;
+  const has_change   = change_value > 0;
+
+  // The surviving coin, named once and used by both shapes, with ONE rule: `evolveNonce(2, …)`, the
+  // same index the standard library reserves for a change coin and the same rule AA-v3's open shape
+  // used. The client reproduces it before the call through the free oracle `swap_change_nonce`, and
+  // `src/tests/swap-shapes-offline.ts` asserts the two agree on every run.
+  const change_coin = ShieldedCoinInfo {
+    nonce: evolveNonce(2, c.nonce),
+    color: c.color,
+    value: change_value
+  };
+
+  // THE GIVE LEG. The input and its nullifier are SHARED by both shapes and hoisted out of the
+  // select: every offer spends the held coin, and only what happens to the given value differs.
+  //
+  // The named shape does NOT call `sendShielded`, deliberately. The library's change coin takes its
+  // nonce from a DIFFERENT rule than `evolveNonce` — the generated code hashes a separator whose
+  // string already ends in `/2` over the nonce alone, where `evolveNonce(2, n)` hashes a separator,
+  // an index and the nonce, and the two are not equal. A circuit that used `sendShielded` for one
+  // shape and built its own change coin for the other would therefore have TWO change rules, and a
+  // client that has to seal the change entry BEFORE the call could only predict one of them. So both
+  // shapes build their outputs here, from one rule, and the offline suite pins it. (This is a
+  // departure from the AA-v3 circuit, which had a pool to re-pool into and read the surviving coin
+  // from the library's own result; see the questions file, Q37.)
+  createZswapInput(c);
+  kernel.claimZswapNullifier(zswapCoinNullifier(dropMerkleIndex(c), self_addr));
+
+  if (kind != 0) {
+    // NAMED: an output addressed to the recipient's coin public key, for exactly the given value.
+    // Only a SPEND is claimed — a receive would assert this contract owns it, and it does not. The
+    // payout's nonce evolves from the input coin's under index 1, the change's under index 2, so the
+    // two outputs of one call can never collide.
+    const payout = ShieldedCoinInfo {
+      nonce: evolveNonce(1, c.nonce),
+      color: c.color,
+      value: safe_give
+    };
+    const payout_rcpt =
+      left<ZswapCoinPublicKey, ContractAddress>(ZswapCoinPublicKey { bytes: disclose(recipient) });
+    createZswapOutput(payout, payout_rcpt);
+    kernel.claimZswapCoinSpend(zswapCoinCommitment(payout, payout_rcpt));
+  }
+  // OPEN (kind 0) creates NO output for the given value at all — that omission IS the open offer.
+
+  if (has_change) {
+    createZswapOutput(change_coin, self_rcpt);
+    const cm = zswapCoinCommitment(change_coin, self_rcpt);
+    kernel.claimZswapCoinSpend(cm);
+    kernel.claimZswapCoinReceive(cm);
+  }
+
+  // THE WANT LEG, both shapes. `receiveShielded` creates an output this transaction does not fund —
+  // the deficit that IS the offer — and must precede nothing else here: it is what allocates the
+  // coin's Merkle-tree index.
+  receiveShielded(disclose(want));
+
+  // The inbox, in a FIXED order so a client can predict the ordinals it must walk: the change entry
+  // first when change exists, then the want entry. Both are opaque 192-byte containers the client
+  // sealed to this account's encryption key and the challenge bound in full.
+  if (has_change) {
+    do_append_inbox(change_entry);
+  }
+  do_append_inbox(want_entry);
+
+  if (has_change) {
+    return some<ShieldedCoinInfo>(change_coin);
+  }
+  return none<ShieldedCoinInfo>();
+}
+
 // ── Unshielded custody (MIP-0012 §5) ────────────────────────────────────────
 
 // Permissionless: anyone may fund the account. Increments round (§4).
@@ -951,6 +1765,26 @@ export circuit withdraw_unshielded_with_k256(
     kernel.self(), pk, color, amount, recipient, auth_nonce
   );
   require_authorised_with_k256(pk, use_counter, sig, challenge, envelope);
+  do_withdraw_unshielded(color, amount, recipient);
+}
+
+export circuit withdraw_unshielded_with_evm(
+  color:       Bytes<32>,
+  amount:      Uint<128>,
+  recipient:   UserAddress,
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+): [] {
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_withdraw_unshielded_with_evm(
+    kernel.self(), address, color, amount, recipient, auth_nonce
+  );
+  const digest = evm_digest_withdraw_unshielded(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce,
+    color, amount, recipient.bytes, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
   do_withdraw_unshielded(color, amount, recipient);
 }
 
@@ -1000,6 +1834,27 @@ export circuit append_inbox_with_k256(
   do_append_inbox(entry);
 }
 
+// The entry enters the EIP-712 struct as its keccak (one word per field), and
+// the challenge binds all 192 bytes, so the entry behind the hash is pinned
+// twice over.
+export circuit append_inbox_with_evm(
+  entry:       Bytes<192>,
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+): [] {
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_append_inbox_with_evm(
+    kernel.self(), address, entry, auth_nonce
+  );
+  const digest = evm_digest_append_inbox(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce,
+    keccak256<Bytes<192>>(entry), challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
+  do_append_inbox(entry);
+}
+
 // Authorised spend to a user's Zswap key (§6.3). The coin description
 // enters through the held_coin witness, never from ledger state. The
 // witness is invoked before the challenge so its returned value enters the
@@ -1038,6 +1893,30 @@ export circuit withdraw_shielded_with_k256(
     kernel.self(), pk, recipient, color, amount, coin, auth_nonce
   );
   require_authorised_with_k256(pk, use_counter, sig, challenge, envelope);
+  return do_withdraw_shielded(recipient, amount, coin);
+}
+
+export circuit withdraw_shielded_with_evm(
+  recipient:   ZswapCoinPublicKey,
+  color:       Bytes<32>,
+  amount:      Uint<128>,
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+): Maybe<ShieldedCoinInfo> {
+  // The witness runs BEFORE the challenge, so its value enters the challenge
+  // (AUTH-10) and the signature authorises spending exactly this qualified coin
+  // — the coin the wallet never sees and cannot display.
+  const coin = held_coin(color);
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_withdraw_shielded_with_evm(
+    kernel.self(), address, recipient, color, amount, coin, auth_nonce
+  );
+  const digest = evm_digest_withdraw_shielded(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce,
+    color, amount, recipient.bytes, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
   return do_withdraw_shielded(recipient, amount, coin);
 }
 
@@ -1090,6 +1969,27 @@ export circuit withdraw_shielded_to_contract_with_k256(
   return do_withdraw_shielded_to_contract(recipient, amount, coin);
 }
 
+export circuit withdraw_shielded_to_contract_with_evm(
+  recipient:   ContractAddress,
+  color:       Bytes<32>,
+  amount:      Uint<128>,
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+): [ShieldedCoinInfo, Maybe<ShieldedCoinInfo>] {
+  const coin = held_coin(color);
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_withdraw_shielded_to_contract_with_evm(
+    kernel.self(), address, recipient, color, amount, coin, auth_nonce
+  );
+  const digest = evm_digest_withdraw_shielded_to_contract(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce,
+    color, amount, recipient.bytes, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
+  return do_withdraw_shielded_to_contract(recipient, amount, coin);
+}
+
 // ── Encryption-key lifecycle (MIP-0012 §6.7) ────────────────────────────────
 //
 // Exactly one way to change enc_key. After rotation the client SHOULD
@@ -1122,6 +2022,23 @@ export circuit rotate_enc_key_with_k256(
     kernel.self(), pk, new_key, auth_nonce
   );
   require_authorised_with_k256(pk, use_counter, sig, challenge, envelope);
+  do_rotate_enc_key(new_key);
+}
+
+export circuit rotate_enc_key_with_evm(
+  new_key:     Bytes<32>,
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+): [] {
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_rotate_enc_key_with_evm(
+    kernel.self(), address, new_key, auth_nonce
+  );
+  const digest = evm_digest_rotate_enc_key(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce, new_key, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
   do_rotate_enc_key(new_key);
 }
 
@@ -1220,6 +2137,23 @@ export circuit add_device_with_k256(
   do_add_device(new_entry);
 }
 
+export circuit add_device_with_evm(
+  new_entry:   Bytes<32>,
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+): [] {
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_add_device_with_evm(
+    kernel.self(), address, new_entry, auth_nonce
+  );
+  const digest = evm_digest_add_device(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce, new_entry, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
+  do_add_device(new_entry);
+}
+
 // Removes a device's CURRENT entry, supplied as the literal set element
 // (MIP-0013 §6): removing a lost device requires its public key and
 // current use counter, recovered from the client roster or the S11
@@ -1261,4 +2195,342 @@ export circuit remove_device_with_k256(
     kernel.self(), pk, envelope, device_epoch,
     ((use_counter + (1 as Uint<64>)) as Uint<64>)
   ));
+}
+
+export circuit remove_device_with_evm(
+  entry:       Bytes<32>,
+  pk:          Secp256k1Point,
+  use_counter: Uint<64>,
+  sig:         Secp256k1EcdsaSignature,
+): [] {
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_remove_device_with_evm(
+    kernel.self(), address, entry, auth_nonce
+  );
+  const digest = evm_digest_remove_device(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce, entry, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
+  // As above: the caller's post-roll entry is off limits.
+  do_remove_device(entry, derive_device_entry_with_evm(
+    kernel.self(), address, device_epoch,
+    ((use_counter + (1 as Uint<64>)) as Uint<64>)
+  ));
+}
+
+// ── The open ZSwap offer, one gated export per arm ──────────────────────────
+//
+// Spec 00034 User Story 2 / FR-006–FR-008. The custody body is `do_open_swap` above; what follows is
+// the same seam mechanics every other gated circuit uses — witness first (AUTH-10), sanity, deadline,
+// challenge, verification, chip — with two additions that exist only here.
+//
+// FIRST, `valid_until`. Every other operation on every arm relies on `auth_nonce` alone (AUTH-2): a
+// signature never expires, but at most one executes. An offer breaks the assumption that makes that
+// enough — it is a proved call that sits published until a STRANGER settles it, so "at most one
+// executes" is true while "it executes when the maker still wants it to" is not. `valid_until` is
+// therefore a per-offer, zero-means-none deadline, bound in both the challenge and the EIP-712
+// struct, and it is the only place in this contract where ledger time is read at all.
+//
+// SECOND, the inbox entries are ARGUMENTS. Every other spend leaves the client to backfill its
+// change entry with a second call (`append_inbox`); an offer cannot, because the maker is gone by
+// the time the call executes and a second signed call would invalidate the pending offer (see the
+// concurrency note below). So both entries — for the change and for the wanted coin — are computed
+// client-side before proving, passed in, and appended inside the same call.
+//
+// ONE LIVE OFFER PER ACCOUNT (Q7, accepted for this project and documented rather than fixed). The
+// seam consumes the acting device's current entry and binds `auth_nonce`; a pending offer is a
+// proved call against a specific `auth_nonce` and a specific entry, so ANY other gated call from ANY
+// device on this account — including a second offer — makes it stale forever. A market maker wanting
+// concurrent offers needs one account per offer, or a seam change that is out of scope here.
+
+export circuit open_swap_shielded_with_jubjub(
+  give_color:     Bytes<32>,
+  give_amount:    Uint<128>,
+  recipient_kind: Uint<8>,
+  recipient:      Bytes<32>,
+  want:           ShieldedCoinInfo,
+  want_entry:     Bytes<192>,
+  change_entry:   Bytes<192>,
+  valid_until:    Uint<64>,
+  pk:             JubjubPoint,
+  use_counter:    Uint<64>,
+  sig_r:          JubjubPoint,
+  sig_s:          Field,
+  grind_nonce:    Uint<64>,
+): Maybe<ShieldedCoinInfo> {
+  const coin = held_coin(give_color);
+  assert_open_swap_terms(
+    give_color, give_amount, recipient_kind, recipient, want, coin.color, coin.value
+  );
+  assert_offer_live(valid_until);
+  const challenge = challenge_open_swap_shielded_with_jubjub(
+    kernel.self(), sig_r, pk, give_color, give_amount, recipient_kind, recipient, want,
+    want_entry, change_entry, valid_until, coin, auth_nonce, grind_nonce
+  );
+  require_authorised_with_jubjub(pk, use_counter, sig_r, sig_s, challenge);
+  return do_open_swap(coin, give_amount, recipient_kind, recipient, want, want_entry, change_entry);
+}
+
+export circuit open_swap_shielded_with_evm(
+  give_color:     Bytes<32>,
+  give_amount:    Uint<128>,
+  recipient_kind: Uint<8>,
+  recipient:      Bytes<32>,
+  want:           ShieldedCoinInfo,
+  want_entry:     Bytes<192>,
+  change_entry:   Bytes<192>,
+  valid_until:    Uint<64>,
+  pk:             Secp256k1Point,
+  use_counter:    Uint<64>,
+  sig:            Secp256k1EcdsaSignature,
+): Maybe<ShieldedCoinInfo> {
+  // The witness runs BEFORE the challenge, so the qualified coin the spend will consume enters the
+  // challenge (AUTH-10). On this arm that matters twice over: the wallet is shown the offer's TERMS
+  // (colours, amounts, recipient, deadline) and cannot be shown the coin, so the coin is pinned by
+  // the challenge the wallet signs as one field of the struct.
+  const coin = held_coin(give_color);
+  assert_open_swap_terms(
+    give_color, give_amount, recipient_kind, recipient, want, coin.color, coin.value
+  );
+  assert_offer_live(valid_until);
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_open_swap_shielded_with_evm(
+    kernel.self(), address, give_color, give_amount, recipient_kind, recipient, want,
+    want_entry, change_entry, valid_until, coin, auth_nonce
+  );
+  const digest = evm_digest_open_swap_shielded(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce,
+    give_color, give_amount, recipient_kind, recipient,
+    want.nonce, want.color, want.value, valid_until, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
+  return do_open_swap(coin, give_amount, recipient_kind, recipient, want, want_entry, change_entry);
+}
+
+
+// ── The ERC20 bridge (project 00034 PR-G; spec User Stories 5 and 7, FR-021, FR-027) ────
+//
+// Five circuits, two device-gated and three permissionless, driving the witness-free ERC20
+// vault fork by cross-contract call. The asymmetry is the design, not an oversight:
+//
+//   START is gated because it commits this account to an ERC20 and an amount and, above
+//   all, because the EVM transaction parameters it signs SPEND GAS from an MPC-derived
+//   Ethereum account. A relayer that could choose them could drain that account.
+//
+//   SETTLE is permissionless because the vault verifies the MPC's attestation in-circuit
+//   against the response key it pinned at initialise, and because the only recipient a
+//   settle can pay was pinned when the start ran (`right(kernel.self())` — this account).
+//   Whoever submits the transaction, the coin can only land here. That is what lets a
+//   relayer finish a deposit the owner started, and it is why the owner's device signature
+//   is not needed twice for one round trip.
+//
+// A deposit is therefore TWO Midnight transactions with an MPC round trip in between, and
+// a withdraw is two more. The round trip cannot be collapsed: nothing on Midnight can wait
+// for an Ethereum transaction inside one proof.
+//
+// THE CALLEE RULE (Gate 0, question Q21b) governs every recipient here. A callee's shielded
+// output only survives when the transaction's ROOT claims it in the same tree — a callee
+// paying a wallet key is refused by the node (ledger 213). The vault is the callee in all
+// five of these calls, so every mint it makes must be addressed to THIS account and claimed
+// by `receiveShielded` in the same circuit. The vault cannot check that itself (Compact has
+// no caller introspection), which makes it the CALLER'S obligation: `right(kernel.self())`
+// is passed as the recipient at both starts and is not a parameter anyone can influence.
+
+// Start a deposit: the client has already told the user an Ethereum address derived from
+// `depositPath(right(this account))`, and the user has funded it with the ERC20 and gas ETH.
+// This call asks the MPC to sign `transfer(vault, amount)` FROM that derived address.
+//
+// One transaction, three contract calls: account -> vault.startDeposit -> the Signet
+// singleton's signBidirectional (the vault makes the second hop). No value moves on
+// Midnight here and no account state changes beyond the seam's own (`auth_nonce`, `round`,
+// the rolled device entry).
+export circuit bridge_deposit_start_with_evm(
+  erc20:            Bytes<20>,
+  amount:           Uint<128>,
+  evm_nonce:        Uint<64>,
+  gas_limit:        Uint<64>,
+  max_fee:          Uint<128>,
+  max_priority_fee: Uint<128>,
+  key_version:      Uint<8>,
+  pk:               Secp256k1Point,
+  use_counter:      Uint<64>,
+  sig:              Secp256k1EcdsaSignature,
+): [] {
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_bridge_deposit_start_with_evm(
+    kernel.self(), address, erc20, amount,
+    evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, auth_nonce
+  );
+  const digest = evm_digest_bridge_deposit_start(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce,
+    erc20, amount, evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
+  vault.startDeposit(
+    disclose(evm_nonce), disclose(gas_limit), disclose(max_fee), disclose(max_priority_fee),
+    disclose(key_version), disclose(erc20), disclose(amount),
+    // The pinned recipient. It is `kernel.self()` and nothing else, in every build of this
+    // contract: the MPC derivation path — and therefore the Ethereum address the user
+    // funded — is a function of it, so an account cannot sweep another account's deposit
+    // address, and the minted coin cannot land anywhere but here.
+    right<ZswapCoinPublicKey, ContractAddress>(kernel.self())
+  );
+}
+
+// Settle a deposit. Permissionless (see the banner): the vault's in-circuit attestation
+// check is the only authority.
+//
+// `entry` is the account-encrypted description of the coin the vault is about to mint, in
+// the same InboxEntry v1 container `deposit_shielded` takes. The client knows the coin
+// before proving because it dry-runs this very call locally first and reads `minted.value`
+// (question Q11 option A); the `mint_nonce` it passes is what makes the coin predictable.
+// A wrong entry strands discovery, never funds — the coin is claimed either way, and the
+// owner can recover it by rescanning and re-filing with `append_inbox_with_evm` (INV-4).
+//
+// The `none` branch is a deposit whose ERC20 `transfer` executed and returned FALSE: the
+// vault closes the request without minting, because the value never left the depositor's
+// own derived address. Nothing is claimed, nothing is appended, and `round` still advances
+// so a client watching state sees the settle landed.
+export circuit bridge_deposit_complete(
+  request_id:  RequestId,
+  // `event` is a reserved keyword in Compact 0.26, so the MPC's attestation travels under
+  // its role name here; it is the vault's `respondBidirectionalEvent` argument unchanged.
+  attestation: RespondBidirectionalEvent,
+  output:      Bytes<1>,
+  mint_nonce:  Bytes<32>,
+  entry:       Bytes<192>,
+): Maybe<ShieldedCoinInfo> {
+  const minted = vault.completeDeposit(
+    disclose(request_id), disclose(attestation), disclose(output), disclose(mint_nonce)
+  );
+  if (disclose(minted.is_some)) {
+    // The claim that makes the callee's mint legal, in the same transaction (Gate 0 G1).
+    receiveShielded(minted.value);
+    do_append_inbox(entry);
+    bump_round();
+    return some<ShieldedCoinInfo>(minted.value);
+  }
+  bump_round();
+  return none<ShieldedCoinInfo>();
+}
+
+// Start a withdrawal: hand `amount` of the vault colour back to the vault and have the MPC
+// sign `transfer(dest, amount)` from the VAULT's own Ethereum account.
+//
+// One transaction, three contract calls, and value crossing the boundary in the direction
+// Gate 0's G1b proved: this account's `sendShielded` creates a vault-addressed output, the
+// vault claims that exact output with `receiveShielded` inside the same tree, and the vault
+// then calls the singleton. The surrendered coin is not burned — it is claimed and left
+// unspendable (question Q24), which is the same economics in the one shape a callee may use.
+//
+// The change coin follows the MIP-0012 surviving-coin rule. Its inbox entry is an ARGUMENT
+// so that one transaction can create the change AND make it discoverable, but the entry is
+// NOT part of the signed challenge — see `challenge_bridge_withdraw_start_with_evm` for the
+// measurement behind that (question Q46). A caller that cannot predict the change coin
+// passes 32 zero bytes' worth of nothing (any 192 bytes: a spend of the WHOLE coin never
+// reaches the append at all) and re-files later with `append_inbox_with_evm`.
+export circuit bridge_withdraw_start_with_evm(
+  dest:             Bytes<20>,
+  color:            Bytes<32>,
+  amount:           Uint<128>,
+  evm_nonce:        Uint<64>,
+  gas_limit:        Uint<64>,
+  max_fee:          Uint<128>,
+  max_priority_fee: Uint<128>,
+  key_version:      Uint<8>,
+  erc20:            Bytes<20>,
+  change_entry:     Bytes<192>,
+  pk:               Secp256k1Point,
+  use_counter:      Uint<64>,
+  sig:              Secp256k1EcdsaSignature,
+): Maybe<ShieldedCoinInfo> {
+  // The witness runs BEFORE the challenge, so the coin it returns is pinned by the
+  // signature (AUTH-10), exactly as in withdraw_shielded_with_evm.
+  const coin = held_coin(color);
+  const address = secp256k1EthereumAddress(pk);
+  const challenge = challenge_bridge_withdraw_start_with_evm(
+    kernel.self(), address, dest, color, amount,
+    evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, erc20,
+    coin, auth_nonce
+  );
+  const digest = evm_digest_bridge_withdraw_start(
+    kernel.self().bytes, evm_domain_salt, address, auth_nonce,
+    dest, color, amount, evm_nonce, gas_limit, max_fee, max_priority_fee, key_version, challenge
+  );
+  require_authorised_with_evm(pk, use_counter, sig, digest, address);
+
+  // Not do_withdraw_shielded_to_contract: the vault needs the SENT coin as a call argument
+  // (it claims that exact description), and the chip returns it inside a tuple. The send is
+  // otherwise identical, including the change rule.
+  const result = sendShielded(
+    disclose(coin),
+    right<ZswapCoinPublicKey, ContractAddress>(vault_address),
+    disclose(amount),
+  );
+  vault.startWithdraw(
+    disclose(evm_nonce), disclose(gas_limit), disclose(max_fee), disclose(max_priority_fee),
+    disclose(key_version), disclose(erc20), disclose(amount), disclose(dest),
+    disclose(result.sent),
+    // The refund recipient, pinned for the whole life of the request: a withdrawal whose
+    // EVM leg fails can re-mint only into this account (spec FR-026, question Q21b).
+    right<ZswapCoinPublicKey, ContractAddress>(kernel.self())
+  );
+  if (disclose(result.change.is_some)) {
+    do_append_inbox(change_entry);
+    return some<ShieldedCoinInfo>(disclose(result.change.value));
+  }
+  return none<ShieldedCoinInfo>();
+}
+
+// Settle an EXECUTED withdrawal. Permissionless. Two branches, decided by the attested
+// return value and never by the caller: on success the request simply closes (the ERC20 is
+// already at `dest` on the EVM chain, and nothing comes back to Midnight); on a `transfer`
+// that executed and returned FALSE the vault re-mints the surrendered amount to the pinned
+// recipient — this account — which claims it here and files its inbox entry.
+export circuit bridge_withdraw_complete(
+  request_id:  RequestId,
+  // `event` is a reserved keyword in Compact 0.26, so the MPC's attestation travels under
+  // its role name here; it is the vault's `respondBidirectionalEvent` argument unchanged.
+  attestation: RespondBidirectionalEvent,
+  output:      Bytes<1>,
+  mint_nonce:  Bytes<32>,
+  entry:       Bytes<192>,
+): Maybe<ShieldedCoinInfo> {
+  const refunded = vault.completeWithdraw(
+    disclose(request_id), disclose(attestation), disclose(output), disclose(mint_nonce)
+  );
+  if (disclose(refunded.is_some)) {
+    receiveShielded(refunded.value);
+    do_append_inbox(entry);
+    bump_round();
+    return some<ShieldedCoinInfo>(refunded.value);
+  }
+  bump_round();
+  return none<ShieldedCoinInfo>();
+}
+
+// Settle a NEVER-EXECUTED withdrawal: the MPC signed, nobody broadcast (or the signed
+// transaction became unusable), and the MPC attested the protocol's fixed 5-byte
+// never-executed marker. The vault always re-mints in this branch, so unlike the two
+// settles above this one carries no `Maybe` — a coin is always claimed.
+//
+// There is no account-side twin for the vault's `abandonDeposit`: a never-executed DEPOSIT
+// surrendered no Midnight value, so closing it mints nothing and touches no account state.
+// Anyone calls it on the vault directly.
+export circuit bridge_withdraw_refund(
+  request_id:  RequestId,
+  // `event` is a reserved keyword in Compact 0.26, so the MPC's attestation travels under
+  // its role name here; it is the vault's `respondBidirectionalEvent` argument unchanged.
+  attestation: RespondBidirectionalEvent,
+  output:      Bytes<5>,
+  mint_nonce:  Bytes<32>,
+  entry:       Bytes<192>,
+): ShieldedCoinInfo {
+  const refunded = vault.refundWithdraw(
+    disclose(request_id), disclose(attestation), disclose(output), disclose(mint_nonce)
+  );
+  receiveShielded(refunded);
+  do_append_inbox(entry);
+  bump_round();
+  return refunded;
 }
