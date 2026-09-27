@@ -228,7 +228,8 @@ deploy/run-stagenet.sh deposit-fund  --token stkA --run stkA-p8 --amount 10000 -
   `VerifierKeyInsert` (for example a metadata circuit) could ever land.
 - Records: `deployments/sepolia-stk.json` (the ERC20s) and `deployments/stagenet-vault.json`
   (the vault, its EVM account, response key, maintenance verifying key, the bridged colours
-  `wStkA/wStkB/wStkC`, and the deposit addresses).
+  `wStkA/wStkB/wStkC` and `wUSDC` (Circle's Sepolia USDC `0x1c7D…7238`), every completed
+  deposit run, and the deposit addresses).
 
 The callee is compiled **before** the caller, and the output directory name IS the declared
 contract type name: `managed/SignetSigner`, `managed/Erc20Vault`.
