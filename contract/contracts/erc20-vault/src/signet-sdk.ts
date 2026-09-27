@@ -2,7 +2,8 @@
 //
 // WHY THIS FILE EXISTS (question Q25, extending Q20)
 //
-// `import … from "@sig-net/midnight"` throws before a single statement of ours runs:
+// `import … from "@sig-net/midnight"` throws before a single statement of ours runs
+// (still true of 0.23.0, re-checked by project 00037):
 //
 //   CompactError: Version mismatch: compiled code expects 0.18.0-rc.1, runtime is 0.19.0
 //     at checkRuntimeVersion (@midnight-ntwrk/compact-runtime/src/version.ts:14)
@@ -31,6 +32,12 @@
 // tests/signet-circuits.test.ts pins the recompile against the SDK's own TypeScript twins,
 // which is what makes substituting our build for theirs safe.
 
+// Mirrors @sig-net/midnight 0.23.0's own dist/index.js export list, line for line, minus
+// its last line (`pureCircuits`, served from our rebuild below). Project 00037 re-based
+// this list from 0.22.0-rc.1: `mpc-output-cache.js`, the request-signing-key derivations
+// and `decodeEvmType2SignBidirectionalEvent` are new, and signet-contract-events.js now
+// exports `signetEventSourceFromIndexer` in place of the removed
+// `signetEventSourceFromPublicDataProvider`.
 export * from "../node_modules/@sig-net/midnight/dist/abi-serde.js";
 export {
   bigintToBytes32,
@@ -46,15 +53,20 @@ export * from "../node_modules/@sig-net/midnight/dist/constants.js";
 export {
   deriveEpsilon,
   deriveEvmAddress,
+  deriveMidnightRequestSigningKey,
   deriveMidnightResponseKey,
+  deriveSignBidirectionalEventSignerEvmAddress,
+  deriveSignBidirectionalEventSigningKey,
   EPSILON_DERIVATION_PREFIX,
   MIDNIGHT_CAIP2_ID,
   MIDNIGHT_RESPOND_BIDIRECTIONAL_PATH,
 } from "../node_modules/@sig-net/midnight/dist/epsilon-derivation.js";
+export * from "../node_modules/@sig-net/midnight/dist/mpc-output-cache.js";
 export { signetFieldNodeByPath } from "../node_modules/@sig-net/midnight/dist/raw-contract-state.js";
 export * from "../node_modules/@sig-net/midnight/dist/signature-requests-state-reader.js";
 export * from "../node_modules/@sig-net/midnight/dist/signature-response-verification.js";
 export * from "../node_modules/@sig-net/midnight/dist/signet-contract-events.js";
+export { decodeEvmType2SignBidirectionalEvent } from "../node_modules/@sig-net/midnight/dist/signet-evtype2tx-record-decoding.js";
 export {
   abiWordToBool,
   abiWordToUint128,

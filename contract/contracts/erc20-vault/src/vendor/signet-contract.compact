@@ -1,19 +1,23 @@
 // VENDORED VERBATIM — sig-net/midnight-integration
-// packages/signet-contract/src/signet-contract.compact @ 79ce225d7fe73829d8750458fcb7cd6aa7323c46
-// (the read-only reference clone at resources/sig-net-midnight-integration).
+// packages/signet-contract/src/signet-contract.compact @ v0.23.0
+// (43b74e4a9432a2c0a51f312df2c5c5f03f2f6b82; read-only reference clone at
+// resources/sig-net-midnight-integration-v0.23.0 in the organizer workspace).
+// The body below is byte-identical to the 79ce225 copy project 00034 vendored first,
+// and to the source of the singleton deployed on stagenet at
+// 1df4ce25fc9f9c03dc6f4d0eb12ddf3d0db094995d4c70aca1142eebb3b77a5d.
 //
 // Why a local copy exists at all: the PUBLISHED @sig-net/midnight-contract
-// 0.22.0-rc.1 (and every other published version, up to 0.22.0-rc.4) ships
-// generated TypeScript that calls
+// (every version up to 0.23.0) ships generated TypeScript that calls
 //   __compactRuntime.checkRuntimeVersion('0.18.0-rc.1')
 // i.e. it was compiled on the compactc 0.33 line. compact-runtime 0.19.0 —
-// the runtime this project pins (question Q5) — refuses to load it:
+// the runtime this project pins — refuses to load it:
 //   CompactError: Version mismatch: compiled code expects 0.18.0-rc.1, runtime is 0.19.0
 // and the check has no override. The singleton therefore has to be recompiled
-// with compactc 0.34.0 to be usable as a callee from a 0.34.0 contract. See
-// question Q20 in plans/00034-passport-evm-account-zswap-questions.md, and the
-// verifier-key comparison in evidence/…/gate0/g0-signet-vk-compare.json, which
-// decides whether the already-deployed stagenet singleton stays callable.
+// with compactc 0.34.0 to be usable as a callee from a 0.34.0 contract (project
+// 00034 question Q20). Its verifier keys come out byte-identical to the DEPLOYED
+// singleton's (project 00037 P0: 0.34.0 and 0.33.0-rc.2 both reproduce them);
+// tests/signet-vk-compare.test.ts re-checks against the published bundle, and
+// tests/signet-vk-onchain.test.ts against the chain.
 //
 // NOT EDITED below this header.
 pragma language_version >= 0.25;
