@@ -203,7 +203,18 @@ deploy/run-stagenet.sh relay --request <id>
 deploy/run-stagenet.sh deposit-complete --request <id>
 deploy/run-stagenet.sh withdraw-gas | withdraw-start --token stkA --amount 1 | withdraw-complete --request <id>
 deploy/run-stagenet.sh status | balances
+
+# any other ERC20, by address and a label (decimals read on chain), e.g. Circle's Sepolia USDC:
+deploy/run-stagenet.sh deposit-fund  --token USDC --erc20 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238 --amount 50
+deploy/run-stagenet.sh deposit-start --token USDC --amount 50      # --midnight-name defaults to wUSDC
+# a second deposit of the same token needs its own run key (a completed run is never reopened):
+deploy/run-stagenet.sh deposit-fund  --token stkA --run stkA-p8 --amount 10000 --evidence p8-deposit-stkA.json
 ```
+
+- The vault has no ERC20 allow-list: `startDeposit` takes any non-zero address, and the
+  colour is `tokenType(vaultTokenDomainSeparator(erc20), vault)`. `deploy/bridge-token.ts`
+  resolves `--token` against `deployments/sepolia-stk.json`, then against ERC20s earlier runs
+  bridged; a label, an address or a Midnight name is never reused for a different token.
 
 - The Midnight wallet is a mnemonic FILE (`WALLET=…`), mounted read-only and read
   in-process (`deploy/mnemonic.ts`); the Sepolia key file (`SK=…`) is mounted only for the

@@ -18,7 +18,15 @@
 //   withdraw-gas [--eth 0.0015]                                      (Sepolia spend)
 //   withdraw-start --token stkA [--amount 1] [--dest 0x…]            (Midnight spend)
 //   withdraw-complete --request <id> | withdraw-refund --request <id>
-//   balances                        the wallet's shielded balances of the wStk colours
+//   balances                        the wallet's shielded balances of the bridged colours
+//
+// TOKENS. `--token stkA|stkB|stkC` names this project's ERC20s (deployments/sepolia-stk.json).
+// Any other ERC20 is named by address under a label of your choosing, e.g. Circle's USDC:
+// `--token USDC --erc20 0x1c7D…7238 [--midnight-name wUSDC]` (decimals read on chain; after
+// the first run `--token USDC` alone resolves it). A deposit run is keyed by `--run`
+// (default: the label) and a completed run is never reopened, so a second deposit of the
+// same token takes a new key (`--run stkA-p8`); `--evidence <file>.json` names its
+// evidence file (default `p4-deposit-<run>.json`). See deploy/bridge-token.ts.
 //
 // SECRETS. The Midnight wallet comes from STAGENET_WALLET_FILE (a mnemonic file mounted
 // read-only; read in-process by deploy/wallet.ts). The Sepolia key comes from
@@ -76,6 +84,14 @@ import {
   toSignBidirectionalEventIndex,
 } from "../src/signet-sdk.ts";
 import { fingerprintDeployArtefacts } from "./artefacts.ts";
+import {
+  depositEvidenceName,
+  depositRunKey,
+  knownExternalTokens,
+  mergeBridgedTokens,
+  resolveBridgeToken,
+  type BridgeToken,
+} from "./bridge-token.ts";
 import {
   connectWitnessFree,
   contractRefArg,
@@ -172,8 +188,12 @@ function readJson<T = Json>(file: string): T | undefined {
 }
 
 interface DepositRecord {
+  /** The token's label (`stkA`, `USDC`); the record's key in `deposits` is the run key. */
   token: string;
   erc20: string;
+  decimals?: number;
+  midnightName?: string;
+  evidenceFile?: string;
   amount: string;
   recipient: string;
   depositAddress: string;
@@ -183,8 +203,10 @@ interface DepositRecord {
   relay?: Json[];
   relayResult?: Json;
   completeTx?: Json;
+  walletColour?: string;
   walletColourBefore?: string;
   walletColourAfter?: string;
+  walletColourDelta?: string;
 }
 
 interface State {
@@ -227,11 +249,21 @@ function stkTokens(): StkToken[] {
   return doc.tokens;
 }
 
-function token(symbol: string | undefined): StkToken {
-  if (symbol === undefined) throw new Error("--token stkA|stkB|stkC is required");
-  const t = stkTokens().find((x) => x.symbol.toLowerCase() === symbol.toLowerCase());
-  if (t === undefined) throw new Error(`unknown token ${symbol}`);
-  return t;
+/** This project's stk tokens plus the other ERC20s earlier runs bridged (P7: Circle's USDC). */
+function bridgeTokens(state: State): BridgeToken[] {
+  const registry = stkTokens();
+  return [...registry, ...knownExternalTokens(Object.values(state.deposits ?? {}), registry)];
+}
+
+/** `--token <label> [--erc20 0x… --midnight-name wX]` (deploy/bridge-token.ts). */
+async function token(state: State, provider: ethers.Provider): Promise<BridgeToken> {
+  const registry = stkTokens();
+  return resolveBridgeToken(
+    { token: arg("token"), erc20: arg("erc20"), midnightName: arg("midnight-name") },
+    registry,
+    knownExternalTokens(Object.values(state.deposits ?? {}), registry),
+    async (address) => Number(await new ethers.Contract(address, ERC20_ABI, provider).decimals()),
+  );
 }
 
 function parseUnits(value: string, decimals: number): bigint {
@@ -442,16 +474,52 @@ function loadOrCreateMaintenanceKey(): { signingKey: { tag: string; value: strin
   return { signingKey, verifyingKey };
 }
 
+/** The public facts of a completed deposit run whose mint moved the wallet by exactly `amount`. */
+function depositRunFacts(run: string, r: DepositRecord): Json | undefined {
+  if (r.completeTx === undefined || r.walletColourDelta !== r.amount) return undefined;
+  return {
+    run,
+    token: r.token,
+    amount: r.amount,
+    requestId: r.requestId,
+    startDepositTx: r.startTx?.txId,
+    sepoliaSweepTx: r.relayResult?.evmTxHash,
+    completeDepositTx: r.completeTx.txId,
+    minted: r.walletColourDelta,
+  };
+}
+
 function writeVaultDeployment(state: State, extra: Json = {}): void {
   const v = state.vault ?? {};
   const address = String(v.address ?? "");
-  const tokens = stkTokens().map((t) => ({
-    erc20: t.symbol,
-    erc20Address: t.address,
-    midnightName: t.midnightName,
-    midnightColour: address ? colourOf(address, t.address) : null,
-  }));
+  const runs = Object.entries(state.deposits ?? {});
+  const fresh = bridgeTokens(state).map((t) => {
+    const first = runs.find(([, r]) => r.erc20.toLowerCase() === t.address.toLowerCase() && depositRunFacts("", r));
+    const confirmed = first === undefined ? undefined : depositRunFacts(first[0], first[1]);
+    return {
+      erc20: t.symbol,
+      erc20Address: t.address,
+      midnightName: t.midnightName,
+      midnightColour: address ? colourOf(address, t.address) : null,
+      decimals: t.decimals,
+      ...(confirmed === undefined
+        ? {}
+        : {
+            confirmedByDeposit: {
+              requestId: confirmed.requestId,
+              startDepositTx: confirmed.startDepositTx,
+              sepoliaSweepTx: confirmed.sepoliaSweepTx,
+              completeDepositTx: confirmed.completeDepositTx,
+              minted: confirmed.minted,
+            },
+          }),
+    };
+  });
   const current = readJson<Json>(VAULT_FILE) ?? {};
+  // Recorded fields (P6 wrote `confirmedByDeposit` by hand) survive; a colour that differs
+  // from its derivation throws instead of being overwritten.
+  const tokens = mergeBridgedTokens(current.bridgedTokens as Json[] | undefined, fresh);
+  const depositRuns = runs.flatMap(([run, r]) => depositRunFacts(run, r) ?? []);
   const doc = {
     ...current,
     network: NETWORK_ID,
@@ -476,6 +544,7 @@ function writeVaultDeployment(state: State, extra: Json = {}): void {
     },
     artefacts: v.artefacts,
     bridgedTokens: tokens,
+    depositRuns,
     depositAddresses: state.depositAddresses ?? {},
     updatedUtc: nowUtc(),
     ...extra,
@@ -689,7 +758,7 @@ async function cmdStatus(): Promise<void> {
           eth: ethers.formatEther(await provider.getBalance(holder)),
           nonce: await provider.getTransactionCount(holder, "latest"),
         };
-        for (const t of stkTokens()) row[t.symbol] = (await erc20Balance(provider, t.address, holder)).toString();
+        for (const t of bridgeTokens(state)) row[t.symbol] = (await erc20Balance(provider, t.address, holder)).toString();
         evm[label] = row;
       }
       out.sepolia = evm;
@@ -744,7 +813,7 @@ async function cmdBalances(): Promise<void> {
   const wallet = await setupWallet();
   const all = await shieldedBalances(wallet);
   const out: Json = { at: nowUtc(), vault, dust: dust(await dustSpecks(wallet)) };
-  for (const t of stkTokens()) {
+  for (const t of bridgeTokens(state)) {
     const c = colourOf(vault, t.address);
     out[t.midnightName] = { colour: c, value: (all[c] ?? 0n).toString() };
   }
@@ -757,13 +826,15 @@ async function cmdDepositFund(): Promise<void> {
   assertStagenet();
   const state = loadState();
   const vault = vaultAddressOrThrow(state);
-  const t = token(arg("token"));
-  const amount = parseUnits(arg("amount") ?? "100", t.decimals);
   const gasEth = ethers.parseEther(arg("gas-eth") ?? "0.002");
   const coinPk = recipientCoinPk(state);
   const depositAddress = deriveDepositEvmAddress(mpcRoot(), vault, recipientFrom(coinPk));
   const provider = sepolia();
   try {
+    const t = await token(state, provider);
+    const key = depositRunKey(arg("run"), t, state.deposits ?? {});
+    const evidenceFile = depositEvidenceName(key, arg("evidence") ?? state.deposits?.[key]?.evidenceFile);
+    const amount = parseUnits(arg("amount") ?? "100", t.decimals);
     const funder = await sepoliaFunder(provider);
     const erc20 = new ethers.Contract(t.address, ERC20_ABI, funder);
     const txs: Json = { depositAddress };
@@ -788,17 +859,18 @@ async function cmdDepositFund(): Promise<void> {
       log(`      ${depositAddress} already holds ${ethers.formatEther(ethHeld)} ETH (sweep needs at most ${ethers.formatEther(needed)})`);
     }
     state.deposits = state.deposits ?? {};
-    const rec: DepositRecord = state.deposits[t.symbol] ?? {
+    const rec: DepositRecord = state.deposits[key] ?? {
       token: t.symbol,
       erc20: t.address,
       amount: amount.toString(),
       recipient: coinPk,
       depositAddress,
     };
+    Object.assign(rec, { decimals: t.decimals, midnightName: t.midnightName, evidenceFile });
     rec.fundTxs = { ...(rec.fundTxs ?? {}), [nowUtc()]: txs };
-    state.deposits[t.symbol] = rec;
+    state.deposits[key] = rec;
     saveState(state);
-    saveEvidence(`p4-deposit-${t.symbol}.json`, rec);
+    saveEvidence(evidenceFile, rec);
   } finally {
     provider.destroy();
   }
@@ -813,21 +885,26 @@ async function cmdDepositStart(): Promise<void> {
   assertStagenet();
   const state = loadState();
   const vaultAddress = vaultAddressOrThrow(state);
-  const t = token(arg("token"));
-  const amount = parseUnits(arg("amount") ?? "100", t.decimals);
   const coinPk = recipientCoinPk(state);
   const recipient = recipientFrom(coinPk);
   const depositAddress = deriveDepositEvmAddress(mpcRoot(), vaultAddress, recipient);
-  const rec = state.deposits?.[t.symbol];
-  if (rec?.requestId !== undefined && rec.completeTx === undefined) {
-    throw new Error(`${t.symbol} already has an open request ${rec.requestId}: relay/complete it, do not start another`);
-  }
 
   // sig-net v0.3.0's refusal, plus the gas check.
   const provider = sepolia();
   let evmNonce: bigint;
   let pre;
+  let t: BridgeToken;
+  let key: string;
+  let amount: bigint;
+  let rec: DepositRecord | undefined;
   try {
+    t = await token(state, provider);
+    key = depositRunKey(arg("run"), t, state.deposits ?? {});
+    amount = parseUnits(arg("amount") ?? "100", t.decimals);
+    rec = state.deposits?.[key];
+    if (rec?.requestId !== undefined) {
+      throw new Error(`run ${key} already has an open request ${rec.requestId}: relay/complete it, do not start another`);
+    }
     pre = depositPreflight({
       erc20Balance: await erc20Balance(provider, t.address, depositAddress),
       amount,
@@ -865,11 +942,15 @@ async function cmdDepositStart(): Promise<void> {
   const requestId = strip0x(fresh[0]!);
   const stored = toSignBidirectionalEventIndex((await vault.ledgerState()).depositEventMap).get(requestId as never) as any;
   const pathMatches = stored !== undefined && bytesToHex(stored.path) === bytesToHex(depositPathBytes(recipient));
+  const evidenceFile = depositEvidenceName(key, arg("evidence") ?? rec?.evidenceFile);
   state.deposits = state.deposits ?? {};
-  state.deposits[t.symbol] = {
+  state.deposits[key] = {
     ...(rec ?? { token: t.symbol, erc20: t.address, recipient: coinPk, depositAddress }),
     token: t.symbol,
     erc20: t.address,
+    decimals: t.decimals,
+    midnightName: t.midnightName,
+    evidenceFile,
     amount: amount.toString(),
     recipient: coinPk,
     depositAddress,
@@ -885,8 +966,8 @@ async function cmdDepositStart(): Promise<void> {
     },
   };
   saveState(state);
-  saveEvidence(`p4-deposit-${t.symbol}.json`, state.deposits[t.symbol]);
-  log(`      request ${requestId}  tx ${tx.txId}  path-bound ${pathMatches}`);
+  saveEvidence(evidenceFile, state.deposits[key]);
+  log(`      run ${key}: request ${requestId}  tx ${tx.txId}  path-bound ${pathMatches}`);
 }
 
 async function runRelay(
@@ -950,7 +1031,7 @@ async function cmdRelay(): Promise<void> {
   const requestId = strip0x(arg("request") ?? "");
   const { kind, key, rec } = findRecord(state, requestId);
   const expectedSigner = kind === "deposit" ? String(rec.depositAddress) : String(state.vault?.vaultEvmAddress);
-  const evidenceName = kind === "deposit" ? `p4-deposit-${key}.json` : `p5-withdraw-${key}.json`;
+  const evidenceName = kind === "deposit" ? depositEvidenceName(key, rec.evidenceFile) : `p5-withdraw-${key}.json`;
   const persist = () => { saveState(state); saveEvidence(evidenceName, rec); };
   const result = await runRelay(state, kind, requestId, expectedSigner, rec, persist);
   rec.relayResult = relaySummary(result);
@@ -968,7 +1049,7 @@ async function cmdDepositComplete(): Promise<void> {
     log(`deposit ${key} already completed: ${String(rec.completeTx.txId)}`);
     return;
   }
-  const persist = () => { saveState(state); saveEvidence(`p4-deposit-${key}.json`, rec); };
+  const persist = () => { saveState(state); saveEvidence(depositEvidenceName(key, rec.evidenceFile), rec); };
   // Resumable: re-assembles the signature, finds the mined sweep and the attestation.
   const relay = await runRelay(state, "deposit", requestId, String(rec.depositAddress), rec, persist);
   rec.relayResult = relaySummary(relay);
@@ -1031,17 +1112,18 @@ async function cmdWithdrawStart(): Promise<void> {
   assertStagenet();
   const state = loadState();
   const vaultAddress = vaultAddressOrThrow(state);
-  const t = token(arg("token"));
-  const amount = parseUnits(arg("amount") ?? "1", t.decimals);
   const dest = ethers.getAddress(arg("dest") ?? SEPOLIA_FUNDER);
-  const key = `${t.symbol}-${nowUtc()}`;
   const coinPk = recipientCoinPk(state);
   const refundRecipient = recipientFrom(coinPk);
   const vaultEvm = String(state.vault?.vaultEvmAddress);
   const provider = sepolia();
   let evmNonce: bigint;
   let destBeforeStart = 0n;
+  let t: BridgeToken;
+  let amount: bigint;
   try {
+    t = await token(state, provider);
+    amount = parseUnits(arg("amount") ?? "1", t.decimals);
     const eth = await provider.getBalance(vaultEvm);
     if (eth < GAS.gasLimit * GAS.maxFeePerGas) {
       throw new Error(`the vault's EVM account ${vaultEvm} holds ${ethers.formatEther(eth)} ETH: run withdraw-gas first`);
@@ -1053,6 +1135,7 @@ async function cmdWithdrawStart(): Promise<void> {
   } finally {
     provider.destroy();
   }
+  const key = `${t.symbol}-${nowUtc()}`;
   const colour = colourOf(vaultAddress, t.address);
   const wallet = await setupWallet();
   const before = (await shieldedBalances(wallet))[colour] ?? 0n;
