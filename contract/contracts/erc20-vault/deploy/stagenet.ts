@@ -1040,6 +1040,7 @@ async function cmdWithdrawStart(): Promise<void> {
   const vaultEvm = String(state.vault?.vaultEvmAddress);
   const provider = sepolia();
   let evmNonce: bigint;
+  let destBeforeStart = 0n;
   try {
     const eth = await provider.getBalance(vaultEvm);
     if (eth < GAS.gasLimit * GAS.maxFeePerGas) {
@@ -1048,6 +1049,7 @@ async function cmdWithdrawStart(): Promise<void> {
     const held = await erc20Balance(provider, t.address, vaultEvm);
     if (held < amount) throw new Error(`the vault's EVM account holds only ${held} of ${t.symbol}`);
     evmNonce = BigInt(await provider.getTransactionCount(vaultEvm, "pending"));
+    destBeforeStart = await erc20Balance(provider, t.address, dest);
   } finally {
     provider.destroy();
   }
@@ -1086,6 +1088,9 @@ async function cmdWithdrawStart(): Promise<void> {
     requestId,
     colour,
     walletColourBefore: before.toString(),
+    // The destination's ERC20 balance BEFORE the request exists: the transfer executes
+    // during the relay, so a later reading is not a baseline (00034 Q66, again).
+    destErc20Before: destBeforeStart.toString(),
     startTx: { ...txRecord(tx), seconds: Math.round((Date.now() - t0) / 100) / 10, evmNonce: evmNonce.toString(), gas: GAS, dustSpent: dust(dustStart - (await dustSpecks(wallet))) },
   };
   saveState(state);
@@ -1105,7 +1110,7 @@ async function cmdWithdrawSettle(refund: boolean): Promise<void> {
   }
   const persist = () => { saveState(state); saveEvidence(`p5-withdraw-${key}.json`, rec); };
   const provider = sepolia();
-  const destBefore = await erc20Balance(provider, String(rec.erc20), String(rec.dest));
+  const destAtSettle = await erc20Balance(provider, String(rec.erc20), String(rec.dest));
   provider.destroy();
   const relay = await runRelay(state, "withdraw", requestId, String(state.vault?.vaultEvmAddress), rec, persist);
   rec.relayResult = relaySummary(relay);
@@ -1125,8 +1130,11 @@ async function cmdWithdrawSettle(refund: boolean): Promise<void> {
   const after = await shieldedBalances(wallet);
   rec.walletColourAfter = (after[String(rec.colour)] ?? 0n).toString();
   const provider2 = sepolia();
-  rec.destErc20Before = destBefore.toString();
+  rec.destErc20AtSettleStart = destAtSettle.toString();
   rec.destErc20After = (await erc20Balance(provider2, String(rec.erc20), String(rec.dest))).toString();
+  if (rec.destErc20Before !== undefined) {
+    rec.destErc20Delta = (BigInt(rec.destErc20After) - BigInt(rec.destErc20Before)).toString();
+  }
   provider2.destroy();
   persist();
   log(`      ${refund ? "refundWithdraw" : "completeWithdraw"} ${tx.txId}; dest ${rec.destErc20Before} -> ${rec.destErc20After}`);
