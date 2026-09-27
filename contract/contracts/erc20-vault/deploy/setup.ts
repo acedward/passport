@@ -23,6 +23,7 @@ import {
   createWallet,
   createProviders,
   syncWallet,
+  walletSeedFromEnv,
   type WalletContext,
 } from './wallet.js';
 
@@ -30,10 +31,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEPLOYMENT_DIR = path.resolve(__dirname, '..', 'deployment');
 const DEPLOYMENT_FILE = path.join(DEPLOYMENT_DIR, 'deployment.json');
 
-/** Create and sync the genesis-funded wallet (WALLET_SEED by default). */
+/**
+ * Create and sync the funding wallet: an explicit hex seed, else STAGENET_WALLET_FILE (a
+ * BIP-39 mnemonic file, read in-process) or WALLET_SEED (hex) from the environment.
+ */
 export async function setupWallet(seed?: string): Promise<WalletContext> {
-  const walletSeed = seed ?? process.env.WALLET_SEED;
-  if (!walletSeed) throw new Error('WALLET_SEED env var required');
+  const walletSeed = seed ?? walletSeedFromEnv();
   const walletCtx = await createWallet(walletSeed);
   await syncWallet(walletCtx, 'funding-wallet');
   return walletCtx;
@@ -124,6 +127,13 @@ export interface DeployOptions {
   zkPath: string;
   /** Constructor arguments; a callee reference goes in as contractRefArg(addr). */
   args?: unknown[];
+  /**
+   * The contract maintenance authority's signing key (`{ tag, value }`). When omitted,
+   * midnight-js samples one and files it in the private-state store only; project 00037
+   * passes one it has already persisted, so the authority is never lost (a later
+   * `VerifierKeyInsert` — e.g. AA 00038's metadata circuit — needs it).
+   */
+  signingKey?: { tag: string; value: string };
 }
 
 /** Deploy a witness-free contract; the address is recorded in deployment.json. */
@@ -137,6 +147,7 @@ export async function deployWitnessFree(
     privateStateId: opts.name,
     initialPrivateState: {},
     ...(opts.args !== undefined ? { args: opts.args } : {}),
+    ...(opts.signingKey !== undefined ? { signingKey: opts.signingKey } : {}),
   } as any);
   const address = deployed.deployTxData.public.contractAddress;
   saveDeployment(opts.name, address);
