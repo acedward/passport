@@ -1,0 +1,29 @@
+# stkA / stkB / stkC — the Sepolia ERC20s AA project 00037 bridges to Midnight stagenet
+# through the witness-free vault in ../../ (Sig Network MPC). Dependencies come from
+# Soldeer (soldeer.lock pins them); `dependencies/` is not committed.
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = ["dependencies"]
+solc_version = "0.8.28"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+bytecode_hash = "none"
+cbor_metadata = true
+remappings = [
+  "@openzeppelin/contracts/=dependencies/@openzeppelin-contracts-5.4.0/",
+  "forge-std/=dependencies/forge-std-1.10.0/src/",
+]
+fs_permissions = [{ access = "read-write", path = "./deployments" }]
+
+[dependencies]
+"@openzeppelin-contracts" = "5.4.0"
+forge-std = "1.10.0"
+
+[soldeer]
+remappings_generate = false
+remappings_regenerate = false
+recursive_deps = false
