@@ -117,6 +117,7 @@ docker run --rm --name "$RUN_NAME" \
   -v "$EVIDENCE_HOST":/evidence \
   -e MIDNIGHT_NETWORK=stagenet \
   -e AA37_STATE_DIR=/state \
+  -e AA37_STATE_DIR_LABEL="${AA37_STATE_DIR_HOST:-~/.config/aa-00037}" \
   -e AA37_EVIDENCE_DIR=/evidence \
   -e MIDNIGHT_LEVEL_DB=/state/midnight-level-db \
   -e PROOF_SERVER_URL="$PROOF_URL" \

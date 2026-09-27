@@ -508,6 +508,8 @@ async function cmdDeploy(): Promise<void> {
   log(`      maintenance verifying key ${cma.verifyingKey}`);
 
   const wallet = await setupWallet();
+  const dustAtStart = await dustSpecks(wallet);
+  log(`      DUST ${dust(dustAtStart)}`);
   const t0 = Date.now();
   let vault: ContractHandle;
   if (state.vault?.address === undefined) {
@@ -556,7 +558,7 @@ async function cmdDeploy(): Promise<void> {
     committee: onChain.committee,
     threshold: onChain.threshold,
     counter: onChain.counter,
-    signingKeyFile: CMA_KEY_FILE,
+    signingKeyFile: path.join(process.env.AA37_STATE_DIR_LABEL ?? STATE_DIR, path.basename(CMA_KEY_FILE)),
   };
   saveState(state);
   log(`      maintenance authority: committee ${onChain.committee.length}, threshold ${onChain.threshold}, counter ${onChain.counter}`);
@@ -596,7 +598,11 @@ async function cmdDeploy(): Promise<void> {
   }
 
   log("[5/5] recording …");
+  await new Promise((r) => setTimeout(r, 10_000));
+  const dustAtEnd = await dustSpecks(wallet);
+  log(`      DUST ${dust(dustAtEnd)} (spent ${dust(dustAtStart - dustAtEnd)} this run)`);
   Object.assign(state.vault!, {
+    dustThisRun: { before: dust(dustAtStart), after: dust(dustAtEnd), spent: dust(dustAtStart - dustAtEnd) },
     initialised: true,
     initialiseTx: initRecord,
     evmChainId: SEPOLIA_CHAIN_ID.toString(),
@@ -703,6 +709,19 @@ async function shieldedBalances(wallet: WalletContext): Promise<Record<string, b
   return out;
 }
 
+/** DUST balance in specks (10^15 per DUST) at `now` — it GENERATES, so it is a function of time. */
+async function dustSpecks(wallet: WalletContext): Promise<bigint> {
+  const s: any = await Rx.firstValueFrom(wallet.wallet.state().pipe(Rx.filter((x: any) => x.isSynced)));
+  try {
+    const b = s.dust?.balance?.(new Date());
+    return BigInt(b ?? 0);
+  } catch {
+    return -1n;
+  }
+}
+
+const dust = (specks: bigint) => (specks < 0n ? "unavailable" : `${Number(specks) / 1e15}`);
+
 async function waitForBalanceChange(
   wallet: WalletContext,
   colour: string,
@@ -724,7 +743,7 @@ async function cmdBalances(): Promise<void> {
   const vault = vaultAddressOrThrow(state);
   const wallet = await setupWallet();
   const all = await shieldedBalances(wallet);
-  const out: Json = { at: nowUtc(), vault };
+  const out: Json = { at: nowUtc(), vault, dust: dust(await dustSpecks(wallet)) };
   for (const t of stkTokens()) {
     const c = colourOf(vault, t.address);
     out[t.midnightName] = { colour: c, value: (all[c] ?? 0n).toString() };
@@ -828,6 +847,7 @@ async function cmdDepositStart(): Promise<void> {
   const vault = await connectVault(wallet, vaultAddress);
   const before = await requestIds(vault, "depositEventMap");
   const t0 = Date.now();
+  const dustStart = await dustSpecks(wallet);
   const tx = await vault.call(
     "startDeposit",
     evmNonce,
@@ -860,6 +880,7 @@ async function cmdDepositStart(): Promise<void> {
       evmNonce: evmNonce.toString(),
       gas: GAS,
       storedPathEqualsDepositPath: pathMatches,
+      dustSpent: dust(dustStart - (await dustSpecks(wallet))),
       explorer: `https://sig-net.github.io/explorer/midnight/explorer?networkId=stagenet`,
     },
   };
@@ -958,6 +979,7 @@ async function cmdDepositComplete(): Promise<void> {
   const before = (await shieldedBalances(wallet))[colour] ?? 0n;
   const vault = await connectVault(wallet, vaultAddress);
   const t0 = Date.now();
+  const dustStart = await dustSpecks(wallet);
   const tx = await vault.call(
     "completeDeposit",
     hexToBytes(requestId),
@@ -965,7 +987,7 @@ async function cmdDepositComplete(): Promise<void> {
     relay.serializedOutput,
     new Uint8Array(randomBytes(32)),
   );
-  rec.completeTx = { ...txRecord(tx), seconds: Math.round((Date.now() - t0) / 100) / 10, attested: relay.kind };
+  rec.completeTx = { ...txRecord(tx), seconds: Math.round((Date.now() - t0) / 100) / 10, attested: relay.kind, dustSpent: dust(dustStart - (await dustSpecks(wallet))) };
   rec.walletColour = colour;
   rec.walletColourBefore = before.toString();
   persist();
@@ -1037,6 +1059,7 @@ async function cmdWithdrawStart(): Promise<void> {
   const ids = await requestIds(vault, "withdrawEventMap");
   const coin = { nonce: new Uint8Array(randomBytes(32)), color: hexToBytes(colour), value: amount };
   const t0 = Date.now();
+  const dustStart = await dustSpecks(wallet);
   const tx = await vault.call(
     "startWithdraw",
     evmNonce,
@@ -1063,7 +1086,7 @@ async function cmdWithdrawStart(): Promise<void> {
     requestId,
     colour,
     walletColourBefore: before.toString(),
-    startTx: { ...txRecord(tx), seconds: Math.round((Date.now() - t0) / 100) / 10, evmNonce: evmNonce.toString(), gas: GAS },
+    startTx: { ...txRecord(tx), seconds: Math.round((Date.now() - t0) / 100) / 10, evmNonce: evmNonce.toString(), gas: GAS, dustSpent: dust(dustStart - (await dustSpecks(wallet))) },
   };
   saveState(state);
   saveEvidence(`p5-withdraw-${key}.json`, state.withdraws[key]);
@@ -1093,10 +1116,11 @@ async function cmdWithdrawSettle(refund: boolean): Promise<void> {
   const wallet = await setupWallet();
   const vault = await connectVault(wallet, vaultAddressOrThrow(state));
   const t0 = Date.now();
+  const dustStart = await dustSpecks(wallet);
   const tx = refund
     ? await vault.call("refundWithdraw", hexToBytes(requestId), relay.event, relay.serializedOutput, new Uint8Array(randomBytes(32)))
     : await vault.call("completeWithdraw", hexToBytes(requestId), relay.event, relay.serializedOutput, new Uint8Array(randomBytes(32)));
-  rec.completeTx = { ...txRecord(tx), seconds: Math.round((Date.now() - t0) / 100) / 10, circuit: refund ? "refundWithdraw" : "completeWithdraw", attested: relay.kind };
+  rec.completeTx = { ...txRecord(tx), seconds: Math.round((Date.now() - t0) / 100) / 10, circuit: refund ? "refundWithdraw" : "completeWithdraw", attested: relay.kind, dustSpent: dust(dustStart - (await dustSpecks(wallet))) };
   persist();
   const after = await shieldedBalances(wallet);
   rec.walletColourAfter = (after[String(rec.colour)] ?? 0n).toString();
