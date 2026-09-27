@@ -1,12 +1,41 @@
 # The witness-free ERC20 vault
 
 A fork of Sig Network's [`midnight-examples` ERC20 vault][upstream] (`examples/erc20-vault`
-@ `11482cdcea5bb1475de0b66f1ec56bde4bfec61d`, MIT) that a **Passport account can call
-cross-contract**. It bridges an ERC20 on an EVM chain into a shielded Midnight colour and
-back, with Sig Network's Signet MPC network executing and attesting the EVM side.
+@ **`erc20-vault-v0.3.0`**, `a696fc40de6dd33c36c902f9e7a20ea1d8caadc4`, MIT) on
+**`@sig-net/midnight` / `@sig-net/midnight-contract` 0.23.0**
+([`midnight-integration` `v0.23.0`][sdk], `43b74e4a9432a2c0a51f312df2c5c5f03f2f6b82`), that a
+**Passport account can call cross-contract**. It bridges an ERC20 on an EVM chain into a
+shielded Midnight colour and back, with Sig Network's Signet MPC network executing and
+attesting the EVM side.
 
-Project 00034, PR-F. Spec: FR-016 – FR-020, FR-026. Plan:
-`plans/00034-sub-f-vault-fork.md` in the organizer workspace.
+Project 00034 PR-F wrote the fork on upstream `11482cd` / SDK 0.22.0-rc.1; project 00037
+re-based it on v0.3.0 / 0.23.0 (plan `plans/00037-stagenet-sepolia-stk-erc20-bridge.md` in
+the organizer workspace).
+
+[sdk]: https://github.com/sig-net/midnight-integration
+
+## What the v0.3.0 / 0.23.0 re-base changed (project 00037)
+
+**The contract did not change**, because upstream's did not: `examples/erc20-vault/contract/src/erc20-vault.compact`
+is byte-identical at `11482cd`, `erc20-vault-v0.2.0` and `erc20-vault-v0.3.0` (sha256
+`3421d652…d30321`, 1,108 lines). Re-applying the witness-free transformation below to
+v0.3.0 therefore yields this fork's source unchanged; only its provenance header moved, and
+all seven vault verifier keys are byte-identical to the 00034 build. The Signet singleton's
+v0.23.0 source is byte-identical to the copy vendored before, and its verifier keys still
+equal the ones deployed on stagenet (`tests/signet-vk-onchain.test.ts`, with
+`SIGNET_VK_ONCHAIN=1`).
+
+What v0.3.0 / 0.23.0 changed is off-chain, and it is ported here:
+
+| v0.3.0 / 0.23.0 change | Here |
+|---|---|
+| stagenet MPC root key `0x047dd8ec…` (0.22.0-rc.1 had `0x04cb41ba…`) | read from the SDK (`getMpcRootPublicKey`), never hard-coded; `tests/sdk-0.23-facts.test.ts` pins it. **A vault initialised against the old root can never settle.** |
+| MPC output cache (`MpcOutputCacheReader`, `…/midnight-cache-storage-testnet/v1/stagenet`) | `src/relayer.ts` reads the attested bytes from it first; they count only once the attestation verifies over them. The three-candidate `bool` recompute stays as the fallback |
+| `signetEventSourceFromPublicDataProvider` removed; `signetEventSourceFromIndexer` reads the indexer's events directly | `src/relayer.ts` (`indexerUrl`, default `INDEXER_URL`) |
+| every MPC poll waits up to 20 min (Sepolia finality ≈ 13 min) | signature ≤ 20 min; attestation ≤ 33 min from the broadcast; the `finalized` head is reported on the way |
+| `startDeposit` refuses a deposit the derived account cannot pay | `src/preflight.ts` (`depositPreflight`): the ERC20 balance **and** the sweep's gas |
+| — | resumable by request id: `onProgress` reports each stage; a re-run re-assembles the signed transaction and never re-broadcasts a mined one |
+| — | `deploy/stagenet.ts` + `deploy/run-stagenet.sh`: stagenet deploy, deposits and withdrawals, with the owner's secrets mounted read-only |
 
 [upstream]: https://github.com/sig-net/midnight-examples
 
@@ -151,11 +180,44 @@ send **the ERC20 and gas ETH** to it.
 
 ```sh
 npm install
-npm run compile        # SignetSigner, then the Signet module circuits, then the vault
-npm test               # 94 offline tests; no network, no Docker
+npm run compile        # compactc 0.34.0 --feature-zkir-v3: SignetSigner, the Signet module circuits, the vault
+npm test               # 115 offline tests (+1 on-chain check with SIGNET_VK_ONCHAIN=1)
 npm run witness-free   # the one-line property check
 ./run-f4.sh all        # the localnet end-to-end run (claims the shared Docker stack)
 ```
+
+Project 00037 ran the suites in Docker (`node:24-bookworm-slim`, the package mounted at
+`/work`, `node_modules` installed inside the container). On a macOS bind mount, install into
+the container's own filesystem and copy `node_modules` across with `cp -R`: `npm` writing
+straight into the mount fails with `ENOTDIR`.
+
+## Stagenet (project 00037)
+
+```sh
+deploy/run-stagenet.sh preflight          # read-only: node version, SDK counterparties, singleton VKs
+deploy/run-stagenet.sh deploy             # deploy + initialise (resumable)
+deploy/run-stagenet.sh deposit-address    # the recipient's Sepolia deposit address
+deploy/run-stagenet.sh deposit-fund  --token stkA --amount 100 --gas-eth 0.002
+deploy/run-stagenet.sh deposit-start --token stkA --amount 100
+deploy/run-stagenet.sh relay --request <id>
+deploy/run-stagenet.sh deposit-complete --request <id>
+deploy/run-stagenet.sh withdraw-gas | withdraw-start --token stkA --amount 1 | withdraw-complete --request <id>
+deploy/run-stagenet.sh status | balances
+```
+
+- The Midnight wallet is a mnemonic FILE (`WALLET=…`), mounted read-only and read
+  in-process (`deploy/mnemonic.ts`); the Sepolia key file (`SK=…`) is mounted only for the
+  two commands that spend on Sepolia. Neither ever reaches a command line or a log.
+- Wallet commands hold the shared funding-wallet lock and refuse to run next to another
+  container that mounts the same wallet. DUST fees use `FEE_BLOCKS_MARGIN=5`.
+- **The contract maintenance authority is kept.** `deploy` generates the vault's CMA signing
+  key, writes it to `~/.config/aa-00037/vault-maintenance.signing-key.json` (mode 600, never
+  printed) BEFORE deploying with it, and checks on chain that the committee is exactly that
+  key with threshold 1. Losing it would freeze the vault's circuit set: no later
+  `VerifierKeyInsert` (for example a metadata circuit) could ever land.
+- Records: `deployments/sepolia-stk.json` (the ERC20s) and `deployments/stagenet-vault.json`
+  (the vault, its EVM account, response key, maintenance verifying key, the bridged colours
+  `wStkA/wStkB/wStkC`, and the deposit addresses).
 
 The callee is compiled **before** the caller, and the output directory name IS the declared
 contract type name: `managed/SignetSigner`, `managed/Erc20Vault`.
@@ -164,7 +226,7 @@ contract type name: `managed/SignetSigner`, `managed/Erc20Vault`.
 
 **The Signet singleton is recompiled from vendored source**, not linked from
 `node_modules/@sig-net/midnight-contract/dist/managed`. Every published version of that
-package through 0.22.0-rc.4 ships generated TypeScript pinned to `compact-runtime
+package through 0.23.0 ships generated TypeScript pinned to `compact-runtime
 0.18.0-rc.1`, and the 0.19.0 runtime this project uses refuses to import it, with no
 override. The rebuild is **byte-identical** in verifier keys, prover keys and ZKIR, so a
 contract compiled against it can still call the singleton Sig Network has already deployed.
@@ -185,9 +247,13 @@ rebuild against the package's own TypeScript twins. **PR-C and PR-S need this to
 | `src/erc20-vault.compact` | the contract |
 | `src/vendor/signet-contract.compact` | the Signet singleton, vendored verbatim (MIT) |
 | `src/index.ts` | the export surface: recipients, ledger paths, address derivation |
-| `src/signet-sdk.ts` | the `@sig-net/midnight` shim (Q25) |
-| `tests/` | the offline suites |
-| `deploy/` | deploy + initialise + the artefact receipt |
+| `src/signet-sdk.ts` | the `@sig-net/midnight` shim (Q25), mirroring 0.23.0's export list |
+| `src/relayer.ts` | the relayer loop: signature, broadcast, attestation (output cache first) |
+| `src/preflight.ts` | the underfunded-deposit refusal |
+| `tests/` | the offline suites (+ the on-chain singleton check) |
+| `deploy/` | deploy + initialise + the artefact receipt; `stagenet.ts` / `run-stagenet.sh` for stagenet |
+| `deployments/` | the Sepolia ERC20s and the stagenet vault, public values only |
+| `evm/stk-tokens/` | the stkA/stkB/stkC ERC20s (Foundry, OpenZeppelin 5.4.0) |
 | `e2e/`, `infra/`, `run-f4.sh` | the localnet end-to-end run |
 | `managed/` | compiler output — gitignored |
 
