@@ -7,6 +7,9 @@ The contract source, its compiled JavaScript, its witnesses and its ledger layou
 | Circuit | compactc 0.34.0 | MinoCrab | Gate |
 |---|---|---|---|
 | `append_inbox_with_evm` | k18, 160,236 rows | **k17, 85,637 rows** | 34 probes, 0 disagreements |
+| `rotate_enc_key_with_evm` | k18, 147,602 rows | **k17, 73,002 rows** | 43 probes, 0 disagreements |
+| `add_device_with_evm` | k18, 147,648 rows | **k17, 73,048 rows** | 46 probes, 0 disagreements |
+| `remove_device_with_evm` | k18, 151,466 rows | **k17, 76,883 rows** | 49 probes, 0 disagreements |
 | `withdraw_shielded_with_evm` | k18, 182,809 rows | **k17, 94,639 rows** | 33 probes, 0 disagreements |
 
 The k and row counts come from Midnight's own cost model, and compactc 0.34.0's bundled
@@ -28,6 +31,7 @@ The crate `passport-account-minocrab` has one module per Compact module that the
 | Module | Ports |
 |---|---|
 | `byte_codec` | `modules/ByteCodec.compact`: big-endian ABI words |
+| `device` | the enc-key and device-lifecycle chips behind `rotate_enc_key`, `add_device` and `remove_device` |
 | `eip712` | `modules/Eip712.compact`: frozen type hashes, domain separator, struct hashes, digests |
 | `evm` | the stdlib's secp256k1 surface: the Ethereum address, ECDSA, `require_live_k256_key` |
 | `seam` | the signing path: challenge DSTs and challenges, the device entry, `require_authorised_with_evm` |
@@ -70,6 +74,10 @@ Every tamper probe must be refused by both artifacts, in the same way. The tampe
 - wrong or stale nonces;
 - an unknown device (empty set, wrong use counter, stale epoch);
 - every EIP-712 domain field and the primary type;
+- for the device and enc-key circuits (`tests/lanes/l_dev.rs`, run by the same gate): the same word
+  signed as another of the three operations or bound to another one's challenge DST, an entry
+  already present, the `Uint<8>` count overflow, and the last-device and authorising-device rules
+  (a mutant without the authorising-device check fails the gate);
 - a wrong entry, amount, recipient, colour or witness coin;
 - the point at infinity;
 - `s = 0` and `r = 0`;
