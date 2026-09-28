@@ -31,7 +31,7 @@ OUT="$2"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARAMS="${MIDNIGHT_PP:-$HOME/.cache/midnight/zk-params}"
 IMAGE="${COMPACTC_IMAGE:-aa-compactc:0.34.0}"
-NAME="aa00040-p2-keygen-$$"
+NAME="${KEYGEN_NAME_PREFIX:-aa00040-p2}-keygen-$$"
 
 # The pins. The archive SHA-256 is in compactc.Dockerfile (the pin of record); these are the
 # binaries inside it (aarch64-unknown-linux-musl, the host architecture of every number recorded).

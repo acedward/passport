@@ -3,6 +3,7 @@
 # proof server (AA project 00040, P2.3 + P2.4). Everything runs in Docker.
 #
 #   contract/scripts/minocrab/prove-bench.sh <keysets-root> <out-dir> [N]
+#   BENCH_SET=p4 contract/scripts/minocrab/prove-bench.sh <keysets-root> <out-dir> 3   # the 5 P4 circuits
 #
 # <keysets-root> holds `compactc/account` and `mixed/account` (keyset.ts), plus the callee bundles
 # the account's JavaScript imports (Erc20Vault, SignetSigner). <out-dir> receives the shared
@@ -12,12 +13,19 @@
 # digest) on a random free 127.0.0.1 port >= 10000, samples its memory once a second
 # (`docker stats`), runs prove-bench.ts `bench` (a /check, one untimed warm-up proof, then N timed
 # proofs of the SAME preimage), and removes the server. The two arms of a circuit run back to back
-# and the order alternates between circuits. Containers are named aa00040-p2-*.
+# and the order alternates between circuits. Containers are named ${BENCH_NAME_PREFIX:-aa00040-p2}-*.
 set -euo pipefail
 
 ROOT="$(cd "$1" && pwd)"
 OUT="$2"
 N="${3:-5}"
+SET="${BENCH_SET:-p2}"
+PREFIX="${BENCH_NAME_PREFIX:-aa00040-p2}"
+case "$SET" in
+  p2) CIRCUITS=(append_inbox_with_evm withdraw_shielded_with_evm); GEN_ARGS=() ;;
+  p4) CIRCUITS=(rotate_enc_key_with_evm withdraw_unshielded_with_evm withdraw_shielded_to_contract_with_evm add_device_with_evm remove_device_with_evm); GEN_ARGS=(--set p4) ;;
+  *) echo "BENCH_SET must be p2 or p4" >&2; exit 64 ;;
+esac
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONTRACT="$(cd "$HERE/../.." && pwd)"
 IMAGE="${BENCH_IMAGE:-midnight-2-offers/aa-contracts:demo-infra-14580}"
@@ -41,7 +49,7 @@ PS=""; SAMPLER=""
 cleanup() {
   [ -n "$SAMPLER" ] && kill "$SAMPLER" 2>/dev/null || true
   [ -n "$PS" ] && docker rm -f "$PS" >/dev/null 2>&1 || true
-  docker rm -f aa00040-p2-gen aa00040-p2-bench >/dev/null 2>&1 || true
+  docker rm -f "$PREFIX-gen" "$PREFIX-bench" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
@@ -56,15 +64,15 @@ bun_run() { # name network args...
     "$IMAGE" /aa/g/scripts/prove-bench.ts "$@"
 }
 
-if [ ! -f "$OUT/append_inbox_with_evm.preimage" ]; then
-  say "generating the shared preimages (offline)"
-  bun_run aa00040-p2-gen none gen --out /out
+if [ ! -f "$OUT/${CIRCUITS[0]}.preimage" ]; then
+  say "generating the shared preimages (offline, set $SET)"
+  bun_run "$PREFIX-gen" none gen --out /out ${GEN_ARGS[@]+"${GEN_ARGS[@]}"}
 fi
 
 bench_one() { # circuit arm keysdir
   local circuit="$1" arm="$2" keys="$3" port
   port="$(free_port)"
-  PS="aa00040-p2-ps-${arm}-${circuit%%_*}"
+  PS="$PREFIX-ps-${arm}-${circuit%%_with_evm}"
   say "$circuit / $arm: proof server $PS on 127.0.0.1:$port"
   docker run -d --name "$PS" -p "127.0.0.1:$port:6300" --memory 14g \
     -e MIDNIGHT_PP=/params -v "$PARAMS:/params" "$PROOF_IMAGE" >/dev/null
@@ -87,7 +95,7 @@ with open(out, "w") as f:
 PY
   SAMPLER=$!
   docker stats --no-stream --format '{{.Name}} {{.CPUPerc}} {{.MemUsage}}' > "$OUT/$circuit.$arm.load-before.txt" 2>&1 || true
-  bun_run aa00040-p2-bench bridge bench --out /out --circuit "$circuit" --arm "$arm" \
+  bun_run "$PREFIX-bench" bridge bench --out /out --circuit "$circuit" --arm "$arm" \
     --keys "/keysets/$keys/account" --url "http://host.docker.internal:$port" --n "$N"
   docker stats --no-stream --format '{{.Name}} {{.CPUPerc}} {{.MemUsage}}' > "$OUT/$circuit.$arm.load-after.txt" 2>&1 || true
   kill "$SAMPLER" 2>/dev/null || true; SAMPLER=""
@@ -95,8 +103,14 @@ PY
   docker rm -f "$PS" >/dev/null; PS=""
 }
 
-bench_one append_inbox_with_evm compactc compactc
-bench_one append_inbox_with_evm minocrab mixed
-bench_one withdraw_shielded_with_evm minocrab mixed
-bench_one withdraw_shielded_with_evm compactc compactc
+# The two arms of a circuit back to back; which arm goes first alternates between circuits.
+i=0
+for c in "${CIRCUITS[@]}"; do
+  if [ $((i % 2)) = 0 ]; then
+    bench_one "$c" compactc compactc; bench_one "$c" minocrab mixed
+  else
+    bench_one "$c" minocrab mixed; bench_one "$c" compactc compactc
+  fi
+  i=$((i + 1))
+done
 say "done: $OUT"

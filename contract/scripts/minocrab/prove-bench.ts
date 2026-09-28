@@ -11,6 +11,13 @@
 //       preimage exactly as ledger-v9 serialises it for a proof server: DIR/<circuit>.preimage.
 //       The preimage comes from compactc's JavaScript, so it is compiler-neutral: both arms prove it.
 //
+//   bun prove-bench.ts gen   --out DIR --set p4
+//       The same for the five P4 circuits (AA 00040 P4.B2): `rotate_enc_key_with_evm`,
+//       `withdraw_unshielded_with_evm` (after a permissionless `deposit_unshielded` funds the
+//       mirror), `withdraw_shielded_to_contract_with_evm` (to the account itself, the path the live
+//       check takes), `add_device_with_evm` (a second throwaway EVM device), then, on the state
+//       after that enrolment, `remove_device_with_evm` of the second device.
+//
 //   bun prove-bench.ts bench --out DIR --circuit C --arm compactc|minocrab --keys DIR --url URL --n N
 //       /check the preimage against the arm's IR (the server's own `Zkir::check`), one untimed
 //       warm-up /prove, then N timed /prove calls. Writes DIR/<C>.<arm>.proof (the warm-up proof,
@@ -40,6 +47,110 @@ function need(name: string): string {
 }
 
 const CIRCUITS = ['append_inbox_with_evm', 'withdraw_shielded_with_evm'] as const;
+const P4_CIRCUITS = [
+  'rotate_enc_key_with_evm',
+  'withdraw_unshielded_with_evm',
+  'withdraw_shielded_to_contract_with_evm',
+  'add_device_with_evm',
+  'remove_device_with_evm',
+] as const;
+
+/** One call's proof preimage, exactly as ledger-v9 serialises it for a proof server. */
+async function writePreimage(out: string, record: Json, contract: any, sim: any, circuitId: string, args: unknown[]): Promise<void> {
+  const ledger = await load('@midnightntwrk/ledger-v9');
+  const res: any = await contract.impureCircuits[circuitId](sim.ctx(circuitId), ...args);
+  const trace: any[] = res.context?.callProofDataTrace ?? [];
+  if (trace.length !== 1) throw new Error(`${circuitId}: expected one call in the trace, got ${trace.length}`);
+  const pd = trace[0];
+  const preimage: Uint8Array = ledger.proofDataIntoSerializedPreimage(
+    pd.input,
+    pd.output,
+    pd.publicTranscript,
+    pd.privateTranscriptOutputs,
+    circuitId,
+  );
+  writeFileSync(path.join(out, `${circuitId}.preimage`), preimage);
+  record.calls[circuitId] = {
+    preimageBytes: preimage.length,
+    preimageSha256: sha256(preimage),
+    preimageTag: Buffer.from(preimage.subarray(0, 40)).toString('latin1').split(':').slice(0, 2).join(':'),
+    publicTranscriptOps: pd.publicTranscript.length,
+    privateTranscriptOutputs: pd.privateTranscriptOutputs.length,
+  };
+  console.log(`${circuitId}: preimage ${preimage.length} B sha256 ${sha256(preimage)}`);
+}
+
+async function genP4(out: string): Promise<void> {
+  mkdirSync(out, { recursive: true });
+  const { AccountSim } = await load(path.join(PASSPORT, 'src/tests/swap-sim.ts'));
+  const { EvmDevice, authorise, authArgs } = await load(path.join(PASSPORT, 'src/wallet/signer.ts'));
+
+  const device = EvmDevice.generate();
+  await device.enrol();
+  const sim: any = await AccountSim.create(device);
+  const contract = sim.contract;
+  const record: Json = { at: now(), set: 'p4', account: sim.address, device: String(device.addressHex), calls: {} };
+  const ctx = () => ({ contractAddress: sim.addressBytes, authNonce: sim.authNonce, evmDomainSalt: sim.evmDomainSalt });
+  const pattern = (a: number, b: number) => new Uint8Array(32).map((_, i) => (i * a + b) & 0xff);
+
+  // The unshielded mirror needs a balance before a withdrawal can pass its overdraft assert.
+  // `deposit_unshielded` is permissionless; this one runs for real in the simulator (state kept).
+  const ucolor = Uint8Array.from(Buffer.from('a9e63fe9160bbe0e5758b310db16644d7d147eed8757f13c05197c057538926d', 'hex'));
+  await sim.call('deposit_unshielded', ucolor, 1_000_000n);
+  record.setup = ['deposit_unshielded 1_000_000 units (simulated) so the mirror can be debited'];
+
+  // rotate_enc_key_with_evm: a new 32-byte encryption public key.
+  {
+    const newKey = pattern(17, 9);
+    const counter = sim.useCounter(device);
+    const auth = await authorise(device, ctx(), { op: 'rotateEncKey', newKey }, counter);
+    await writePreimage(out, record, contract, sim, 'rotate_enc_key_with_evm', [newKey, ...authArgs(auth)]);
+  }
+  // withdraw_unshielded_with_evm: 400_000 of the 1_000_000 mirrored units to a user address.
+  {
+    const recipient = pattern(23, 7);
+    const amount = 400_000n;
+    const counter = sim.useCounter(device);
+    const auth = await authorise(device, ctx(), { op: 'withdrawUnshielded', color: ucolor, amount, recipient }, counter);
+    await writePreimage(out, record, contract, sim, 'withdraw_unshielded_with_evm', [ucolor, amount, { bytes: recipient }, ...authArgs(auth)]);
+  }
+  // withdraw_shielded_to_contract_with_evm: the whole held coin to the account ITSELF, which claims
+  // it in the same call (the guarded self-receive) — the path the live check takes.
+  {
+    const color = Uint8Array.from(Buffer.from('5eb2a3cebb2ebe7ba910c78f62c9e28e0d74acbd00c810730def3578860e6a02', 'hex'));
+    const nonce = pattern(13, 5);
+    sim.putCoin({ nonce, color, value: 1_000_000n, mtIndex: 4242n });
+    const counter = sim.useCounter(device);
+    const auth = await authorise(
+      device,
+      ctx(),
+      { op: 'withdrawShieldedToContract', recipient: sim.addressBytes, color, amount: 1_000_000n, coin: { nonce, color, value: 1_000_000n, mt_index: 4242n } },
+      counter,
+    );
+    await writePreimage(out, record, contract, sim, 'withdraw_shielded_to_contract_with_evm', [{ bytes: sim.addressBytes }, color, 1_000_000n, ...authArgs(auth)]);
+  }
+  // add_device_with_evm: a second throwaway EVM device; then the enrolment runs for real so the
+  // removal below has a second device to remove.
+  const second = EvmDevice.generate();
+  await second.enrol();
+  {
+    const newEntry = second.entryAt(sim.addressBytes, sim.ledger.device_epoch, 0n);
+    const counter = sim.useCounter(device);
+    const auth = await authorise(device, ctx(), { op: 'addDevice', newEntry }, counter);
+    await writePreimage(out, record, contract, sim, 'add_device_with_evm', [newEntry, ...authArgs(auth)]);
+    await sim.call('add_device_with_evm', newEntry, ...authArgs(auth));
+    sim.advanceCounter(device, counter);
+    if (sim.ledger.device_count !== 2n) throw new Error('the simulated enrolment did not land');
+  }
+  // remove_device_with_evm: the second device's entry, signed by the first (AUTH-5 allows it).
+  {
+    const entry = second.entryAt(sim.addressBytes, sim.ledger.device_epoch, 0n);
+    const counter = sim.useCounter(device);
+    const auth = await authorise(device, ctx(), { op: 'removeDevice', entry }, counter);
+    await writePreimage(out, record, contract, sim, 'remove_device_with_evm', [entry, ...authArgs(auth)]);
+  }
+  writeFileSync(path.join(out, 'gen.json'), JSON.stringify(record, null, 2) + '\n');
+}
 
 async function gen(out: string): Promise<void> {
   mkdirSync(out, { recursive: true });
@@ -178,9 +289,9 @@ async function bench(): Promise<void> {
 }
 
 const cmd = process.argv[2];
-if (cmd === 'gen') await gen(need('out'));
+if (cmd === 'gen') await (arg('set') === 'p4' ? genP4(need('out')) : gen(need('out')));
 else if (cmd === 'bench') await bench();
 else {
-  console.error('usage: prove-bench.ts gen --out DIR | bench --out DIR --circuit C --arm A --keys DIR --url URL [--n N]');
+  console.error('usage: prove-bench.ts gen --out DIR [--set p4] | bench --out DIR --circuit C --arm A --keys DIR --url URL [--n N]');
   process.exit(64);
 }

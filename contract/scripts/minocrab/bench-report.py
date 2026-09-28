@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""bench-report.py — the P2.4 table from prove-bench.sh's output (AA project 00040).
+"""bench-report.py — the P2.4 / P4 table from prove-bench.sh's output (AA project 00040).
 
     python3 contract/scripts/minocrab/bench-report.py <prove-bench out dir> <bench.json>
 
@@ -18,6 +18,17 @@ ROWS = {
     ("append_inbox_with_evm", "minocrab"): (17, 85637),
     ("withdraw_shielded_with_evm", "compactc"): (18, 182809),
     ("withdraw_shielded_with_evm", "minocrab"): (17, 94639),
+    # P4 (lanes L-DEV and L-WD): compactc from the 00034 G2 measurement, MinoCrab from the lane gates.
+    ("rotate_enc_key_with_evm", "compactc"): (18, 147602),
+    ("rotate_enc_key_with_evm", "minocrab"): (17, 73002),
+    ("add_device_with_evm", "compactc"): (18, 147648),
+    ("add_device_with_evm", "minocrab"): (17, 73048),
+    ("remove_device_with_evm", "compactc"): (18, 151466),
+    ("remove_device_with_evm", "minocrab"): (17, 76883),
+    ("withdraw_unshielded_with_evm", "compactc"): (18, 161623),
+    ("withdraw_unshielded_with_evm", "minocrab"): (17, 73453),
+    ("withdraw_shielded_to_contract_with_evm", "compactc"): (18, 188532),
+    ("withdraw_shielded_to_contract_with_evm", "minocrab"): (17, 100362),
 }
 
 
@@ -86,7 +97,7 @@ def main():
                 if a["minocrab"]["median_peak_mem_gib"] and a["compactc"]["median_peak_mem_gib"] else None,
             }
     out = {
-        "what": "AA 00040 P2.4 paired benchmark: compactc 0.34.0 vs MinoCrab 9f4d6a6, same preimage, proof server 9.0.0-rc.6 (fresh container per arm, 14 GiB cap)",
+        "what": "AA 00040 paired benchmark (P2.4 / P4.B2): compactc 0.34.0 vs MinoCrab 9f4d6a6, same preimage, proof server 9.0.0-rc.6 (fresh container per arm, 14 GiB cap)",
         "rows": rows,
         "ratios": ratios,
     }

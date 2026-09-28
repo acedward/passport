@@ -1,9 +1,9 @@
 {
-  "what": "Proving and verifying keys of the MinoCrab-ported circuits of contracts/account.compact (AA project 00040, P2.1). The key files are NOT in this repository; SHA256SUMS lists them.",
+  "what": "Proving and verifying keys of the MinoCrab-ported circuits of contracts/account.compact (AA project 00040, P2.1 for the first two, P4.B2 for the other five). The key files are NOT in this repository; SHA256SUMS lists them.",
   "rebuild": "contract/minocrab/scripts/gate.sh emit <zkir-dir> && contract/scripts/minocrab/keygen.sh <zkir-dir> <out-dir> && (cd <out-dir> && sha256sum -c <repo>/contract/minocrab/keys/SHA256SUMS)",
   "port": {
     "crate": "contract/minocrab/passport-account-minocrab",
-    "emitted_at_commit": "ffb4f89",
+    "emitted_at_commit": "ffb4f89 (append_inbox_with_evm, withdraw_shielded_with_evm); d628e1e (all 7, the first two byte-identical)",
     "minocrab": "sig-net/minocrab@9f4d6a62abeb882fc2987d43cd6e0ba0cfb279cd",
     "contract_source": "contracts/account.compact sha256 44cff904f6ed58440b2534f64c429e0d422bfae082dbe8c82465002fb50e9fcf"
   },
@@ -19,7 +19,8 @@
       }
     },
     "container": "--network none; the SRS mounted read-only",
-    "same_keygen_as_compactc": "re-keying compactc's own append_inbox_with_evm.zkir (sha256 b2040ba1...) with this script reproduces compactc 0.34.0's bzkir, prover and verifier byte for byte (bf1d9303..., 0af6bab0..., 96c182b4...)"
+    "same_keygen_as_compactc": "re-keying compactc's own append_inbox_with_evm.zkir (sha256 b2040ba1...) with this script reproduces compactc 0.34.0's bzkir, prover and verifier byte for byte (bf1d9303..., 0af6bab0..., 96c182b4...)",
+    "p4_run": "all 7 circuits keyed together from the d628e1e emit in one compile-many run (152 s): the P2 keys of the first two came out byte-identical"
   },
   "circuits": {
     "append_inbox_with_evm": {
@@ -39,6 +40,56 @@
       "bzkir": { "bytes": 7108, "sha256": "d22ee8f4bdd81e3c4089c9afb307cffb34abe533978fb0d62a34a53b51f46bab" },
       "prover": { "bytes": 285226648, "sha256": "1c19c21b7cab64aab5bd2de182c0fef9308272dcbb95f4054c92ea47c1f24a9c" },
       "verifier": { "bytes": 3321, "sha256": "6749269aef26723c3214b455d24b7031013f9a16c88558936bdc17fc383591ef" }
+    },
+    "rotate_enc_key_with_evm": {
+      "k": 17,
+      "rows": 73002,
+      "emitted_at_commit": "d628e1e",
+      "compactc": { "k": 18, "rows": 147602, "prover_bytes": 570466686, "verifier_sha256": "cc0f9e897665fc5f8049ebcc8c882c110d61c867772407563bf58cbc66964b17", "prover_note": "the MN Bank relay key set carries no prover for this circuit; prover_bytes is compactc 0.34.0's own key re-generated from compactc's zkir with keygen.sh (verifier and bzkir byte-identical to compactc's)" },
+      "zkir": { "bytes": 13663, "sha256": "c729b64e6de4bb738af4174002eec666ff61507d7f06d6261778bb85c8d4d839" },
+      "bzkir": { "bytes": 4849, "sha256": "2ef2996a1544c1bb7ac319b152dc74a5530b42c17b245cc63618283e6c677bdc" },
+      "prover": { "bytes": 285224389, "sha256": "3fac66850b4cc9f5cd0cca8c75830fa061c003863f9a3a59c330f6e30af3c6b6" },
+      "verifier": { "bytes": 3321, "sha256": "2a387d1202225336a7a6b6104b9b89db7715970f170112237a29ca27088abc90" }
+    },
+    "add_device_with_evm": {
+      "k": 17,
+      "rows": 73048,
+      "emitted_at_commit": "d628e1e",
+      "compactc": { "k": 18, "rows": 147648, "prover_bytes": 570467174, "verifier_sha256": "091119d28c88c38e27322586705337d73f7ee8d13fa1741102e86f48ffa1b63c", "prover_note": "the MN Bank relay key set carries no prover for this circuit; prover_bytes is compactc 0.34.0's own key re-generated from compactc's zkir with keygen.sh (verifier and bzkir byte-identical to compactc's)" },
+      "zkir": { "bytes": 14876, "sha256": "5065d95331b34d65361c133213daecd1c3e3311d487ec7ca03b53891d9670e3e" },
+      "bzkir": { "bytes": 5320, "sha256": "8ee8dd8d0bacaee22d0813624438075cfaf187e3e9aebcca31f89aa936e52df0" },
+      "prover": { "bytes": 285224860, "sha256": "7f3eb314dbeadd237f1c3b63f2cdb26cec594fe430d2ec519ed3ae466a5feea0" },
+      "verifier": { "bytes": 3321, "sha256": "35ec0d97735bcf45f16f16ff7a8c2402caa2ea9c5cac80e0faa05f9f38803298" }
+    },
+    "remove_device_with_evm": {
+      "k": 17,
+      "rows": 76883,
+      "emitted_at_commit": "d628e1e",
+      "compactc": { "k": 18, "rows": 151466, "prover_bytes": 570467882, "verifier_sha256": "f64694b812f5a3bbdd55154e7182eaf83773bfbb1f0f6ee7f5080eaae0ba5653", "prover_note": "the MN Bank relay key set carries no prover for this circuit; prover_bytes is compactc 0.34.0's own key re-generated from compactc's zkir with keygen.sh (verifier and bzkir byte-identical to compactc's)" },
+      "zkir": { "bytes": 16834, "sha256": "a44d5ca8f36164262ded875db5dffe0a29fa6d86443f00d1323b377b626107f0" },
+      "bzkir": { "bytes": 5975, "sha256": "4013c466c595865635618c2eb80f903d9ce4aed2096a43b69161fa35efe7c3d3" },
+      "prover": { "bytes": 285225515, "sha256": "b6c608fe899b342c027a5fd9950eb2af6f2a763877e6659fa2683c5838ea78c4" },
+      "verifier": { "bytes": 3321, "sha256": "681dd24033eb42c8cdf570b0e449de401551faad2daf5a4bce420457b6dda5e4" }
+    },
+    "withdraw_unshielded_with_evm": {
+      "k": 17,
+      "rows": 73453,
+      "emitted_at_commit": "d628e1e",
+      "compactc": { "k": 18, "rows": 161623, "prover_bytes": 570474323, "verifier_sha256": "0fc328a62f4f1c968133421a0d8530ec5e90fdb59daae80a2dd677ab54bfd826" },
+      "zkir": { "bytes": 17818, "sha256": "64973fbaae480008c9c4a755b4651210ff77c1dea2e7994c0da0b911a5688afa" },
+      "bzkir": { "bytes": 6526, "sha256": "2cb17957c33787d6845c4ebe205c06646e76986ad876e351d461282e7db67a83" },
+      "prover": { "bytes": 285226066, "sha256": "61afba4368ac40b1174559b4694b82979adc54041e69e6c10b39bc291a13c7d2" },
+      "verifier": { "bytes": 3321, "sha256": "4ad747aec2b58589ceb13aa4a635f1a611037a30f8b56dd723f279aa932db636" }
+    },
+    "withdraw_shielded_to_contract_with_evm": {
+      "k": 17,
+      "rows": 100362,
+      "emitted_at_commit": "d628e1e",
+      "compactc": { "k": 18, "rows": 188532, "prover_bytes": 570475701, "verifier_sha256": "3aca12e8710155865202bbff633f77ce4fe4a90f169dd1780a0edd067fc39d94" },
+      "zkir": { "bytes": 21934, "sha256": "bc035b9f1c2e8505478e50fce0ce8722d097825fb027d7cc56147f77a62dbe48" },
+      "bzkir": { "bytes": 7639, "sha256": "5a9ab597fd2503cf96b1ed75a4e0ab94c2e0f300ebb3015bf69cea4f75396f28" },
+      "prover": { "bytes": 285227179, "sha256": "973734fd28d0094b895fb8e37a9d9d84c7b6adee980bfe6ad1935bca3f586fb5" },
+      "verifier": { "bytes": 3321, "sha256": "554d0cbb4dd2e80e66b7cf1719cf0cf9206ef23a1157e556f19793adde1ddeb4" }
     }
   }
 }

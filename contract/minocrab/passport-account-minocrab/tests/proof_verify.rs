@@ -1,8 +1,9 @@
-//! AA 00040 P2.3: verify the proofs that the pinned proof server (`midnightntwrk/proof-server`
+//! AA 00040 P2.3 / P4.B2: verify the proofs that the pinned proof server (`midnightntwrk/proof-server`
 //! 9.0.0-rc.6) produced for the ported circuits, with Midnight's own verifier (`transient-crypto`
 //! at the `midnight-ledger` rev MinoCrab pins) and each arm's verifier key. Offline: files only.
 //!
-//! Inputs (`contract/scripts/minocrab/prove-bench.sh` writes them):
+//! Inputs (`contract/scripts/minocrab/prove-bench.sh` writes them; every `<c>.preimage` in
+//! `PROOF_DIR` is a circuit to check: P2 wrote two, `BENCH_SET=p4` writes the other five):
 //!   `PROOF_DIR`    `<c>.preimage` (ledger-v9's serialisation of the call's proof preimage) and
 //!                  `<c>.<arm>.proof`, `<c>.<arm>.run<N>.proof` (the server's `/prove` answers);
 //!   `KEYSETS_DIR`  `compactc/account` and `mixed/account` (`contract/scripts/minocrab/keyset.ts`).
@@ -25,7 +26,22 @@ use midnight_transient_crypto::proofs::{Proof, ProofPreimage, VerifierKey, Zkir,
 use midnight_zkir_v3::{Instruction, IrSource};
 use sha2::{Digest, Sha256};
 
-const CIRCUITS: [&str; 2] = ["append_inbox_with_evm", "withdraw_shielded_with_evm"];
+/// The circuits to check: one per `<c>.preimage` in `dir`, sorted.
+fn circuits_in(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .strip_suffix(".preimage")
+                .map(str::to_owned)
+        })
+        .collect();
+    v.sort();
+    assert!(!v.is_empty(), "no <circuit>.preimage in {}", dir.display());
+    v
+}
 
 fn sha(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
@@ -136,7 +152,8 @@ fn verify_proof_server_proofs() {
     let dir = PathBuf::from(dir);
     let keysets = PathBuf::from(std::env::var("KEYSETS_DIR").expect("set KEYSETS_DIR"));
     let mut report = Vec::new();
-    for circuit in CIRCUITS {
+    for circuit in circuits_in(&dir) {
+        let circuit = circuit.as_str();
         let pi = load_preimage(&dir.join(format!("{circuit}.preimage")));
         let ir_c = load_ir(&keysets.join(format!("compactc/account/zkir/{circuit}.zkir")));
         let ir_m = load_ir(&keysets.join(format!("mixed/account/zkir/{circuit}.zkir")));
