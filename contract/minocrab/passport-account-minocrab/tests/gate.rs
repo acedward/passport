@@ -11,6 +11,9 @@
 
 mod support;
 
+// P4 lane L-WD: withdraw_unshielded_with_evm, withdraw_shielded_to_contract_with_evm.
+mod lane_wd;
+
 use minocrab_sim::v3::cost;
 use minocrab_zkir::v3::IrSource;
 use passport_account_minocrab::account::Account;

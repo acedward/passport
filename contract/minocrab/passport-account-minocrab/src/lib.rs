@@ -33,9 +33,12 @@
 //! - [`seam`] — the account's signing path: the per-circuit challenge DSTs and challenges, the
 //!   rolling device entry, and `require_authorised_with_evm` (the device-set check, the entry roll,
 //!   the nonce and round bumps).
-//! - [`zswap`] — the stdlib's `sendShielded` specialised to a user (`left`) recipient, as compactc
-//!   folds it.
+//! - [`zswap`] — the stdlib's `sendShielded` specialised to a user (`left`) or, for L-WD, a contract
+//!   (`right`) recipient, as compactc folds each.
 //! - [`account`] — the ledger block and the exported circuits.
+//! - [`withdrawals`] — P4 lane L-WD: `withdraw_unshielded_with_evm` and
+//!   `withdraw_shielded_to_contract_with_evm`, their challenges and digests, the unshielded
+//!   mirror's debit and `sendUnshielded` to a user as compactc folds it.
 //!
 //! `modules/ZswapPrimitives.compact` (the coin commitment/nullifier transcriptions used by the swap
 //! circuit) is not needed by any circuit ported here: the withdrawals go through the stdlib's
@@ -47,6 +50,7 @@ pub mod device;
 pub mod eip712;
 pub mod evm;
 pub mod seam;
+pub mod withdrawals;
 pub mod zswap;
 
 /// A ported circuit's builder (the `#[circuit]` macro's zero-argument function).
@@ -63,6 +67,15 @@ pub fn ported() -> Vec<(&'static str, CircuitBuilder)> {
         (
             "withdraw_shielded_with_evm",
             account::Account::withdraw_shielded_with_evm,
+        ),
+        // L-WD (P4)
+        (
+            "withdraw_unshielded_with_evm",
+            withdrawals::withdraw_unshielded_with_evm,
+        ),
+        (
+            "withdraw_shielded_to_contract_with_evm",
+            withdrawals::withdraw_shielded_to_contract_with_evm,
         ),
     ]
 }

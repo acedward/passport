@@ -1,5 +1,6 @@
 //! The stdlib's `sendShielded`, specialised to a USER recipient
-//! (`left<ZswapCoinPublicKey, ContractAddress>(pk)`), as compactc folds it.
+//! (`left<ZswapCoinPublicKey, ContractAddress>(pk)`), as compactc folds it. (Lane L-WD adds the
+//! CONTRACT-recipient variant, [`send_shielded_to_contract`], at the end of this file.)
 //!
 //! `minocrab-std`'s `kernel::send_shielded` takes the recipient as a runtime `Either`, so it always
 //! emits the "auto-receive when sending to self" claim under the guard `!is_left && right == self`.
@@ -35,6 +36,8 @@ use minocrab_std::v3::{
     coin_commitment_to, coin_commitment_to_contract, coin_nullifier_contract, is_true, Bool, CoinColor, CoinNonce,
     Maybe, QualifiedShieldedCoinInfo3, ShieldedCoinInfo3, Uint, ZswapCoinPublicKey, B32,
 };
+// L-WD (P4): the contract-recipient variant below.
+use minocrab_std::v3::{ContractAddress, ShieldedSendResult};
 
 const NONCE_EVOLVE: &[u8] = b"midnight:kernel:nonce_evolve";
 const NONCE_EVOLVE_CHANGE: &[u8] = b"midnight:kernel:nonce_evolve/2";
@@ -113,6 +116,95 @@ pub fn send_shielded_to_user(
         Maybe {
             is_some: Bool::from_field_unchecked(has_change),
             value,
+        }
+    })
+}
+
+// ── L-WD (P4): `sendShielded` to a CONTRACT recipient ────────────────────────────────────────────
+
+/// `sendShielded(input, right<ZswapCoinPublicKey, ContractAddress>(recipient), value)` — the whole
+/// `ShieldedSendResult` (`withdraw_shielded_to_contract` returns both the sent coin and the change).
+///
+/// compactc sees a literal `right(...)`, so it folds `recipient.is_left` to 0 everywhere, but the
+/// auto-receive test keeps its runtime half:
+///
+/// ```text
+/// if (!recipient.is_left && recipient.right.bytes == selfAddr.bytes) {   // == `right.bytes == self`
+///   kernel.claimZswapCoinReceive(coinCommitment(output, recipient));
+/// }
+/// ```
+///
+/// So, against `minocrab-std`'s generic `kernel::send_shielded`: the output commitment has no
+/// recipient select (tag `0` inline, the contract address as data, hashed twice as compactc
+/// inlines two `coinCommitment` calls), and the receive claim's guard is the bare byte equality
+/// `cond_select(hi == self.hi, lo == self.lo, 0)` with no `is_left` select around it. The guarded
+/// claim stays in the op stream either way (a guarded-off Impact still occupies public-input
+/// slots), which is why it cannot be dropped the way [`send_shielded_to_user`] drops it. The change
+/// handling is [`send_shielded_to_user`]'s, unchanged.
+pub fn send_shielded_to_contract(
+    c: &mut Circuit3,
+    input: &QualifiedShieldedCoinInfo3<Public>,
+    recipient: &ContractAddress<Public>,
+    value: Uint<128, Public>,
+) -> ShieldedSendResult<Public> {
+    c.region("zswap: sendShielded(right)", |c| {
+        let me = kernel::self_address(c).bytes();
+        let spent = input.downcast();
+        let nul = coin_nullifier_contract(c, &spent, &me);
+        claim_zswap_nullifier(c, &nul);
+
+        let change = checked_sub(c, input.value, value.field());
+
+        let output = ShieldedCoinInfo3 {
+            nonce: derived_nonce(c, NONCE_EVOLVE, &input.nonce),
+            color: input.color,
+            value: value.field(),
+        };
+        let to = recipient.bytes();
+        let cm = coin_commitment_to_contract(c, &output, &to);
+        claim_zswap_coin_spend(c, &cm);
+
+        // Auto-receive when sending to self: `recipient.bytes == selfAddr.bytes`, compactc's `&&`
+        // of the two limb tests as one `cond_select`.
+        let same_hi = c.test_eq(to.hi, me.hi);
+        let same_lo = c.test_eq(to.lo, me.lo);
+        let mine = c.cond_select(same_hi, same_lo, 0u64);
+        let cm_again = coin_commitment_to_contract(c, &output, &to);
+        c.when(mine, |c| {
+            claim_zswap_coin_receive(c, &cm_again);
+        });
+
+        let spent_it_all = c.test_eq(change, 0u64);
+        let has_change = c.not(spent_it_all);
+        let change_coin = ShieldedCoinInfo3 {
+            nonce: derived_nonce(c, NONCE_EVOLVE_CHANGE, &input.nonce),
+            color: input.color,
+            value: change,
+        };
+        let change_cm = coin_commitment_to_contract(c, &change_coin, &me);
+        c.when(has_change, |c| {
+            claim_zswap_coin_spend(c, &change_cm);
+            claim_zswap_coin_receive(c, &change_cm);
+        });
+
+        let none_unless = |c: &mut Circuit3, w| c.cond_select(spent_it_all, 0u64, w);
+        let change_value = ShieldedCoinInfo3 {
+            nonce: CoinNonce(B32 {
+                hi: none_unless(c, change_coin.nonce.bytes().hi),
+                lo: none_unless(c, change_coin.nonce.bytes().lo),
+            }),
+            color: CoinColor(B32 {
+                hi: none_unless(c, change_coin.color.bytes().hi),
+                lo: none_unless(c, change_coin.color.bytes().lo),
+            }),
+            value: none_unless(c, change_coin.value),
+        };
+        ShieldedSendResult {
+            change: Maybe {
+                is_some: Bool::from_field_unchecked(has_change),
+                value: change_value,
+            },
+            sent: output,
         }
     })
 }

@@ -90,7 +90,7 @@ impl SignatureArg {
 
 /// `witness held_coin(color: Bytes<32>): QualifiedShieldedCoinInfo` — six private inputs, each
 /// range-constrained to its field's width, as compactc checks a witness's return value.
-fn held_coin(c: &mut Circuit3) -> CoinSlots<Private> {
+pub(crate) fn held_coin(c: &mut Circuit3) -> CoinSlots<Private> {
     let nonce = B32 {
         hi: c.witness::<FieldT>(),
         lo: c.witness::<FieldT>(),
