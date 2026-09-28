@@ -69,7 +69,8 @@ import {
   signatureVerifyingKey,
 } from "@midnight-ntwrk/compact-runtime";
 import * as ledger from "@midnightntwrk/ledger-v9";
-import { submitInsertVerifierKeyTx } from "@midnight-ntwrk/midnight-js-contracts";
+import { submitTx } from "@midnight-ntwrk/midnight-js-contracts";
+import { getNetworkId } from "@midnight-ntwrk/midnight-js-network-id";
 import { indexerPublicDataProvider } from "@midnight-ntwrk/midnight-js-indexer-public-data-provider";
 import { Roles } from "@midnightntwrk/wallet-sdk-hd";
 import { secp256k1PublicKeyOf, signAttestationDigest } from "@sig-net/midnight/testing";
@@ -108,7 +109,6 @@ import {
   type BridgeToken,
 } from "./bridge-token.ts";
 import {
-  compiledWitnessFree,
   connectWitnessFree,
   contractRefArg,
   deployWitnessFree,
@@ -125,6 +125,7 @@ import {
   walletSeedFromEnv,
   type WalletContext,
 } from "./wallet.ts";
+import { verifierKeyInsertTx } from "./maintenance.ts";
 import { compareWithExpected, formatTable, readTokenMetadata } from "./token-metadata-consumer.ts";
 import { KIND_SHIELDED, standardFieldPayloads, toHex } from "../src/token-metadata.ts";
 import {
@@ -1438,21 +1439,15 @@ async function cmdMaintenanceInsertVk(): Promise<void> {
   const dustStart = await dustSpecks(wallet);
   log(`      DUST ${dust(dustStart)}`);
   const providers: any = await createProviders(wallet, vaultZkConfigPath);
-  // The maintenance key goes to midnight-js through getSigningKey only, read from its file in
-  // THIS process; it is never written to the private-state store or anywhere else.
-  const base = providers.privateStateProvider;
-  const privateStateProvider = new Proxy(base, {
-    get(target, prop) {
-      if (prop === "getSigningKey") {
-        return async (address: string) => (strip0x(address) === strip0x(vaultAddress) ? cma.signingKey : target.getSigningKey(address));
-      }
-      const v = Reflect.get(target, prop, target);
-      return typeof v === "function" ? v.bind(target) : v;
-    },
-  });
-  const compiled = compiledWitnessFree("erc20-vault", VaultModule, vaultZkConfigPath);
+  // Q5: midnight-js beta.7 / compact-js rc.8 hard-code ContractOperationVersion 'v3' ([v6] keys) in
+  // their VerifierKeyInsert, and this ZKIR-v3 key is [v7] ('v4'), so the update is built here —
+  // the same MaintenanceUpdate, signed in THIS process with the maintenance key read from its
+  // file — and submitted through midnight-js' submitTx (prove, balance, submit, wait).
+  const counter = BigInt(authority.counter);
+  const parts = verifierKeyInsertTx(getNetworkId(), vaultAddress, circuit, vk, counter, cma.signingKey as never);
+  log(`      VerifierKeyInsert(${circuit}, ${parts.version}) at counter ${counter}, signed; submitting …`);
   const t0 = Date.now();
-  const res: any = await submitInsertVerifierKeyTx({ ...providers, privateStateProvider }, compiled as never, vaultAddress, circuit as never, vk as never);
+  const res: any = await submitTx(providers, { unprovenTx: parts.unprovenTx } as never);
   const tx = {
     txId: res.txId,
     txHash: res.txHash,
@@ -1461,7 +1456,12 @@ async function cmdMaintenanceInsertVk(): Promise<void> {
     status: res.status,
     seconds: Math.round((Date.now() - t0) / 100) / 10,
     atUtc: nowUtc(),
+    verifierKeyVersion: parts.version,
   };
+  if (res.status !== "SucceedEntirely") {
+    saveEvidence("p3-maintenance-insert-vk-failed.json", { at: nowUtc(), vault: vaultAddress, circuit, tx });
+    throw new Error(`VerifierKeyInsert ${String(res.txId)} ended ${String(res.status)}`);
+  }
   log(`      VerifierKeyInsert ${String(tx.txId)} block ${String(tx.blockHeight)} ${String(tx.status)}`);
 
   let after = await publicState(vaultAddress);
