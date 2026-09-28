@@ -189,7 +189,7 @@ send **the ERC20 and gas ETH** to it.
 ```sh
 npm install
 npm run compile        # compactc 0.34.0 --feature-zkir-v3: SignetSigner, the Signet module circuits, the vault
-npm test               # 172 offline tests (+1 on-chain check each with SIGNET_VK_ONCHAIN=1 / VAULT_VK_ONCHAIN=1)
+npm test               # 177 offline tests (+1 on-chain check each with SIGNET_VK_ONCHAIN=1 / VAULT_VK_ONCHAIN=1)
 npm run witness-free   # the one-line property check
 ./run-f4.sh all        # the localnet end-to-end run (claims the shared Docker stack)
 ```
@@ -249,7 +249,18 @@ The deployed vault describes its bridged colours on chain with
 `mip-0018:token-metadata[v1]` events, without a redeploy: `publishTokenMetadata` was compiled
 against the deployed ledger layout and added to the live vault by a maintenance update
 (`VerifierKeyInsert`) signed by its maintenance authority, the MIP's "Upgrade Path for
-Existing Contracts".
+Existing Contracts": tx `00bafa3830e562eda55f56a6573ac6f5f57e5fd87f80dc29f024a4be2730d88ee2`,
+stagenet block 654,990, `SucceedEntirely` (2026-09-28); the seven original keys were re-read
+unchanged and the maintenance counter went 0 → 1. The four colours were then published as
+`StkA`, `StkB`, `StkC` and `USDC` (blocks 655,072 / 655,115 / 655,140 / 655,190; txs in
+`deployments/stagenet-token-metadata.json`).
+
+**The SDK cannot insert this key.** midnight-js 5.0.0-beta.7's `submitInsertVerifierKeyTx` goes
+through compact-js 2.5.5-rc.8, which hard-codes `ContractOperationVersionedVerifierKey('v3', …)`
+(keys headed `midnight:verifier-key[v6]`, ZKIR v2). A `--feature-zkir-v3` key is `[v7]`, ledger
+version `'v4'`, and is refused before signing. `deploy/maintenance.ts` builds the same
+`MaintenanceUpdate` with ledger-v9 directly, taking the version from the key's own header, and
+midnight-js `submitTx` submits it (`tests/maintenance.test.ts` pins the gap).
 
 - **The circuit** emits three events for one bridged colour per call — `name` and `symbol`
   (UTF-8, val-type 1) and `decimals` (val-type 2 as `Uint<128>`) — through the MIP's reference
@@ -328,7 +339,7 @@ rebuild against the package's own TypeScript twins. **PR-C and PR-S need this to
 | `src/relayer.ts` | the relayer loop: signature, broadcast, attestation (output cache first) |
 | `src/preflight.ts` | the underfunded-deposit refusal |
 | `tests/` | the offline suites (+ the on-chain singleton check) |
-| `deploy/` | deploy + initialise + the artefact receipt; `stagenet.ts` / `run-stagenet.sh` for stagenet; `token-metadata-consumer.ts`, the MIP §7 consumer |
+| `deploy/` | deploy + initialise + the artefact receipt; `stagenet.ts` / `run-stagenet.sh` for stagenet; `token-metadata-consumer.ts`, the MIP §7 consumer; `maintenance.ts`, the `VerifierKeyInsert` builder |
 | `deployments/` | the Sepolia ERC20s, the stagenet vault, its pre-upgrade verifier-key baseline and the MIP-0018 values, public values only |
 | `evm/stk-tokens/` | the stkA/stkB/stkC ERC20s (Foundry, OpenZeppelin 5.4.0) |
 | `e2e/`, `infra/`, `run-f4.sh` | the localnet end-to-end run |

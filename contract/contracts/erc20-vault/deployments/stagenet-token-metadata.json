@@ -12,7 +12,22 @@
       "colour": "5eb2a3cebb2ebe7ba910c78f62c9e28e0d74acbd00c810730def3578860e6a02",
       "name": "StkA",
       "symbol": "StkA",
-      "decimals": 6
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "004f8f70b71da79e78063b71bc90fc103a45a89f4214695099eb1afdfc9133b54e",
+          "txHash": "b82105c35ff4c79a2acbf43aa525071128be19e14a424bd061e09da2a4392d10",
+          "blockHeight": 655072,
+          "status": "SucceedEntirely",
+          "events": [
+            48337,
+            48338,
+            48339
+          ],
+          "validUntil": "1790574718",
+          "at": "2026-09-28T04:56:12.566Z"
+        }
+      ]
     },
     {
       "label": "stkB",
@@ -20,7 +35,22 @@
       "colour": "e7ca18cb056477a5aca5cce387306d56526c2f226b4a4e34f068e3a3e8179588",
       "name": "StkB",
       "symbol": "StkB",
-      "decimals": 6
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "00a8877df76a281f30d7f2d9e6a5503304008b8a84b544f5d7f2a8bb6100bf2594",
+          "txHash": "b2f28c11b6fc05450e2c8533f5e1361cbededdead0c785297ca1fc1b32beadf2",
+          "blockHeight": 655115,
+          "status": "SucceedEntirely",
+          "events": [
+            48347,
+            48348,
+            48349
+          ],
+          "validUntil": "1790574997",
+          "at": "2026-09-28T05:00:30.147Z"
+        }
+      ]
     },
     {
       "label": "stkC",
@@ -28,7 +58,22 @@
       "colour": "db8ae472c587a0709094eeaf98b81a0d46752db1a807e77bd209814e808f19d9",
       "name": "StkC",
       "symbol": "StkC",
-      "decimals": 6
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "00575ef7434f1ba446920d092b6033c0e42fbb614b4cc5c22d10c61b5b1542939c",
+          "txHash": "f3acb54533b27dfdd610684fe02c2c61a0739a6f1b03041e1e5564b1d1b6fad4",
+          "blockHeight": 655140,
+          "status": "SucceedEntirely",
+          "events": [
+            48366,
+            48367,
+            48368
+          ],
+          "validUntil": "1790575245",
+          "at": "2026-09-28T05:03:21.414Z"
+        }
+      ]
     },
     {
       "label": "USDC",
@@ -36,7 +81,22 @@
       "colour": "e5afe273bcb1252cfbc81ad6ca1caaafe22312c8c29f9b104a2fe3ead980bb2d",
       "name": "USDC",
       "symbol": "USDC",
-      "decimals": 6
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "00580201aa8331a89f48bab806ed41dab35444425a4d945285076b5570a8030a42",
+          "txHash": "1d10940019b7dbd1d90cc9ec3629d9fd0d9b830cfe958ebe122eb56e375bb93c",
+          "blockHeight": 655190,
+          "status": "SucceedEntirely",
+          "events": [
+            48378,
+            48379,
+            48380
+          ],
+          "validUntil": "1790575417",
+          "at": "2026-09-28T05:08:12.131Z"
+        }
+      ]
     }
   ]
 }
