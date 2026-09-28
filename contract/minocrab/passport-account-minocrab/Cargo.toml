@@ -1,0 +1,53 @@
+[package]
+name = "passport-account-minocrab"
+description = "The Passport account's EVM-signed circuits (contracts/account.compact), ported to the MinoCrab Rust eDSL"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+# The differential gate compares this port against the compactc-emitted ZKIR of the SAME contract
+# (`account.compact` sha256 44cff904…). That baseline is a compiled artifact, not in this repo, so
+# the gate targets only build with this feature on. The baseline directory is passed in
+# `COMPACTC_BASELINE_DIR`; its hashes are pinned in `tests/support/baseline.rs` and checked first.
+compactc-baseline = []
+
+[dependencies]
+minocrab.workspace = true
+minocrab-std.workspace = true
+minocrab-ledger.workspace = true
+minocrab-zkir.workspace = true
+# DST_CIRCUIT constants are computed at circuit-build time (SHA-256 of the padded tag).
+sha2.workspace = true
+
+[dev-dependencies]
+minocrab-sim.workspace = true
+midnight-transient-crypto.workspace = true
+midnight-base-crypto.workspace = true
+midnight-onchain-vm.workspace = true
+midnight-onchain-state.workspace = true
+midnight-onchain-runtime.workspace = true
+midnight-coin-structure.workspace = true
+midnight-storage.workspace = true
+midnight-zkir-v3.workspace = true
+midnight-curves.workspace = true
+ff.workspace = true
+group.workspace = true
+sha3.workspace = true
+serde_json.workspace = true
+
+[[bin]]
+name = "emit-zkir"
+path = "src/bin/emit_zkir.rs"
+
+# The differential gate needs the compactc baseline (see the feature above).
+[[test]]
+name = "gate"
+path = "tests/gate.rs"
+required-features = ["compactc-baseline"]
+
+# The off-circuit model against the ethers fixture vectors: needs nothing, runs by default.
+[[test]]
+name = "kat"
+path = "tests/kat.rs"

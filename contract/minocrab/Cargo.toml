@@ -1,0 +1,76 @@
+# The MinoCrab port of the Passport account's EVM-signed circuits (AA project 00040).
+#
+# One member, `passport-account-minocrab`: `contracts/account.compact`'s `_with_evm` circuits
+# rewritten in the MinoCrab Rust eDSL, plus the differential gate that holds each port to the
+# compactc circuit it replaces (same typed schema, same public-input vector on a shared preimage,
+# `Zkir::check`, and agreement on every tampered input).
+#
+# Only the ported circuits' ZKIR and keys change. `account.compact`, its compactc JavaScript, its
+# witnesses and its state layout stay exactly as compactc 0.34.0 builds them.
+#
+# Every dependency is pinned. `minocrab` is a GIT dependency at the exact rev the port and its
+# measurements were made with; the `midnight-*` crates are pinned to the same `midnight-ledger` rev
+# that `minocrab` itself pins, so the gate runs the port against the same upstream VM MinoCrab was
+# validated against.
+#
+# Build in Docker (see scripts/gate.sh), with the toolchain in rust-toolchain.toml. Rust 1.95 is
+# the real floor: `sysinfo 0.39.6`, in minocrab's dependency tree, requires it.
+
+[workspace]
+resolver = "2"
+members = ["passport-account-minocrab"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# --- MinoCrab (sig-net/minocrab), pinned ------------------------------------------------------
+# 9f4d6a62abeb882fc2987d43cd6e0ba0cfb279cd is upstream `main` of 2026-09-19. Do not float it: an
+# instruction-selection change moves the row count, which is what this port is measured on.
+minocrab = { git = "https://github.com/sig-net/minocrab", rev = "9f4d6a62abeb882fc2987d43cd6e0ba0cfb279cd" }
+minocrab-std = { git = "https://github.com/sig-net/minocrab", rev = "9f4d6a62abeb882fc2987d43cd6e0ba0cfb279cd" }
+minocrab-ledger = { git = "https://github.com/sig-net/minocrab", rev = "9f4d6a62abeb882fc2987d43cd6e0ba0cfb279cd" }
+minocrab-zkir = { git = "https://github.com/sig-net/minocrab", rev = "9f4d6a62abeb882fc2987d43cd6e0ba0cfb279cd" }
+# The simulator and the transcript executor are minocrab-sim's `unstable` tier (M24).
+minocrab-sim = { git = "https://github.com/sig-net/minocrab", rev = "9f4d6a62abeb882fc2987d43cd6e0ba0cfb279cd", features = ["unstable"] }
+
+# --- Midnight's own crates, at the rev minocrab pins -------------------------------------------
+midnight-transient-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "04c9c5d9bcebb8d4427d8589fb54d58a55599c14" }
+midnight-base-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "04c9c5d9bcebb8d4427d8589fb54d58a55599c14" }
+midnight-onchain-vm = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "04c9c5d9bcebb8d4427d8589fb54d58a55599c14" }
+midnight-onchain-state = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "04c9c5d9bcebb8d4427d8589fb54d58a55599c14" }
+midnight-onchain-runtime = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "04c9c5d9bcebb8d4427d8589fb54d58a55599c14" }
+midnight-coin-structure = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "04c9c5d9bcebb8d4427d8589fb54d58a55599c14" }
+midnight-storage = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "04c9c5d9bcebb8d4427d8589fb54d58a55599c14" }
+midnight-serialize = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "04c9c5d9bcebb8d4427d8589fb54d58a55599c14" }
+midnight-zkir-v3 = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "04c9c5d9bcebb8d4427d8589fb54d58a55599c14" }
+midnight-curves = "0.3.1"
+
+# --- off-circuit helpers (the gate only) ---------------------------------------------------------
+ff = "0.13"
+group = "0.13"
+sha2 = "0.11"
+sha3 = "0.11"
+serde_json = "1"
+
+# MUST mirror sig-net/minocrab @ 9f4d6a6's own `[patch.crates-io]` verbatim (F-00012-03).
+#
+# `[patch]` is honoured only at the root of the workspace being built and is not inherited through
+# a git dependency, so without it resolution fails (`midnight-zkir` wants a `transient-crypto`
+# ^2.2.0 that was never published to crates.io). If the minocrab pin moves, re-copy this block
+# from that rev's root Cargo.toml.
+[patch.crates-io]
+midnight-transient-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "transient-crypto-2.2.0-rc.1" }
+midnight-serialize = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "04c9c5d9bcebb8d4427d8589fb54d58a55599c14" }
+midnight-base-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "04c9c5d9bcebb8d4427d8589fb54d58a55599c14" }
+
+# Mirrors minocrab's profile: dependencies carry the field arithmetic and are optimized once; our
+# own crate stays unoptimized for fast rebuilds. Without it the reference VM is unusably slow.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 3
