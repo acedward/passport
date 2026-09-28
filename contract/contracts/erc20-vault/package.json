@@ -16,7 +16,8 @@
     "test": "vitest run",
     "deploy": "tsx deploy/deploy-vault.ts",
     "e2e": "tsx e2e/run-e2e.ts",
-    "stagenet": "tsx deploy/stagenet.ts"
+    "stagenet": "tsx deploy/stagenet.ts",
+    "metadata:consumer": "tsx deploy/token-metadata-consumer.ts"
   },
   "dependencies": {
     "@midnight-ntwrk/compact-js": "2.5.5-rc.8",

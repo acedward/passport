@@ -13,6 +13,13 @@
 #   deploy/run-stagenet.sh deposit-complete --request <id>
 #   deploy/run-stagenet.sh status | balances | withdraw-gas | withdraw-start | withdraw-complete | withdraw-refund
 #
+# MIP-0018 token metadata (project 00038; evidence defaults to AA/evidence/00038-vault-mip-0018-metadata):
+#   deploy/run-stagenet.sh vk-check
+#   deploy/run-stagenet.sh maintenance-insert-vk
+#   deploy/run-stagenet.sh metadata-negative --mode wrong-signer
+#   deploy/run-stagenet.sh metadata-publish --token stkA
+#   deploy/run-stagenet.sh metadata-read
+#
 # What it does, per command:
 #   * commands that PROVE (deploy, deposit-start, deposit-complete, withdraw-*) start a
 #     local proof server (midnightntwrk/proof-server:9.0.0-rc.6, pinned by digest) on a
@@ -24,6 +31,8 @@
 #     file read-only at /secrets/sepolia;
 #   * the state directory (~/.config/aa-00037, mode 700: the initialise key, the contract
 #     maintenance signing key, the run state, the private-state store) is mounted at /state;
+#     `maintenance-insert-vk` reads the maintenance key from it and `metadata-publish` /
+#     `metadata-negative --mode expired` the initialise (admin) key, in-process only;
 #   * every container it starts is removed on exit, whatever happens.
 #
 # Environment (optional): STAGENET_WALLET_FILE_HOST, SEPOLIA_KEY_FILE_HOST, AA37_STATE_DIR_HOST,
@@ -35,7 +44,11 @@ CMD="${1:?usage: run-stagenet.sh <command> [--flags]}"
 WALLET_FILE="${STAGENET_WALLET_FILE_HOST:-/Users/edwardalvarado/todo/Offer Files/.stagenet}"
 SEPOLIA_FILE="${SEPOLIA_KEY_FILE_HOST:-/Users/edwardalvarado/todo/Offer Files/.sepolia}"
 STATE_HOST="${AA37_STATE_DIR_HOST:-$HOME/.config/aa-00037}"
-EVIDENCE_HOST="${AA37_EVIDENCE_DIR_HOST:-/Users/edwardalvarado/todo/AA/evidence/00037-stagenet-sepolia-stk-erc20-bridge}"
+case "$CMD" in
+  vk-check|maintenance-insert-vk|metadata-*) EVIDENCE_DEFAULT=/Users/edwardalvarado/todo/AA/evidence/00038-vault-mip-0018-metadata ;;
+  *) EVIDENCE_DEFAULT=/Users/edwardalvarado/todo/AA/evidence/00037-stagenet-sepolia-stk-erc20-bridge ;;
+esac
+EVIDENCE_HOST="${AA37_EVIDENCE_DIR_HOST:-$EVIDENCE_DEFAULT}"
 LOCK="$HOME/.stagenet-offer-ladders/funding.lock"
 PROOF_IMAGE="midnightntwrk/proof-server:9.0.0-rc.6@sha256:38a819eacde273f725551fdf90ca7c31ebf3c0ff145f3ed58ee35f92fb7ce95b"
 NODE_IMAGE="${NODE_IMAGE:-node:24-bookworm-slim}"
@@ -46,10 +59,12 @@ RUN_NAME="aa37-run-$CMD-$TAG"
 case "$CMD" in
   deploy|deposit-start|deposit-complete|withdraw-start|withdraw-complete|withdraw-refund)
     NEEDS_PROOF=1; NEEDS_WALLET=1; NEEDS_SEPOLIA=0 ;;
+  maintenance-insert-vk|metadata-publish|metadata-negative)
+    NEEDS_PROOF=1; NEEDS_WALLET=1; NEEDS_SEPOLIA=0 ;;
   balances) NEEDS_PROOF=0; NEEDS_WALLET=1; NEEDS_SEPOLIA=0 ;;
   deposit-address) NEEDS_PROOF=0; NEEDS_WALLET=1; NEEDS_SEPOLIA=0 ;;
   deposit-fund|withdraw-gas) NEEDS_PROOF=0; NEEDS_WALLET=0; NEEDS_SEPOLIA=1 ;;
-  preflight|status|relay) NEEDS_PROOF=0; NEEDS_WALLET=0; NEEDS_SEPOLIA=0 ;;
+  preflight|status|relay|vk-check|metadata-read) NEEDS_PROOF=0; NEEDS_WALLET=0; NEEDS_SEPOLIA=0 ;;
   *) echo "unknown command $CMD" >&2; exit 2 ;;
 esac
 # deposit-fund needs the recipient; it reads the recorded default from the state file.

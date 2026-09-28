@@ -1,0 +1,42 @@
+{
+  "standard": "MIP-0018 (midnightntwrk/midnight-improvement-proposals mips/mip-0018-on-chain-token-metadata.md @ 37a3471), event mip-0018:token-metadata[v1]",
+  "network": "stagenet",
+  "vault": "7771c9e53afb45291ae2cecd48b5d55262734b08a98fc8276ed0f980031cd637",
+  "circuit": "publishTokenMetadata",
+  "kind": 1,
+  "values": "The on-chain name and symbol are exactly these strings (owner, 2026-09-28: \"actually drop the w\", then \"USDC / StkA\"): capital S, not the ERC20s' lowercase symbol(). The wStkA/wStkB/wStkC/wUSDC labels in stagenet-vault.json are internal labels only.",
+  "tokens": [
+    {
+      "label": "stkA",
+      "erc20Address": "0x2Ab7BE0769e3BBD5c7d047B422CB383fCC06FB52",
+      "colour": "5eb2a3cebb2ebe7ba910c78f62c9e28e0d74acbd00c810730def3578860e6a02",
+      "name": "StkA",
+      "symbol": "StkA",
+      "decimals": 6
+    },
+    {
+      "label": "stkB",
+      "erc20Address": "0xF2bEFf36543219C8feC2AB2f42070AA65D3C844B",
+      "colour": "e7ca18cb056477a5aca5cce387306d56526c2f226b4a4e34f068e3a3e8179588",
+      "name": "StkB",
+      "symbol": "StkB",
+      "decimals": 6
+    },
+    {
+      "label": "stkC",
+      "erc20Address": "0x70c5c1978e5d428fa5C82111980e1aF0A64a270D",
+      "colour": "db8ae472c587a0709094eeaf98b81a0d46752db1a807e77bd209814e808f19d9",
+      "name": "StkC",
+      "symbol": "StkC",
+      "decimals": 6
+    },
+    {
+      "label": "USDC",
+      "erc20Address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+      "colour": "e5afe273bcb1252cfbc81ad6ca1caaafe22312c8c29f9b104a2fe3ead980bb2d",
+      "name": "USDC",
+      "symbol": "USDC",
+      "decimals": 6
+    }
+  ]
+}

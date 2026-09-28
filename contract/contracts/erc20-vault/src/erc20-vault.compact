@@ -54,6 +54,14 @@
 // `VaultResponse`, `vaultTokenDomainSeparator` (so the shielded colours this fork mints
 // are the colours Sig Network's own tooling computes), `assertAttestedFailureOutput`, the
 // Uint<64> amount bounds, and `import "@sig-net/midnight/src/Signet"`.
+//
+// PROJECT 00038 ADDITION — MIP-0018 ON-CHAIN TOKEN METADATA. `publishTokenMetadata`,
+// appended after every original declaration, emits MIP-0018 `TokenMetadata` events (`name`,
+// `symbol`, `decimals`) for one bridged colour per call, through the MIP's reference module
+// vendored byte for byte at src/vendor/TokenMetadata.compact (Apache-2.0, its own SPDX
+// header). It adds no ledger field and no witness, and every original circuit compiles to a
+// byte-identical verifier key, so the deployed vault gained it by a maintenance update
+// (`VerifierKeyInsert`, signed by its maintenance authority) instead of a redeploy.
 // ---------------------------------------------------------------------------------------
 
 pragma language_version >= 0.25;
@@ -62,6 +70,10 @@ import CompactStandardLibrary;
 
 // Resolved through node_modules via COMPACT_PATH (see the compile scripts in package.json).
 import "@sig-net/midnight/src/Signet";
+
+// MIP-0018's reference module (project 00038), vendored byte for byte (see src/vendor/).
+// A module with no ledger field: importing it leaves the ledger layout below untouched.
+import "./vendor/TokenMetadata" prefix TM_;
 
 // ---- Ledger state -------------------------------------------------------------------
 //
@@ -596,5 +608,89 @@ export circuit refundWithdraw(
     view.amount,
     disclose(mintNonce),
     view.refundRecipient
+  );
+}
+
+// ==== MIP-0018 token metadata (project 00038) ===========================================
+//
+// Appended AFTER every original declaration and touching no ledger field, so the original
+// circuits compile to byte-identical verifier keys and this circuit could be added to the
+// deployed vault by `VerifierKeyInsert` (MIP-0018, "Upgrade Path for Existing Contracts").
+//
+// Who may publish: the holder of the deployer key the constructor sealed — the same key
+// initialise() checks. Its signature is an ARGUMENT, not a witness, so the vault stays
+// witness-free. There is no nonce (a new ledger field would break the layout), so replay
+// is bounded instead: the signature covers the vault's own address, the ERC20, every
+// field and `validUntil`, which the node checks against the block time. Until it expires a
+// signed message can only re-emit the same values (MIP-0018 is last write wins per key).
+
+// The digest publishTokenMetadata's admin signature must cover. Exported so the off-chain
+// signer reads the exact 32 bytes the circuit checks. The tag keeps it apart from
+// initialiseDigest's `vault:initialise:v1` domain.
+export pure circuit tokenMetadataDigest(
+  vaultAddress: ContractAddress,
+  erc20Address: Bytes<20>,
+  name: Bytes<32>,
+  nameLen: Uint<8>,
+  symbol: Bytes<32>,
+  symbolLen: Uint<8>,
+  decimals: Uint<8>,
+  validUntil: Uint<64>
+): Bytes<32> {
+  return persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<32>, Uint<8>, Bytes<32>, Uint<8>, Uint<8>, Uint<64>]>([
+    pad(32, "vault:token-metadata:v1"),
+    vaultAddress,
+    erc20Address,
+    name,
+    nameLen,
+    symbol,
+    symbolLen,
+    decimals,
+    validUntil
+  ]);
+}
+
+// Publishes MIP-0018 metadata for the bridged colour of `erc20Address`: three
+// `mip-0018:token-metadata[v1]` events, `name` and `symbol` (UTF-8, val-type 1) and
+// `decimals` (val-type 2 as Uint<128>), for the token (this vault, domainSep, kind 1).
+//
+// domainSep is derived HERE with the vault's own mint derivation, so the circuit can only
+// describe a colour this vault mints; a consumer derives the colour as
+// tokenType(domainSep, vault) and never reads it from the payload.
+//
+// `name` / `symbol` are NUL-padded UTF-8 with their meaningful length; `validUntil` is in
+// seconds since the epoch, the unit of the block time.
+export circuit publishTokenMetadata(
+  erc20Address: Bytes<20>,
+  name: Bytes<32>,
+  nameLen: Uint<8>,
+  symbol: Bytes<32>,
+  symbolLen: Uint<8>,
+  decimals: Uint<8>,
+  validUntil: Uint<64>,
+  adminSignature: Secp256k1EcdsaSignature
+): [] {
+  assert(nameLen <= 32 as Uint<8>, "Name longer than 32 bytes");
+  assert(symbolLen <= 32 as Uint<8>, "Symbol longer than 32 bytes");
+  assert(blockTimeLt(disclose(validUntil)), "Metadata signature expired");
+  const digest = tokenMetadataDigest(
+    kernel.self(),
+    disclose(erc20Address),
+    disclose(name),
+    disclose(nameLen),
+    disclose(symbol),
+    disclose(symbolLen),
+    disclose(decimals),
+    disclose(validUntil)
+  );
+  assert(secp256k1EcdsaVerify(digest, disclose(adminSignature), deployerKey), "Not the vault admin");
+  TM_emitStandardFields(
+    vaultTokenDomainSeparator(disclose(erc20Address)),
+    TM_KIND_SHIELDED(),
+    disclose(name),
+    disclose(nameLen),
+    disclose(symbol),
+    disclose(symbolLen),
+    disclose(decimals)
   );
 }

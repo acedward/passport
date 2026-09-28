@@ -87,6 +87,8 @@ vaultPath(): Bytes<32>                                   // pad(32, "vault")
 vaultTokenDomainSeparator(erc20Address: Bytes<20>): Bytes<32>
 vaultResponseSchema(): Bytes<34>
 initialiseDigest(vaultAddress, vaultEvm, chainId, responseKey): Bytes<32>
+tokenMetadataDigest(vaultAddress, erc20Address, name, nameLen, symbol, symbolLen,
+                    decimals, validUntil): Bytes<32>             // project 00038
 
 // proof-bearing
 constructor(deployerPublicKey: Secp256k1Point, signetContract: SignetSigner)
@@ -111,6 +113,11 @@ completeWithdraw(requestId: RequestId, respondBidirectionalEvent: RespondBidirec
                  serializedOutput: Bytes<1>, mintNonce: Bytes<32>): Maybe<ShieldedCoinInfo>
 refundWithdraw(requestId: RequestId, respondBidirectionalEvent: RespondBidirectionalEvent,
                serializedOutput: Bytes<5>, mintNonce: Bytes<32>): ShieldedCoinInfo
+
+// project 00038 (MIP-0018), added to the deployed vault by VerifierKeyInsert
+publishTokenMetadata(erc20Address: Bytes<20>, name: Bytes<32>, nameLen: Uint<8>,
+                     symbol: Bytes<32>, symbolLen: Uint<8>, decimals: Uint<8>,
+                     validUntil: Uint<64>, adminSignature: Secp256k1EcdsaSignature): []
 ```
 
 Every argument type crossing the boundary is shared — `RequestId` and
@@ -128,6 +135,7 @@ Costs (compactc 0.34.0 `--feature-zkir-v3`):
 | `refundWithdraw` | 16 | 40,003 | 112.0 MiB |
 | `completeDeposit` | 16 | 40,308 | 112.0 MiB |
 | `completeWithdraw` | 16 | 40,310 | 112.0 MiB |
+| `publishTokenMetadata` (00038) | 17 | 129,100 | 224.1 MiB |
 
 ## Three rules a caller must respect
 
@@ -181,7 +189,7 @@ send **the ERC20 and gas ETH** to it.
 ```sh
 npm install
 npm run compile        # compactc 0.34.0 --feature-zkir-v3: SignetSigner, the Signet module circuits, the vault
-npm test               # 115 offline tests (+1 on-chain check with SIGNET_VK_ONCHAIN=1)
+npm test               # 172 offline tests (+1 on-chain check each with SIGNET_VK_ONCHAIN=1 / VAULT_VK_ONCHAIN=1)
 npm run witness-free   # the one-line property check
 ./run-f4.sh all        # the localnet end-to-end run (claims the shared Docker stack)
 ```
@@ -234,6 +242,61 @@ deploy/run-stagenet.sh deposit-fund  --token stkA --run stkA-p8 --amount 10000 -
 The callee is compiled **before** the caller, and the output directory name IS the declared
 contract type name: `managed/SignetSigner`, `managed/Erc20Vault`.
 
+## MIP-0018 token metadata (project 00038)
+
+The deployed vault describes its bridged colours on chain with
+[MIP-0018](https://github.com/midnightntwrk/midnight-improvement-proposals/blob/main/mips/mip-0018-on-chain-token-metadata.md)
+`mip-0018:token-metadata[v1]` events, without a redeploy: `publishTokenMetadata` was compiled
+against the deployed ledger layout and added to the live vault by a maintenance update
+(`VerifierKeyInsert`) signed by its maintenance authority, the MIP's "Upgrade Path for
+Existing Contracts".
+
+- **The circuit** emits three events for one bridged colour per call — `name` and `symbol`
+  (UTF-8, val-type 1) and `decimals` (val-type 2 as `Uint<128>`) — through the MIP's reference
+  module, vendored byte for byte at `src/vendor/TokenMetadata.compact`
+  (`acedward/mip-0018-midnight-contracts` @ `7d9f659`, Apache-2.0). `domainSep` is derived in
+  the circuit with the vault's own `vaultTokenDomainSeparator(erc20)`, so it can only describe a
+  colour the vault mints; kind 1 (shielded native).
+- **The gate**: a secp256k1 signature, as an argument (the vault stays witness-free), under the
+  deployer key the constructor sealed — the key `initialise` checks — over
+  `tokenMetadataDigest = persistentHash([pad(32, "vault:token-metadata:v1"), kernel.self(), erc20,
+  name, nameLen, symbol, symbolLen, decimals, validUntil])`. `validUntil` (unix seconds) is
+  checked against the block time (`blockTimeLt`), so a signed message can only be replayed,
+  unchanged, until it expires; the signer caps it at 24 h (default 1 h). No nonce: a new ledger
+  field would have broken the in-place upgrade.
+- **The build gate**: all seven original circuits compile to verifier keys byte-identical to
+  the deployed vault's (`deployments/stagenet-vault-vk-baseline.json`, read from the indexer
+  before the upgrade), exactly one circuit is added, 0 witnesses, the same 11 ledger fields
+  (`tests/mip18-build-gate.test.ts`; `deploy/run-stagenet.sh vk-check` re-reads the chain).
+  A cross-contract caller checks the callee's key per called circuit, so Passport accounts
+  compiled against the vault are unaffected.
+- **Values** (`deployments/stagenet-token-metadata.json`, the owner's exact strings):
+  `StkA` / `StkB` / `StkC` / `USDC` as both name and symbol, decimals 6. The
+  `wStkA`… labels in `stagenet-vault.json` are internal labels only.
+
+```sh
+deploy/run-stagenet.sh vk-check                               # read-only: chain vs this build (the gate)
+deploy/run-stagenet.sh maintenance-insert-vk                  # VerifierKeyInsert publishTokenMetadata (maintenance key)
+deploy/run-stagenet.sh metadata-negative --mode wrong-signer  # must fail, changes nothing
+deploy/run-stagenet.sh metadata-publish --token stkA          # stkA | stkB | stkC | USDC (admin key; --valid-for 3600)
+deploy/run-stagenet.sh metadata-read                          # read-only: the MIP §7 consumer, checked against the file
+# any contract, any indexer, no secrets:
+node_modules/.bin/tsx deploy/token-metadata-consumer.ts --contract <address> \
+  [--indexer <graphql url>] [--node <rpc url>] [--expect deployments/stagenet-token-metadata.json] [--json out.json]
+```
+
+The consumer (`deploy/token-metadata-consumer.ts`, codec in `src/token-metadata.ts`) applies
+MIP §7: it reads the contract's `Misc` events, ignores other names, rejects transport
+violations, applies only successful transactions and — with `--node` — only events the chain
+corroborates (the event bytes are in the indexer's raw transaction, the node's canonical block
+at that height carries that raw transaction, and it is finalized), folds last-write-wins, and
+derives each colour itself as `tokenType(domainSep, contract)`. The codec reproduces every
+payload of the reference implementation's simulator corpus and its 32-case verdict corpus
+(`tests/fixtures/mip-0018/`, Apache-2.0).
+
+`maintenance-insert-vk` reads the maintenance key and `metadata-publish` the initialise (admin)
+key from the state directory, in-process only; neither is created, printed or written anywhere.
+
 ### Two things that are not Sig Network's recipe
 
 **The Signet singleton is recompiled from vendored source**, not linked from
@@ -258,13 +321,15 @@ rebuild against the package's own TypeScript twins. **PR-C and PR-S need this to
 |---|---|
 | `src/erc20-vault.compact` | the contract |
 | `src/vendor/signet-contract.compact` | the Signet singleton, vendored verbatim (MIT) |
+| `src/vendor/TokenMetadata.compact` | the MIP-0018 reference module, vendored byte for byte (Apache-2.0; `src/vendor/README.md`) |
+| `src/token-metadata.ts`, `src/token-metadata-signer.ts` | the MIP-0018 codec / validator / fold, and the admin signer for `publishTokenMetadata` |
 | `src/index.ts` | the export surface: recipients, ledger paths, address derivation |
 | `src/signet-sdk.ts` | the `@sig-net/midnight` shim (Q25), mirroring 0.23.0's export list |
 | `src/relayer.ts` | the relayer loop: signature, broadcast, attestation (output cache first) |
 | `src/preflight.ts` | the underfunded-deposit refusal |
 | `tests/` | the offline suites (+ the on-chain singleton check) |
-| `deploy/` | deploy + initialise + the artefact receipt; `stagenet.ts` / `run-stagenet.sh` for stagenet |
-| `deployments/` | the Sepolia ERC20s and the stagenet vault, public values only |
+| `deploy/` | deploy + initialise + the artefact receipt; `stagenet.ts` / `run-stagenet.sh` for stagenet; `token-metadata-consumer.ts`, the MIP §7 consumer |
+| `deployments/` | the Sepolia ERC20s, the stagenet vault, its pre-upgrade verifier-key baseline and the MIP-0018 values, public values only |
 | `evm/stk-tokens/` | the stkA/stkB/stkC ERC20s (Foundry, OpenZeppelin 5.4.0) |
 | `e2e/`, `infra/`, `run-f4.sh` | the localnet end-to-end run |
 | `managed/` | compiler output — gitignored |
@@ -272,5 +337,7 @@ rebuild against the package's own TypeScript twins. **PR-C and PR-S need this to
 ## Licence
 
 MIT. Original work © 2026 SigNetwork (`midnight-examples/LICENSE`); modifications © 2026
-the Midnight Passport EVM-account project, under the same terms. The contract carries its
+the Midnight Passport EVM-account project, under the same terms. Two vendored parts keep their
+own licence, Apache-2.0: `src/vendor/TokenMetadata.compact` and `tests/fixtures/mip-0018/`, from
+`acedward/mip-0018-midnight-contracts`. The contract carries its
 provenance commit in its header, and a test asserts it stays there.

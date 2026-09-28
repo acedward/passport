@@ -20,6 +20,17 @@
 //   withdraw-complete --request <id> | withdraw-refund --request <id>
 //   balances                        the wallet's shielded balances of the bridged colours
 //
+// MIP-0018 token metadata (project 00038; values in deployments/stagenet-token-metadata.json):
+//   vk-check [--evidence f.json]    read-only: the vault's on-chain verifier keys vs this build
+//                                   (the build gate: every deployed key identical, one new circuit)
+//   maintenance-insert-vk [--circuit publishTokenMetadata]
+//                                   VerifierKeyInsert signed by the maintenance key (Midnight spend)
+//   metadata-negative --mode wrong-signer|expired [--token stkA]
+//                                   a call that must fail without changing anything
+//   metadata-publish --token stkA|stkB|stkC|USDC [--valid-for 3600]
+//                                   sign + call publishTokenMetadata (Midnight spend)
+//   metadata-read                   read-only: the MIP §7 consumer on the vault, checked against the file
+//
 // TOKENS. `--token stkA|stkB|stkC` names this project's ERC20s (deployments/sepolia-stk.json).
 // Any other ERC20 is named by address under a label of your choosing, e.g. Circle's USDC:
 // `--token USDC --erc20 0x1c7D…7238 [--midnight-name wUSDC]` (decimals read on chain; after
@@ -35,13 +46,15 @@
 // are generated here and written, before they are used, to files in the state directory
 // with mode 600 (exclusive create: an existing key is never overwritten). None of them is
 // ever printed or written anywhere else. Evidence files and deployments/*.json carry
-// public values only.
+// public values only. The MIP-0018 commands READ those two key files (never create them):
+// `maintenance-insert-vk` the maintenance key, `metadata-publish` the initialise/admin key,
+// whose public half must equal the vault's sealed `deployerKey`.
 //
 // Run it through deploy/run-stagenet.sh, which starts the local proof server, holds the
 // shared funding-wallet lock and mounts the secrets read-only.
 
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
@@ -50,11 +63,13 @@ import { fileURLToPath } from "node:url";
 import { ethers } from "ethers";
 import * as Rx from "rxjs";
 import {
+  CompactTypeSecp256k1Point,
   rawTokenType,
   sampleSigningKey,
   signatureVerifyingKey,
 } from "@midnight-ntwrk/compact-runtime";
 import * as ledger from "@midnightntwrk/ledger-v9";
+import { submitInsertVerifierKeyTx } from "@midnight-ntwrk/midnight-js-contracts";
 import { indexerPublicDataProvider } from "@midnight-ntwrk/midnight-js-indexer-public-data-provider";
 import { Roles } from "@midnightntwrk/wallet-sdk-hd";
 import { secp256k1PublicKeyOf, signAttestationDigest } from "@sig-net/midnight/testing";
@@ -93,6 +108,7 @@ import {
   type BridgeToken,
 } from "./bridge-token.ts";
 import {
+  compiledWitnessFree,
   connectWitnessFree,
   contractRefArg,
   deployWitnessFree,
@@ -101,6 +117,7 @@ import {
 } from "./setup.ts";
 import {
   CONFIG,
+  createProviders,
   deriveKeys,
   managedPath,
   NETWORK,
@@ -108,6 +125,16 @@ import {
   walletSeedFromEnv,
   type WalletContext,
 } from "./wallet.ts";
+import { compareWithExpected, formatTable, readTokenMetadata } from "./token-metadata-consumer.ts";
+import { KIND_SHIELDED, standardFieldPayloads, toHex } from "../src/token-metadata.ts";
+import {
+  DEFAULT_VALIDITY_SECONDS,
+  secp256k1Point,
+  signTokenMetadataDigest,
+  tokenMetadataArgs,
+  tokenMetadataDigest,
+  validUntilFrom,
+} from "../src/token-metadata-signer.ts";
 
 // ---- constants ------------------------------------------------------------------------
 
@@ -1223,6 +1250,438 @@ async function cmdWithdrawSettle(refund: boolean): Promise<void> {
   log(`      ${refund ? "refundWithdraw" : "completeWithdraw"} ${tx.txId}; dest ${rec.destErc20Before} -> ${rec.destErc20After}`);
 }
 
+// ---- MIP-0018 token metadata (project 00038) ------------------------------------------------------
+
+const METADATA_FILE = path.join(DEPLOYMENTS_DIR, "stagenet-token-metadata.json");
+const VK_BASELINE_FILE = path.join(DEPLOYMENTS_DIR, "stagenet-vault-vk-baseline.json");
+const METADATA_CIRCUIT = "publishTokenMetadata";
+
+interface MetadataToken {
+  label: string;
+  erc20Address: string;
+  colour: string;
+  name: string;
+  symbol: string;
+  decimals: number;
+  publications?: Json[];
+}
+
+interface MetadataDoc {
+  vault: string;
+  circuit: string;
+  tokens: MetadataToken[];
+  [k: string]: unknown;
+}
+
+function metadataDoc(): MetadataDoc {
+  const doc = readJson<MetadataDoc>(METADATA_FILE);
+  if (doc === undefined) throw new Error(`no ${METADATA_FILE}`);
+  return doc;
+}
+
+function metadataToken(doc: MetadataDoc, label: string | undefined): MetadataToken {
+  const t = doc.tokens.find((x) => x.label === label);
+  if (t === undefined) throw new Error(`--token must be one of ${doc.tokens.map((x) => x.label).join(", ")}`);
+  return t;
+}
+
+/** sha256 of each verifier key of THIS build (managed/Erc20Vault/keys). */
+function localVaultVerifierKeys(): Record<string, string> {
+  const dir = path.join(vaultZkConfigPath, "keys");
+  const out: Record<string, string> = {};
+  for (const f of readdirSync(dir).filter((x) => x.endsWith(".verifier")).sort()) {
+    out[f.replace(/\.verifier$/u, "")] = sha256(readFileSync(path.join(dir, f)));
+  }
+  return out;
+}
+
+function onChainVerifierKeys(state: any): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const op of state.operations()) {
+    const name = typeof op === "string" ? op : bytesToHex(op as Uint8Array);
+    const vk = state.operation(op)?.verifierKey as Uint8Array | undefined;
+    if (vk) out[name] = sha256(vk);
+  }
+  return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+interface VkComparison {
+  onChain: Record<string, string>;
+  local: Record<string, string>;
+  identical: string[];
+  differ: string[];
+  onlyLocal: string[];
+  onlyOnChain: string[];
+}
+
+function compareVerifierKeys(state: any): VkComparison {
+  const onChain = onChainVerifierKeys(state);
+  const local = localVaultVerifierKeys();
+  const names = [...new Set([...Object.keys(onChain), ...Object.keys(local)])].sort();
+  return {
+    onChain,
+    local,
+    identical: names.filter((n) => onChain[n] !== undefined && onChain[n] === local[n]),
+    differ: names.filter((n) => onChain[n] !== undefined && local[n] !== undefined && onChain[n] !== local[n]),
+    onlyLocal: names.filter((n) => onChain[n] === undefined),
+    onlyOnChain: names.filter((n) => local[n] === undefined),
+  };
+}
+
+/** The build gate: every deployed key identical, nothing missing, and at most the one new circuit. */
+function buildGate(c: VkComparison): { pass: boolean; why: string[] } {
+  const why: string[] = [];
+  if (c.differ.length > 0) why.push(`verifier keys DIFFER from the deployed ones: ${c.differ.join(", ")}`);
+  if (c.onlyOnChain.length > 0) why.push(`circuits deployed but absent from this build: ${c.onlyOnChain.join(", ")}`);
+  const extra = c.onlyLocal.filter((n) => n !== METADATA_CIRCUIT);
+  if (extra.length > 0) why.push(`unexpected new circuits: ${extra.join(", ")}`);
+  const baseline = readJson<{ verifierKeysSha256: Record<string, string> }>(VK_BASELINE_FILE);
+  if (baseline !== undefined) {
+    for (const [n, h] of Object.entries(baseline.verifierKeysSha256)) {
+      if (c.local[n] !== h) why.push(`${n}: this build's key is not the recorded pre-upgrade baseline`);
+      if (c.onChain[n] !== h) why.push(`${n}: the chain's key is not the recorded pre-upgrade baseline`);
+    }
+  }
+  return { pass: why.length === 0, why };
+}
+
+/** The vault's sealed `deployerKey` (ledger field 10), read from the raw state array. */
+function onChainDeployerKey(state: any): { x: bigint; y: bigint } {
+  const cell = state.data.state.asArray()[10].asCell();
+  return CompactTypeSecp256k1Point.fromValue([...cell.value]) as { x: bigint; y: bigint };
+}
+
+/** A fingerprint of the vault's whole ledger data: identical before and after a key insert. */
+const ledgerDataSha256 = (state: any) => sha256(new TextEncoder().encode(String(state.data.toString(true))));
+
+/** The maintenance key file, READ only (never created here). */
+function readMaintenanceKey(): { signingKey: { tag: string; value: string }; verifyingKey: string } {
+  const doc = readJson<{ signingKey?: { tag: string; value: string } }>(CMA_KEY_FILE);
+  if (doc?.signingKey === undefined) throw new Error(`no maintenance signing key in ${CMA_KEY_FILE}: STOP`);
+  return { signingKey: doc.signingKey, verifyingKey: vkValue(signatureVerifyingKey(doc.signingKey as never)) };
+}
+
+/** The initialise/admin secp256k1 key file, READ only (never created here). */
+function readAdminSecret(): Uint8Array {
+  const doc = readJson<{ secretKeyHex?: string }>(DEPLOYER_KEY_FILE);
+  if (doc?.secretKeyHex === undefined) throw new Error(`no admin (deployer) key in ${DEPLOYER_KEY_FILE}: STOP`);
+  return hexToBytes(doc.secretKeyHex);
+}
+
+async function miscEventsOf(address: string, txHash?: string): Promise<{ id: number; name: string; payload: string; txHash: string; block: number }[]> {
+  const query = `query E($a: HexEncoded!, $t: HexEncoded) {
+    contractEvents(filter: { contractAddress: $a, types: [MISC], transactionHash: $t }, limit: 500) {
+      __typename ... on MiscContractEvent { id name payload transaction { hash block { height } } }
+    } }`;
+  const res = await fetch(CONFIG.indexer, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ query, variables: { a: address, t: txHash ?? null } }),
+  });
+  const body = (await res.json()) as { data?: { contractEvents: any[] }; errors?: unknown };
+  if (body.errors !== undefined || body.data === undefined) throw new Error(`indexer: ${JSON.stringify(body.errors)}`);
+  return body.data.contractEvents
+    .filter((e) => e.__typename === "MiscContractEvent")
+    .map((e) => ({ id: e.id, name: e.name, payload: e.payload, txHash: e.transaction.hash, block: e.transaction.block.height }));
+}
+
+async function cmdVkCheck(): Promise<void> {
+  assertStagenet();
+  const state = loadState();
+  const vaultAddress = vaultAddressOrThrow(state);
+  const cs = await publicState(vaultAddress);
+  const comparison = compareVerifierKeys(cs);
+  const gate = buildGate(comparison);
+  const out = {
+    at: nowUtc(),
+    vault: vaultAddress,
+    maintenanceAuthority: authorityOf(cs),
+    ...comparison,
+    buildGate: gate.pass ? "PASS" : "FAIL",
+    problems: gate.why,
+    newCircuitInserted: comparison.onChain[METADATA_CIRCUIT] !== undefined,
+  };
+  const evidence = arg("evidence");
+  if (evidence !== undefined) saveEvidence(evidence, out);
+  log(toJson(out));
+  if (!gate.pass) process.exitCode = 1;
+}
+
+async function cmdMaintenanceInsertVk(): Promise<void> {
+  const facts = await checkNetworkAndSingleton();
+  const state = loadState();
+  const vaultAddress = vaultAddressOrThrow(state);
+  const circuit = arg("circuit") ?? METADATA_CIRCUIT;
+  if (circuit !== METADATA_CIRCUIT) throw new Error(`this step inserts ${METADATA_CIRCUIT} only`);
+  const cma = readMaintenanceKey();
+  const before = await publicState(vaultAddress);
+  const authority = authorityOf(before);
+  if (!authority.committee.includes(cma.verifyingKey) || authority.threshold !== 1) {
+    throw new Error(`the maintenance key file is not the vault's authority (${JSON.stringify(authority)}): STOP`);
+  }
+  const cmp = compareVerifierKeys(before);
+  const gate = buildGate(cmp);
+  if (!gate.pass) throw new Error(`build gate FAIL: ${gate.why.join("; ")}`);
+  const vkFile = path.join(vaultZkConfigPath, "keys", `${circuit}.verifier`);
+  const vk = new Uint8Array(readFileSync(vkFile));
+  const vkSha = sha256(vk);
+  if (cmp.onChain[circuit] !== undefined) {
+    if (cmp.onChain[circuit] !== vkSha) throw new Error(`${circuit} is on chain with a DIFFERENT key: STOP`);
+    log(`${circuit} is already on chain with this build's key ${vkSha}; nothing to do`);
+    return;
+  }
+  log(`      build gate PASS: ${cmp.identical.length} deployed keys identical; inserting ${circuit} (sha256 ${vkSha}, ${vk.length} bytes)`);
+  log(`      authority ${authority.committee.join(",")} threshold ${authority.threshold} counter ${authority.counter}`);
+  const dataBefore = ledgerDataSha256(before);
+
+  const wallet = await setupWallet();
+  const dustStart = await dustSpecks(wallet);
+  log(`      DUST ${dust(dustStart)}`);
+  const providers: any = await createProviders(wallet, vaultZkConfigPath);
+  // The maintenance key goes to midnight-js through getSigningKey only, read from its file in
+  // THIS process; it is never written to the private-state store or anywhere else.
+  const base = providers.privateStateProvider;
+  const privateStateProvider = new Proxy(base, {
+    get(target, prop) {
+      if (prop === "getSigningKey") {
+        return async (address: string) => (strip0x(address) === strip0x(vaultAddress) ? cma.signingKey : target.getSigningKey(address));
+      }
+      const v = Reflect.get(target, prop, target);
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  });
+  const compiled = compiledWitnessFree("erc20-vault", VaultModule, vaultZkConfigPath);
+  const t0 = Date.now();
+  const res: any = await submitInsertVerifierKeyTx({ ...providers, privateStateProvider }, compiled as never, vaultAddress, circuit as never, vk as never);
+  const tx = {
+    txId: res.txId,
+    txHash: res.txHash,
+    blockHeight: res.blockHeight,
+    blockHash: res.blockHash,
+    status: res.status,
+    seconds: Math.round((Date.now() - t0) / 100) / 10,
+    atUtc: nowUtc(),
+  };
+  log(`      VerifierKeyInsert ${String(tx.txId)} block ${String(tx.blockHeight)} ${String(tx.status)}`);
+
+  let after = await publicState(vaultAddress);
+  for (let i = 0; i < 24 && after.operation(circuit) === undefined; i++) {
+    await new Promise((r) => setTimeout(r, 5_000));
+    after = await publicState(vaultAddress);
+  }
+  const cmpAfter = compareVerifierKeys(after);
+  const authorityAfter = authorityOf(after);
+  const baseline = readJson<{ verifierKeysSha256: Record<string, string> }>(VK_BASELINE_FILE)?.verifierKeysSha256 ?? {};
+  const verify = {
+    newKeyOnChainEqualsBuild: cmpAfter.onChain[circuit] === vkSha,
+    preExistingKeysUnchanged: Object.entries(baseline).every(([n, h]) => cmpAfter.onChain[n] === h),
+    allOnChainKeysEqualBuild: cmpAfter.differ.length === 0 && cmpAfter.onlyLocal.length === 0 && cmpAfter.onlyOnChain.length === 0,
+    operationsAfter: Object.keys(cmpAfter.onChain),
+    authorityCommitteeUnchanged: JSON.stringify(authorityAfter.committee) === JSON.stringify(authority.committee) && authorityAfter.threshold === authority.threshold,
+    counterBefore: authority.counter,
+    counterAfter: authorityAfter.counter,
+    ledgerDataUnchanged: ledgerDataSha256(after) === dataBefore,
+    findDeployedContractWithThisBuild: false,
+  };
+  // findDeployedContract checks EVERY circuit of this build against the chain.
+  await connectVault(wallet, vaultAddress);
+  verify.findDeployedContractWithThisBuild = true;
+  await new Promise((r) => setTimeout(r, 10_000));
+  const dustEnd = await dustSpecks(wallet);
+  const record = {
+    phase: "00038 P3",
+    at: nowUtc(),
+    node: facts.nodeVersion,
+    vault: vaultAddress,
+    circuit,
+    verifierKeySha256: vkSha,
+    verifierKeyBytes: vk.length,
+    tx,
+    dust: { before: dust(dustStart), after: dust(dustEnd), spent: dust(dustStart - dustEnd) },
+    verify,
+    verifierKeysAfter: cmpAfter.onChain,
+  };
+  state.vault!.maintenanceAuthority = { ...(state.vault!.maintenanceAuthority as Json), counter: authorityAfter.counter };
+  (state.vault as Json).maintenanceUpdates = [...(((state.vault as Json).maintenanceUpdates as Json[]) ?? []), record];
+  saveState(state);
+  const current = readJson<Json>(VAULT_FILE) ?? {};
+  writeVaultDeployment(state, {
+    verifierKeysSha256: cmpAfter.onChain,
+    maintenanceUpdates: [
+      ...((current.maintenanceUpdates as Json[]) ?? []),
+      { circuit, verifierKeySha256: vkSha, tx: tx.txId, txHash: tx.txHash, blockHeight: tx.blockHeight, status: tx.status, counterBefore: authority.counter, counterAfter: authorityAfter.counter, project: "AA 00038 (MIP-0018)" },
+    ],
+  });
+  saveEvidence("p3-maintenance-insert-vk.json", record);
+  log(toJson(verify));
+  if (!verify.newKeyOnChainEqualsBuild || !verify.preExistingKeysUnchanged || !verify.allOnChainKeysEqualBuild) {
+    throw new Error("post-insert verification FAILED: see the evidence file");
+  }
+}
+
+interface PublishOptions {
+  token: MetadataToken;
+  secret: Uint8Array;
+  validUntil: bigint;
+}
+
+async function publishMetadataCall(wallet: WalletContext, vaultAddress: string, o: PublishOptions): Promise<{ tx: Json; digest: string }> {
+  const args = tokenMetadataArgs(o.token.name, o.token.symbol, o.token.decimals);
+  const erc20 = hexToBytes(strip0x(o.token.erc20Address));
+  const digest = tokenMetadataDigest(vaultAddress, erc20, args, o.validUntil);
+  const signature = signTokenMetadataDigest(digest, o.secret);
+  const vault = await connectVault(wallet, vaultAddress);
+  const t0 = Date.now();
+  const tx = await vault.call(
+    METADATA_CIRCUIT,
+    erc20,
+    args.name,
+    args.nameLen,
+    args.symbol,
+    args.symbolLen,
+    args.decimals,
+    o.validUntil,
+    signature,
+  );
+  return { tx: { ...txRecord(tx), seconds: Math.round((Date.now() - t0) / 100) / 10 }, digest: bytesToHex(digest) };
+}
+
+async function cmdMetadataPublish(): Promise<void> {
+  assertStagenet();
+  const state = loadState();
+  const vaultAddress = vaultAddressOrThrow(state);
+  const doc = metadataDoc();
+  if (strip0x(doc.vault) !== strip0x(vaultAddress)) throw new Error("the metadata file names another vault");
+  const token = metadataToken(doc, arg("token"));
+  const colour = colourOf(vaultAddress, token.erc20Address);
+  if (colour !== strip0x(token.colour)) throw new Error(`${token.label}: derived colour ${colour} is not the recorded ${token.colour}`);
+  const cs = await publicState(vaultAddress);
+  if (cs.operation(METADATA_CIRCUIT) === undefined) throw new Error(`${METADATA_CIRCUIT} is not on chain yet: run maintenance-insert-vk first`);
+  const secret = readAdminSecret();
+  const pub = secp256k1Point(secret);
+  const sealed = onChainDeployerKey(cs);
+  if (pub.x !== sealed.x || pub.y !== sealed.y) throw new Error("the admin key file is not the vault's sealed deployerKey: STOP");
+  const validFor = Number(arg("valid-for") ?? DEFAULT_VALIDITY_SECONDS);
+  const validUntil = validUntilFrom(Date.now() / 1000, validFor);
+
+  const wallet = await setupWallet();
+  const dustStart = await dustSpecks(wallet);
+  const { tx, digest } = await publishMetadataCall(wallet, vaultAddress, { token, secret, validUntil });
+  log(`      ${token.label}: publishTokenMetadata ${String(tx.txId)} block ${String(tx.blockHeight)} ${String(tx.status)}`);
+
+  const domainSep = VaultModule.pureCircuits.vaultTokenDomainSeparator(hexToBytes(strip0x(token.erc20Address)));
+  const expected = standardFieldPayloads(domainSep, KIND_SHIELDED, token.name, token.symbol, token.decimals).map(toHex);
+  let events: Awaited<ReturnType<typeof miscEventsOf>> = [];
+  for (let i = 0; i < 36; i++) {
+    events = await miscEventsOf(vaultAddress, String(tx.txHash));
+    if (events.length >= 3) break;
+    await new Promise((r) => setTimeout(r, 5_000));
+  }
+  events.sort((a, b) => a.id - b.id);
+  const payloadsMatch = events.length === 3 && events.every((e, i) => strip0x(e.payload) === expected[i]);
+  await new Promise((r) => setTimeout(r, 10_000));
+  const dustEnd = await dustSpecks(wallet);
+  const record = {
+    phase: "00038 P4",
+    at: nowUtc(),
+    vault: vaultAddress,
+    label: token.label,
+    erc20Address: token.erc20Address,
+    colour,
+    domainSep: bytesToHex(domainSep),
+    values: { name: token.name, symbol: token.symbol, decimals: token.decimals },
+    validUntil: validUntil.toString(),
+    digest,
+    tx,
+    events: events.map((e) => ({ id: e.id, block: e.block, name: e.name, payload: e.payload })),
+    eventCount: events.length,
+    payloadsEqualReferenceEncoding: payloadsMatch,
+    dust: { before: dust(dustStart), after: dust(dustEnd), spent: dust(dustStart - dustEnd) },
+  };
+  saveEvidence(`p4-metadata-${token.label}.json`, record);
+  token.publications = [
+    ...(token.publications ?? []),
+    { tx: tx.txId, txHash: tx.txHash, blockHeight: tx.blockHeight, status: tx.status, events: events.map((e) => e.id), validUntil: validUntil.toString(), at: record.at },
+  ];
+  writeFileSync(METADATA_FILE, toJson(doc));
+  log(toJson({ label: token.label, tx: tx.txId, block: tx.blockHeight, status: tx.status, eventCount: events.length, payloadsEqualReferenceEncoding: payloadsMatch, dust: record.dust }));
+  if (!payloadsMatch) throw new Error(`${token.label}: the emitted events are not the expected three payloads`);
+}
+
+async function cmdMetadataNegative(): Promise<void> {
+  assertStagenet();
+  const state = loadState();
+  const vaultAddress = vaultAddressOrThrow(state);
+  const mode = arg("mode") ?? "wrong-signer";
+  if (mode !== "wrong-signer" && mode !== "expired") throw new Error("--mode wrong-signer|expired");
+  const token = metadataToken(metadataDoc(), arg("token") ?? "stkA");
+  const before = await publicState(vaultAddress);
+  if (before.operation(METADATA_CIRCUIT) === undefined) throw new Error(`${METADATA_CIRCUIT} is not on chain yet`);
+  const now = Math.floor(Date.now() / 1000);
+  // wrong-signer: a throwaway key, generated here and never stored; expired: the real admin
+  // key over a validUntil already in the past.
+  let secret: Uint8Array;
+  do {
+    secret = new Uint8Array(randomBytes(32));
+  } while (BigInt(`0x${bytesToHex(secret)}`) === 0n || BigInt(`0x${bytesToHex(secret)}`) >= ethers.N);
+  if (mode === "expired") secret = readAdminSecret();
+  const validUntil = mode === "expired" ? BigInt(now - 120) : validUntilFrom(now, 600);
+  const eventsBefore = (await miscEventsOf(vaultAddress)).length;
+  const dataBefore = ledgerDataSha256(before);
+  const authBefore = authorityOf(before);
+
+  const wallet = await setupWallet();
+  const dustStart = await dustSpecks(wallet);
+  let failure: string | undefined;
+  let unexpected: Json | undefined;
+  const t0 = Date.now();
+  try {
+    unexpected = (await publishMetadataCall(wallet, vaultAddress, { token, secret, validUntil })).tx;
+  } catch (error) {
+    failure = String((error as Error)?.message ?? error);
+  }
+  const seconds = Math.round((Date.now() - t0) / 100) / 10;
+  const expectedReason = mode === "wrong-signer" ? /Not the vault admin/u : /Metadata signature expired/u;
+  await new Promise((r) => setTimeout(r, 20_000));
+  const after = await publicState(vaultAddress);
+  const dustEnd = await dustSpecks(wallet);
+  const eventsAfter = (await miscEventsOf(vaultAddress)).length;
+  const record = {
+    phase: "00038 P4 negative",
+    at: nowUtc(),
+    mode,
+    label: token.label,
+    validUntil: validUntil.toString(),
+    signer: mode === "wrong-signer" ? "a throwaway secp256k1 key (not the sealed deployerKey), never stored" : "the vault's admin key, past validUntil",
+    failed: failure !== undefined,
+    failedForTheExpectedReason: failure !== undefined && expectedReason.test(failure),
+    failure,
+    unexpectedTx: unexpected ?? null,
+    seconds,
+    stateUnchanged: ledgerDataSha256(after) === dataBefore,
+    authorityUnchanged: JSON.stringify(authorityOf(after)) === JSON.stringify(authBefore),
+    vaultMiscEvents: { before: eventsBefore, after: eventsAfter },
+    dust: { before: dust(dustStart), after: dust(dustEnd), change: dust(dustEnd - dustStart), note: "DUST generates over time; a fee would show as a drop" },
+  };
+  saveEvidence(`p4-negative-${mode}.json`, record);
+  log(toJson(record));
+  if (failure === undefined) throw new Error("the negative call SUCCEEDED: STOP");
+  if (!record.failedForTheExpectedReason) throw new Error(`the negative call failed for another reason: ${failure}`);
+}
+
+async function cmdMetadataRead(): Promise<void> {
+  assertStagenet();
+  const state = loadState();
+  const vaultAddress = vaultAddressOrThrow(state);
+  const doc = metadataDoc();
+  const report = await readTokenMetadata({ indexerUrl: CONFIG.indexer, nodeUrl: CONFIG.node, contractAddress: vaultAddress });
+  const problems = compareWithExpected(report, doc.tokens);
+  log(formatTable(report));
+  log(problems.length === 0 ? "\nEXPECTED TOKENS: MATCH" : `\nEXPECTED TOKENS: MISMATCH\n  ${problems.join("\n  ")}`);
+  saveEvidence(arg("evidence") ?? "p5-consumer.json", { ...report, expected: doc.tokens.map(({ publications: _p, ...t }) => t), problems });
+  if (problems.length > 0) process.exitCode = 1;
+}
+
 // ---- main ----------------------------------------------------------------------------------------
 
 const COMMANDS: Record<string, () => Promise<void>> = {
@@ -1239,6 +1698,11 @@ const COMMANDS: Record<string, () => Promise<void>> = {
   "withdraw-start": cmdWithdrawStart,
   "withdraw-complete": () => cmdWithdrawSettle(false),
   "withdraw-refund": () => cmdWithdrawSettle(true),
+  "vk-check": cmdVkCheck,
+  "maintenance-insert-vk": cmdMaintenanceInsertVk,
+  "metadata-negative": cmdMetadataNegative,
+  "metadata-publish": cmdMetadataPublish,
+  "metadata-read": cmdMetadataRead,
 };
 
 if (import.meta.url === `file://${process.argv[1]}`) {
