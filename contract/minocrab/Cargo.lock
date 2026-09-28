@@ -2294,14 +2294,9 @@ dependencies = [
 name = "passport-account-minocrab"
 version = "0.1.0"
 dependencies = [
- "ff",
- "group",
  "midnight-base-crypto",
- "midnight-coin-structure",
  "midnight-curves 0.3.1",
- "midnight-onchain-runtime",
  "midnight-onchain-state",
- "midnight-onchain-vm",
  "midnight-storage",
  "midnight-transient-crypto 3.0.0",
  "midnight-zkir-v3",
