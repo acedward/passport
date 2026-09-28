@@ -8,6 +8,8 @@ The contract source, its compiled JavaScript, its witnesses and its ledger layou
 |---|---|---|---|
 | `append_inbox_with_evm` | k18, 160,236 rows | **k17, 85,637 rows** | 34 probes, 0 disagreements |
 | `withdraw_shielded_with_evm` | k18, 182,809 rows | **k17, 94,639 rows** | 33 probes, 0 disagreements |
+| `withdraw_unshielded_with_evm` | k18, 161,623 rows | **k17, 73,453 rows** | 45 probes, 0 disagreements |
+| `withdraw_shielded_to_contract_with_evm` | k18, 188,532 rows | **k17, 100,362 rows** | 45 probes, 0 disagreements |
 
 The k and row counts come from Midnight's own cost model, and compactc 0.34.0's bundled
 `zkir-v3 mock-compile` gives the same numbers.
@@ -31,8 +33,9 @@ The crate `passport-account-minocrab` has one module per Compact module that the
 | `eip712` | `modules/Eip712.compact`: frozen type hashes, domain separator, struct hashes, digests |
 | `evm` | the stdlib's secp256k1 surface: the Ethereum address, ECDSA, `require_live_k256_key` |
 | `seam` | the signing path: challenge DSTs and challenges, the device entry, `require_authorised_with_evm` |
-| `zswap` | the stdlib's `sendShielded` to a user recipient, folded as compactc folds it |
+| `zswap` | the stdlib's `sendShielded` to a user or a contract recipient, folded as compactc folds it |
 | `account` | the ledger block and the exported circuits |
+| `withdrawals` | `withdraw_unshielded` and `withdraw_shielded_to_contract` (`_with_evm`): their challenges and digests, the unshielded mirror's debit, and `sendUnshielded` to a user address as compactc folds it |
 
 Almost all of the row savings come from two changes:
 
@@ -73,10 +76,33 @@ Every tamper probe must be refused by both artifacts, in the same way. The tampe
 - a wrong entry, amount, recipient, colour or witness coin;
 - the point at infinity;
 - `s = 0` and `r = 0`;
+- for the withdrawals (`tests/lane_wd/`, run by the same gate): an empty or other-colour unshielded
+  mirror, an overdraft, a recipient swapped for the account's own address, and a signature for
+  another withdrawal type over the same words; a to-contract withdrawal to the account itself (the
+  guarded auto-receive claim fires) is an honest probe;
 - counter overflows.
 
 A mutant port with the signature check removed makes the gate fail. That run is recorded in the
 project evidence.
+
+**The recipient tag decides what compactc emits.** `sendShielded` and `sendUnshielded` end with an
+"auto-receive when sending to self" branch. For a literal `left(user key)` (`withdraw_shielded`) or
+`right(user address)` (`withdraw_unshielded`), compactc folds the branch away entirely; for a literal
+`right(contract)` (`withdraw_shielded_to_contract`) it keeps a guarded receive claim whose guard is
+the bare `recipient == self` test. A guarded-off Impact still occupies public-input slots, so each
+port mirrors exactly what compactc emits (`zswap::send_shielded_to_user`,
+`zswap::send_shielded_to_contract`, `withdrawals::send_unshielded_to_user`), and a mutant that uses
+the generic stdlib gadget fails the gate.
+
+**The split run (`tests/lane_wd/split.rs`).** MinoCrab's executor cannot apply an honest
+`withdraw_unshielded_with_evm` transcript for either artifact: its op decoder rebuilds `Bytes<32>`
+atoms without normalising them, so the unused arm of the token type and of the recipient is 32 zero
+bytes instead of the empty atom, and the ledger's typed effects decode refuses it (compact-runtime
+normalises these values in production, and the public inputs are the same either way). When both
+artifacts fail exactly there, the probe runs both circuits without their trailing kernel-effects
+block through the ordinary checks (reads, mirror write, post-state), then walks both full circuits
+on the reads the executor gathered and compares their public inputs, `pi_skips`, outputs and
+`IrSource::check`.
 
 ## Caveats
 
