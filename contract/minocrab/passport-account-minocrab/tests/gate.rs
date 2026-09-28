@@ -480,6 +480,11 @@ fn gate_append_inbox_with_evm() {
     report(circuit, &ours, &theirs, &probes);
 }
 
+// ── L-DEV (P4): rotate_enc_key, add_device, remove_device — in their own file ────────────────────
+
+#[path = "lanes/l_dev.rs"]
+mod l_dev;
+
 // ── withdraw_shielded_with_evm ───────────────────────────────────────────────────────────────────
 
 struct WithdrawCase {

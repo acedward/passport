@@ -178,6 +178,159 @@ impl Account {
         Discloses::of(())
     }
 
+    // ── L-DEV (AA 00040 P4): rotate_enc_key, add_device, remove_device (`_with_evm`) ─────────────
+    //
+    // The same seam as `append_inbox_with_evm` (address, challenge, digest, `require_authorised`),
+    // with one `Bytes<32>` action word; the bodies after the seam are `crate::device`'s chips. Paths
+    // are spelled in full so this block adds no line outside itself.
+
+    /// ```text
+    /// export circuit rotate_enc_key_with_evm(new_key: Bytes<32>, pk: Secp256k1Point,
+    ///                                        use_counter: Uint<64>, sig: Secp256k1EcdsaSignature): []
+    /// ```
+    #[circuit]
+    pub fn rotate_enc_key_with_evm(
+        c: &mut Circuit3,
+        new_key: B32<Private>,
+        pk: Secp256k1Point,
+        use_counter: Uint<64>,
+        sig: SignatureArg,
+    ) -> Discloses<(DeviceEntry, crate::device::NewEncKey)> {
+        let pk = pk.point();
+        let sig = sig.wires();
+
+        // const address = secp256k1EthereumAddress(pk);
+        let address = ethereum_address(c, pk);
+
+        // const challenge = challenge_rotate_enc_key_with_evm(kernel.self(), address, new_key,
+        //                                                     auth_nonce);
+        let me = self_bytes(c);
+        let nonce = ACCOUNT.auth_nonce.read(c).field();
+        let challenge = crate::seam::challenge_rotate_enc_key(c, &me, address, &new_key, public_field(nonce));
+
+        // const digest = evm_digest_rotate_enc_key(kernel.self().bytes, evm_domain_salt, address,
+        //                                          auth_nonce, new_key, challenge);
+        let account = self_bytes(c);
+        let salt = public_b32(*ACCOUNT.evm_domain_salt.read(c));
+        let nonce2 = ACCOUNT.auth_nonce.read(c).field();
+        let digest = crate::eip712::digest_rotate_enc_key(
+            c,
+            &account,
+            &salt,
+            address,
+            public_field(nonce2),
+            &new_key,
+            &challenge,
+        );
+
+        require_authorised_with_evm(c, pk, use_counter, &sig, &digest, address);
+
+        // do_rotate_enc_key(new_key);
+        let new_key = new_key.disclose_as::<crate::device::NewEncKey>(c);
+        crate::device::do_rotate_enc_key(c, &new_key);
+
+        Discloses::of(())
+    }
+
+    /// ```text
+    /// export circuit add_device_with_evm(new_entry: Bytes<32>, pk: Secp256k1Point,
+    ///                                    use_counter: Uint<64>, sig: Secp256k1EcdsaSignature): []
+    /// ```
+    #[circuit]
+    pub fn add_device_with_evm(
+        c: &mut Circuit3,
+        new_entry: B32<Private>,
+        pk: Secp256k1Point,
+        use_counter: Uint<64>,
+        sig: SignatureArg,
+    ) -> Discloses<(DeviceEntry, crate::device::NewDeviceEntry)> {
+        let pk = pk.point();
+        let sig = sig.wires();
+
+        // const address = secp256k1EthereumAddress(pk);
+        let address = ethereum_address(c, pk);
+
+        // const challenge = challenge_add_device_with_evm(kernel.self(), address, new_entry,
+        //                                                 auth_nonce);
+        let me = self_bytes(c);
+        let nonce = ACCOUNT.auth_nonce.read(c).field();
+        let challenge = crate::seam::challenge_add_device(c, &me, address, &new_entry, public_field(nonce));
+
+        // const digest = evm_digest_add_device(kernel.self().bytes, evm_domain_salt, address,
+        //                                      auth_nonce, new_entry, challenge);
+        let account = self_bytes(c);
+        let salt = public_b32(*ACCOUNT.evm_domain_salt.read(c));
+        let nonce2 = ACCOUNT.auth_nonce.read(c).field();
+        let digest = crate::eip712::digest_add_device(
+            c,
+            &account,
+            &salt,
+            address,
+            public_field(nonce2),
+            &new_entry,
+            &challenge,
+        );
+
+        require_authorised_with_evm(c, pk, use_counter, &sig, &digest, address);
+
+        // do_add_device(new_entry);
+        let new_entry = new_entry.disclose_as::<crate::device::NewDeviceEntry>(c);
+        crate::device::do_add_device(c, &new_entry);
+
+        Discloses::of(())
+    }
+
+    /// ```text
+    /// export circuit remove_device_with_evm(entry: Bytes<32>, pk: Secp256k1Point,
+    ///                                       use_counter: Uint<64>, sig: Secp256k1EcdsaSignature): []
+    /// ```
+    #[circuit]
+    pub fn remove_device_with_evm(
+        c: &mut Circuit3,
+        entry: B32<Private>,
+        pk: Secp256k1Point,
+        use_counter: Uint<64>,
+        sig: SignatureArg,
+    ) -> Discloses<(DeviceEntry, crate::device::RemovedDeviceEntry)> {
+        let pk = pk.point();
+        let sig = sig.wires();
+
+        // const address = secp256k1EthereumAddress(pk);
+        let address = ethereum_address(c, pk);
+
+        // const challenge = challenge_remove_device_with_evm(kernel.self(), address, entry,
+        //                                                    auth_nonce);
+        let me = self_bytes(c);
+        let nonce = ACCOUNT.auth_nonce.read(c).field();
+        let challenge = crate::seam::challenge_remove_device(c, &me, address, &entry, public_field(nonce));
+
+        // const digest = evm_digest_remove_device(kernel.self().bytes, evm_domain_salt, address,
+        //                                         auth_nonce, entry, challenge);
+        let account = self_bytes(c);
+        let salt = public_b32(*ACCOUNT.evm_domain_salt.read(c));
+        let nonce2 = ACCOUNT.auth_nonce.read(c).field();
+        let digest =
+            crate::eip712::digest_remove_device(c, &account, &salt, address, public_field(nonce2), &entry, &challenge);
+
+        require_authorised_with_evm(c, pk, use_counter, &sig, &digest, address);
+
+        // do_remove_device(entry, derive_device_entry_with_evm(kernel.self(), address, device_epoch,
+        //                                                      ((use_counter + 1) as Uint<64>)));
+        // The caller's post-roll entry, derived again from FRESH `kernel.self()` and `device_epoch`
+        // reads (two more transcript ops) and a third `use_counter + 1` cast, as compactc does.
+        let me3 = self_bytes(c);
+        let epoch3 = ACCOUNT.device_epoch.read(c).stale(c);
+        let next_counter = succ_u64(c, use_counter.field());
+        let caller_entry =
+            crate::seam::device_entry_evm(c, &me3, address, epoch3.field().private(), next_counter.field());
+        let entry = entry.disclose_as::<crate::device::RemovedDeviceEntry>(c);
+        crate::device::do_remove_device(c, &entry, &caller_entry);
+
+        Discloses::of(())
+    }
+
+    // ── end L-DEV ────────────────────────────────────────────────────────────────────────────────
+
     /// ```text
     /// export circuit withdraw_shielded_with_evm(recipient: ZswapCoinPublicKey, color: Bytes<32>,
     ///                                           amount: Uint<128>, pk: Secp256k1Point,
