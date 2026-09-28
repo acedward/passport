@@ -7,6 +7,11 @@
 #   contract/scripts/minocrab/run-check.sh deploy|deposit|swap|append|withdraw
 #   contract/scripts/minocrab/run-check.sh vk-check           # read-only
 #   contract/scripts/minocrab/run-check.sh status [--wallet]
+#   P4 (the five lane circuits, then the authority retirement; CHECK_NAME_PREFIX=aa00040-p4):
+#   contract/scripts/minocrab/run-check.sh preflight4        # opens the wallet, spends nothing
+#   contract/scripts/minocrab/run-check.sh run4              # swap4 .. retire, one wallet session
+#   contract/scripts/minocrab/run-check.sh swap4|rotate|add-device|remove-device|unshielded|to-contract|retire
+#   contract/scripts/minocrab/run-check.sh status4 [--wallet]
 #
 # Steps that open the funding wallet:
 #   * take the SHARED funding-wallet lock (~/.stagenet-offer-ladders/funding.lock, the Offer Files
@@ -14,7 +19,7 @@
 #   * wait for >= 10 GB of Docker memory headroom, then start the pinned proof server (9.0.0-rc.6, by
 #     digest) on a random free 127.0.0.1 port >= 10000; the check joins its network namespace;
 #   * mount the mnemonic file and the EVM device key read-only.
-# Every container (aa00040-p3-*) is removed on exit and the lock is released, whatever happens.
+# Every container (${CHECK_NAME_PREFIX:-aa00040-p3}-*) is removed on exit and the lock is released, whatever happens.
 #
 # Environment: CHECK_EVIDENCE_DIR_HOST (required: public evidence), STAGENET_WALLET_FILE_HOST
 # (required for wallet steps), EVM_DEVICE_KEY_FILE_HOST (default: the 00039 test EOA),
@@ -35,15 +40,17 @@ IMAGE="${CHECK_IMAGE:-midnight-2-offers/aa-contracts:demo-infra-14580}"
 PROOF_IMAGE="midnightntwrk/proof-server:9.0.0-rc.6@sha256:38a819eacde273f725551fdf90ca7c31ebf3c0ff145f3ed58ee35f92fb7ce95b"
 LOCK="$HOME/.stagenet-offer-ladders/funding.lock"
 TAG="$$"
-PROOF_NAME="aa00040-p3-proof-$TAG"
-RUN_NAME="aa00040-p3-run-$CMD-$TAG"
+PFX="${CHECK_NAME_PREFIX:-aa00040-p3}"
+PROOF_NAME="$PFX-proof-$TAG"
+RUN_NAME="$PFX-run-$CMD-$TAG"
 : "${CHECK_EVIDENCE_DIR_HOST:?set CHECK_EVIDENCE_DIR_HOST (public evidence)}"
 
 say() { printf '== %s\n' "$*" >&2; }
 
 case "$CMD" in
   run|deploy|deposit|swap|append|withdraw) NEEDS_WALLET=1 ;;
-  status) if [ "${1:-}" = --wallet ]; then NEEDS_WALLET=1; else NEEDS_WALLET=0; fi ;;
+  preflight4|run4|swap4|rotate|add-device|remove-device|unshielded|to-contract|retire|diagnose-add) NEEDS_WALLET=1 ;;
+  status|status4) if [ "${1:-}" = --wallet ]; then NEEDS_WALLET=1; else NEEDS_WALLET=0; fi ;;
   preflight|vk-check|inspect|selftest) NEEDS_WALLET=0 ;;
   *) echo "unknown command $CMD" >&2; exit 2 ;;
 esac
@@ -74,7 +81,7 @@ if [ "$NEEDS_WALLET" = 1 ]; then
   mkdir -p "$(dirname "$LOCK")"
   for i in $(seq 1 16); do
     if ! wallet_in_use && ( set -o noclobber
-      printf '{"purpose":"aa-00040 P3 stagenet check %s","pid":%s,"host":"%s","at":"%s"}' \
+      printf '{"purpose":"aa-00040 stagenet check %s","pid":%s,"host":"%s","at":"%s"}' \
         "$CMD" "$$" "$(hostname)" "$(date -u +%FT%TZ)" > "$LOCK" ) 2>/dev/null; then
       LOCK_TAKEN=1; break
     fi

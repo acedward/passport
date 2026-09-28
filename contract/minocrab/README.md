@@ -17,6 +17,12 @@ The contract source, its compiled JavaScript, its witnesses and its ledger layou
 The k and row counts come from Midnight's own cost model, and compactc 0.34.0's bundled
 `zkir-v3 mock-compile` gives the same numbers.
 
+The keys come from compactc 0.34.0's own `zkir-v3 compile-many` against `bls_midnight_2p17`
+(`contract/scripts/minocrab/keygen.sh`). They are not committed: `keys/SHA256SUMS` and
+`keys/manifest.json` record them. On proof server 9.0.0-rc.6 a MinoCrab proof of each circuit takes
+0.52–0.57× the compactc time, with half the prover key (285 MB instead of 570 MB) and about half the
+peak memory, and it verifies with Midnight's verifier (`tests/proof_verify.rs`).
+
 ## Pins
 
 - MinoCrab `sig-net/minocrab` @ `9f4d6a62abeb882fc2987d43cd6e0ba0cfb279cd`, which pins midnight-ledger `04c9c5d9`.
@@ -117,5 +123,10 @@ on the reads the executor gathered and compares their public inputs, `pi_skips`,
 - MinoCrab is unaudited, and upstream calls it "vibe coded". The gate is the safety net: it shows
   that the port and compactc agree on every probe it runs. It does not prove them equal on every
   input.
-- Nothing MinoCrab produces had run on a live network before this project. The stagenet check is a
-  later phase (P3 of AA 00040).
+- Nothing MinoCrab produced had run on a live network before this project. AA 00040 checked the
+  ports on Midnight stagenet (`contract/scripts/minocrab/stagenet-check.ts`). One account was deployed
+  with the compactc keys, and maintenance updates replaced all 7 ported circuits' verifier keys; the
+  indexer read-back is byte-equal to MinoCrab's. `append_inbox`, `withdraw_shielded` and
+  `rotate_enc_key` then landed, proven with their MinoCrab keys. The live `add_device` call was
+  refused at submission with the ledger's balance check (`Custom error: 138`, a fee-side error, not a
+  proof error). That is still under investigation, and the other live calls wait for it.
