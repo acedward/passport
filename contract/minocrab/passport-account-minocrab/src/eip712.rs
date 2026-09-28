@@ -185,6 +185,97 @@ pub fn digest_append_inbox<V: Vis3>(
     eip712_digest(c, &sep, &sh)
 }
 
+// ── L-DEV (P4): RotateEncKey, AddDevice, RemoveDevice ───────────────────────────────────────────
+//
+// The three types share the append's frame with one `bytes32` action field (`newKey`, `newEntry`,
+// `entry`), so each is a 192-byte struct preimage: `typeHash ‖ account ‖ owner ‖ authNonce ‖ word
+// ‖ challenge`.
+
+/// `eip712_digest(evm_domain_separator_for(account, salt), <one-word struct hash>)`.
+#[allow(clippy::too_many_arguments)]
+fn digest_one_word<V: Vis3>(
+    c: &mut Circuit3,
+    type_hash: &[u8; 32],
+    account: &B32<V>,
+    salt: &B32<V>,
+    owner: Wire3<FieldT, V>,
+    auth_nonce: Wire3<FieldT, V>,
+    word: &B32<V>,
+    challenge: &B32<V>,
+) -> B32<V> {
+    let sep = domain_separator(c, account, salt);
+    let sh = struct_hash(c, type_hash, account, owner, auth_nonce, &[word], challenge);
+    eip712_digest(c, &sep, &sh)
+}
+
+/// `evm_digest_rotate_enc_key(account, salt, owner, authNonce, newKey, challenge)`.
+pub fn digest_rotate_enc_key<V: Vis3>(
+    c: &mut Circuit3,
+    account: &B32<V>,
+    salt: &B32<V>,
+    owner: Wire3<FieldT, V>,
+    auth_nonce: Wire3<FieldT, V>,
+    new_key: &B32<V>,
+    challenge: &B32<V>,
+) -> B32<V> {
+    digest_one_word(
+        c,
+        &TYPE_ROTATE_ENC_KEY,
+        account,
+        salt,
+        owner,
+        auth_nonce,
+        new_key,
+        challenge,
+    )
+}
+
+/// `evm_digest_add_device(account, salt, owner, authNonce, newEntry, challenge)`.
+pub fn digest_add_device<V: Vis3>(
+    c: &mut Circuit3,
+    account: &B32<V>,
+    salt: &B32<V>,
+    owner: Wire3<FieldT, V>,
+    auth_nonce: Wire3<FieldT, V>,
+    new_entry: &B32<V>,
+    challenge: &B32<V>,
+) -> B32<V> {
+    digest_one_word(
+        c,
+        &TYPE_ADD_DEVICE,
+        account,
+        salt,
+        owner,
+        auth_nonce,
+        new_entry,
+        challenge,
+    )
+}
+
+/// `evm_digest_remove_device(account, salt, owner, authNonce, entry, challenge)`.
+pub fn digest_remove_device<V: Vis3>(
+    c: &mut Circuit3,
+    account: &B32<V>,
+    salt: &B32<V>,
+    owner: Wire3<FieldT, V>,
+    auth_nonce: Wire3<FieldT, V>,
+    entry: &B32<V>,
+    challenge: &B32<V>,
+) -> B32<V> {
+    digest_one_word(
+        c,
+        &TYPE_REMOVE_DEVICE,
+        account,
+        salt,
+        owner,
+        auth_nonce,
+        entry,
+        challenge,
+    )
+}
+
+// ── end L-DEV ────────────────────────────────────────────────────────────────────────────────────
+
 /// `evm_digest_withdraw_shielded(account, salt, owner, authNonce, color, amount,
 /// recipientCoinPublicKey, challenge)`.
 #[allow(clippy::too_many_arguments)]

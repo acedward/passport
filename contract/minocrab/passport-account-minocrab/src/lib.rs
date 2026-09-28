@@ -24,6 +24,8 @@
 //! # Module map (one module per Compact module the ported circuits use)
 //!
 //! - [`byte_codec`] — `modules/ByteCodec.compact`: the big-endian ABI words.
+//! - [`device`] — the enc-key and device-lifecycle custody chips (`do_rotate_enc_key`,
+//!   `do_add_device`, `do_remove_device`) behind the L-DEV exports.
 //! - [`eip712`] — `modules/Eip712.compact`: frozen type hashes, the domain separator, the
 //!   struct hashes and digests the wallet signs.
 //! - [`evm`] — the stdlib's secp256k1 surface as `account.compact` uses it: the Ethereum address
@@ -41,6 +43,7 @@
 
 pub mod account;
 pub mod byte_codec;
+pub mod device;
 pub mod eip712;
 pub mod evm;
 pub mod seam;
@@ -53,6 +56,10 @@ pub type CircuitBuilder = fn() -> minocrab::v3::Compiled3;
 pub fn ported() -> Vec<(&'static str, CircuitBuilder)> {
     vec![
         ("append_inbox_with_evm", account::Account::append_inbox_with_evm),
+        // L-DEV (P4)
+        ("rotate_enc_key_with_evm", account::Account::rotate_enc_key_with_evm),
+        ("add_device_with_evm", account::Account::add_device_with_evm),
+        ("remove_device_with_evm", account::Account::remove_device_with_evm),
         (
             "withdraw_shielded_with_evm",
             account::Account::withdraw_shielded_with_evm,

@@ -82,6 +82,77 @@ pub fn challenge_append_inbox(
     })
 }
 
+// ── L-DEV (P4): the enc-key and device-lifecycle challenges ─────────────────────────────────────
+//
+// `rotate_enc_key`, `add_device` and `remove_device` share ONE preimage shape,
+// `persistentHash<[Bytes<32>, ContractAddress, Bytes<20>, Bytes<32>, Uint<64>]>([dst, self_addr,
+// address, <word>, nonce_value])`; only the DST tag and the meaning of the `Bytes<32>` differ
+// (`new_key`, `new_entry`, `entry`).
+
+/// The shared body of the three one-word challenges.
+fn challenge_one_word(
+    c: &mut Circuit3,
+    circuit: &str,
+    me: &B32<Private>,
+    address: Wire3<FieldT, Private>,
+    word: &B32<Private>,
+    nonce: Wire3<FieldT, Private>,
+) -> B32<Private> {
+    c.region("seam: challenge", |c| {
+        let dst = challenge_dst(c, circuit);
+        let alignment = Alignment(vec![atom(32), atom(32), atom(20), atom(32), atom(8)]);
+        let digest = c.persistent_hash(
+            alignment,
+            &[
+                dst.hi.erase(),
+                dst.lo.erase(),
+                me.hi.erase(),
+                me.lo.erase(),
+                address.erase(),
+                word.hi.erase(),
+                word.lo.erase(),
+                nonce.erase(),
+            ],
+        );
+        B32::from_typed(c, digest)
+    })
+}
+
+/// `challenge_rotate_enc_key_with_evm(self, address, new_key, nonce)`.
+pub fn challenge_rotate_enc_key(
+    c: &mut Circuit3,
+    me: &B32<Private>,
+    address: Wire3<FieldT, Private>,
+    new_key: &B32<Private>,
+    nonce: Wire3<FieldT, Private>,
+) -> B32<Private> {
+    challenge_one_word(c, "rotate_enc_key", me, address, new_key, nonce)
+}
+
+/// `challenge_add_device_with_evm(self, address, new_entry, nonce)`.
+pub fn challenge_add_device(
+    c: &mut Circuit3,
+    me: &B32<Private>,
+    address: Wire3<FieldT, Private>,
+    new_entry: &B32<Private>,
+    nonce: Wire3<FieldT, Private>,
+) -> B32<Private> {
+    challenge_one_word(c, "add_device", me, address, new_entry, nonce)
+}
+
+/// `challenge_remove_device_with_evm(self, address, entry, nonce)`.
+pub fn challenge_remove_device(
+    c: &mut Circuit3,
+    me: &B32<Private>,
+    address: Wire3<FieldT, Private>,
+    entry: &B32<Private>,
+    nonce: Wire3<FieldT, Private>,
+) -> B32<Private> {
+    challenge_one_word(c, "remove_device", me, address, entry, nonce)
+}
+
+// ── end L-DEV ────────────────────────────────────────────────────────────────────────────────────
+
 /// The `QualifiedShieldedCoinInfo` a challenge binds — `nonce, color, value, mt_index`.
 #[derive(Clone, Copy)]
 pub struct CoinSlots<V: minocrab_std::v3::Vis3> {
