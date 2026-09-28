@@ -11,8 +11,10 @@
 # sha256 44cff904…; the gate checks every baseline hash it reads against the pinned list before use.
 #
 # Runs in Docker with a unique `aa00040-` name, capped CPU and memory, and removes the container on
-# exit. Cargo's home and target directory are the named volumes aa00040-cargo and aa00040-target
-# (delete them with `docker volume rm aa00040-cargo aa00040-target` when done).
+# exit. Cargo's home and target directory are the named volumes ${AA00040_VOLUMES}-cargo and
+# ${AA00040_VOLUMES}-target (default prefix `aa00040`). Parallel lanes working in separate git
+# worktrees set their own prefix (e.g. AA00040_VOLUMES=aa00040-ldev) so two builds never share a
+# target directory. Delete the volumes with `docker volume rm <prefix>-cargo <prefix>-target`.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -26,7 +28,8 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   docker build -q -t "$IMAGE" -f "$HERE/docker/Dockerfile" "$HERE/docker" >/dev/null
 fi
 
-mounts=(-v "$HERE:/src" -v aa00040-cargo:/cargo -v aa00040-target:/target)
+VOLS="${AA00040_VOLUMES:-aa00040}"
+mounts=(-v "$HERE:/src" -v "$VOLS-cargo:/cargo" -v "$VOLS-target:/target")
 envs=()
 if [[ -n "${COMPACTC_BASELINE_DIR:-}" ]]; then
   mounts+=(-v "$COMPACTC_BASELINE_DIR:/baseline:ro")
