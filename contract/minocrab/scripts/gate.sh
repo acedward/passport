@@ -15,6 +15,7 @@
 # ${AA00040_VOLUMES}-target (default prefix `aa00040`). Parallel lanes working in separate git
 # worktrees set their own prefix (e.g. AA00040_VOLUMES=aa00040-ldev) so two builds never share a
 # target directory. Delete the volumes with `docker volume rm <prefix>-cargo <prefix>-target`.
+# AA00040_NAME_PREFIX (default `aa00040`) prefixes the container name, e.g. `aa00040-p4` for a phase.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,7 +23,7 @@ IMAGE="${AA00040_IMAGE:-aa00040-rust:1.95}"
 CPUS="${AA00040_CPUS:-6}"
 MEM="${AA00040_MEM:-12g}"
 tag="$(( 10001 + RANDOM % 55000 ))"   # a run marker only; nothing listens on it
-name="aa00040-${1:-test}-${tag}"
+name="${AA00040_NAME_PREFIX:-aa00040}-${1:-test}-${tag}"
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   docker build -q -t "$IMAGE" -f "$HERE/docker/Dockerfile" "$HERE/docker" >/dev/null
