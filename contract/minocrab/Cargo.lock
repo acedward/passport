@@ -2297,6 +2297,7 @@ dependencies = [
  "midnight-base-crypto",
  "midnight-curves 0.3.1",
  "midnight-onchain-state",
+ "midnight-serialize",
  "midnight-storage",
  "midnight-transient-crypto 3.0.0",
  "midnight-zkir-v3",
