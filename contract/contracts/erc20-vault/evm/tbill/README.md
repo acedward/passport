@@ -74,7 +74,17 @@ stays reproducible from this repo.
 | TB52W | Test T-Bill 52-week | 6 | 1,000,000 |
 
 Each is bridged to stagenet through the same vault under its own symbol (no "w" prefix), with
-MIP-0018 metadata name = the full name, symbol = the symbol, decimals 6.
+MIP-0018 metadata name = the full name, symbol = the symbol, decimals 6. The deployment record
+is `../../deployments/sepolia-test-tbills.json`.
+
+**Deployed on Sepolia** (one broadcast of `DeployTestTBills.s.sol`, owner and initial holder
+`0x484738A67858305Edfc139B194Ed430Fe4D8e56b`; each source verified on Sourcify, exact match):
+
+| Symbol | Address | Deploy tx (block) | Bridged colour (vault `7771c9e5…`) |
+|---|---|---|---|
+| TB13W | [`0x5cF366decA552c30eBB2504d0b9Ee104A99f1c72`](https://repo.sourcify.dev/11155111/0x5cF366decA552c30eBB2504d0b9Ee104A99f1c72) | `0xddfbe04e822f0b5f1b4b26fa4bb94c487d78de163c612bff27df0513675c88b0` (11,808,110) | `b3d96e9933fb4548ce8a17a63f4c92bb3894b3571873c3edcc8a08aa7ce2512b` |
+| TB26W | [`0x26dB7221903e62310409e454442adBb46E0B6E33`](https://repo.sourcify.dev/11155111/0x26dB7221903e62310409e454442adBb46E0B6E33) | `0xbbb2610875a5907a32516170cd9342c30e9212b1f6d7171822421ae70cf4f6ef` (11,808,112) | `7b044b55c0493a67eeb16f25d3757eea07f9abaf55e374739953afd449bc3b62` |
+| TB52W | [`0x02A0D1BaF66351715A84aC4763b82f1155BdD5b0`](https://repo.sourcify.dev/11155111/0x02A0D1BaF66351715A84aC4763b82f1155BdD5b0) | `0xca55ee29e6cbb633e21a5e0127598752d93b98fd7ae9e1a6c706af88f2c01fe7` (11,808,113) | `8f4798a5ee48747f37562da76ed8711ad4b4ea1ad7ac16d80eb74b92792b9ec2` |
 
 ```sh
 # tests: every token test runs once per series token (TB13WTest, TB26WTest, TB52WTest) + series checks

@@ -1,0 +1,146 @@
+{
+  "network": "sepolia",
+  "chainId": 11155111,
+  "project": "AA 00045 \u2014 the \"Test T-Bill\" series (TB13W, TB26W, TB52W): full ERC20s on Sepolia, bridged to Midnight stagenet like TBILL",
+  "source": "evm/tbill/src/TestTBill.sol (TBill.sol's parameterised twin: OpenZeppelin 5.4.0 ERC20 + ERC20Permit + ERC20Burnable + Ownable, owner-only mint, name and symbol as constructor arguments; solc 0.8.28, optimizer 200, evm cancun, metadata hash ipfs)",
+  "features": [
+    "ERC20",
+    "EIP-2612 permit (EIP-712 domain name = the token's name, version \"1\")",
+    "burn / burnFrom",
+    "Ownable: owner-only mint(address,uint256)",
+    "no pause",
+    "6 decimals"
+  ],
+  "deployer": "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+  "deployScript": "evm/tbill/script/DeployTestTBills.s.sol (one broadcast, --slow, TB13W then TB26W then TB52W)",
+  "tokens": [
+    {
+      "symbol": "TB13W",
+      "name": "Test T-Bill 13-week",
+      "decimals": 6,
+      "address": "0x5cF366decA552c30eBB2504d0b9Ee104A99f1c72",
+      "owner": "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+      "initialHolder": "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+      "initialSupply": "1000000000000",
+      "constructorArgs": [
+        "Test T-Bill 13-week",
+        "TB13W",
+        "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+        "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+        "1000000000000"
+      ],
+      "eip712DomainSeparator": "0xf547ab501556dad221334b8181a790698e79a36e54a8d2cc93715f7baa9d9640",
+      "deployTx": "0xddfbe04e822f0b5f1b4b26fa4bb94c487d78de163c612bff27df0513675c88b0",
+      "block": 11808110,
+      "deployedUtc": "2026-09-29T14:18:48Z",
+      "deployerNonce": 48,
+      "gasUsed": 1130539,
+      "effectiveGasPriceWei": 1048471639,
+      "sourceVerification": {
+        "verifier": "sourcify",
+        "match": "exact_match",
+        "creationMatch": "exact_match",
+        "runtimeMatch": "exact_match",
+        "verifiedUtc": "2026-09-29T14:20:43Z",
+        "job": "ccdb5d85-87a0-43f4-907c-751b87170811",
+        "url": "https://repo.sourcify.dev/11155111/0x5cF366decA552c30eBB2504d0b9Ee104A99f1c72",
+        "api": "https://sourcify.dev/server/v2/contract/11155111/0x5cF366decA552c30eBB2504d0b9Ee104A99f1c72",
+        "etherscan": "not verified on Etherscan (no API key); https://sepolia.etherscan.io/address/0x5cF366decA552c30eBB2504d0b9Ee104A99f1c72"
+      },
+      "midnight": {
+        "vault": "7771c9e53afb45291ae2cecd48b5d55262734b08a98fc8276ed0f980031cd637",
+        "midnightName": "TB13W",
+        "vaultTokenDomainSeparator": "52b7306cf90aa8b5f51137bc42b3165d96531f207a6389734f4756b8014a2a00",
+        "midnightColour": "b3d96e9933fb4548ce8a17a63f4c92bb3894b3571873c3edcc8a08aa7ce2512b",
+        "colourStatus": "derived offline as tokenType(vaultTokenDomainSeparator(erc20), vault) before any deposit (AA 00045 P2)"
+      }
+    },
+    {
+      "symbol": "TB26W",
+      "name": "Test T-Bill 26-week",
+      "decimals": 6,
+      "address": "0x26dB7221903e62310409e454442adBb46E0B6E33",
+      "owner": "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+      "initialHolder": "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+      "initialSupply": "1000000000000",
+      "constructorArgs": [
+        "Test T-Bill 26-week",
+        "TB26W",
+        "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+        "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+        "1000000000000"
+      ],
+      "eip712DomainSeparator": "0xd0eb1806fcb95cd10bd702c6a17c04bd2406f16e89e854bc12fb18b7d7243abd",
+      "deployTx": "0xbbb2610875a5907a32516170cd9342c30e9212b1f6d7171822421ae70cf4f6ef",
+      "block": 11808112,
+      "deployedUtc": "2026-09-29T14:19:12Z",
+      "deployerNonce": 49,
+      "gasUsed": 1130539,
+      "effectiveGasPriceWei": 1088740604,
+      "sourceVerification": {
+        "verifier": "sourcify",
+        "match": "exact_match",
+        "creationMatch": "exact_match",
+        "runtimeMatch": "exact_match",
+        "verifiedUtc": "2026-09-29T14:21:01Z",
+        "job": "db772c02-fe0e-48f1-a168-43b16bd713cf",
+        "url": "https://repo.sourcify.dev/11155111/0x26dB7221903e62310409e454442adBb46E0B6E33",
+        "api": "https://sourcify.dev/server/v2/contract/11155111/0x26dB7221903e62310409e454442adBb46E0B6E33",
+        "etherscan": "not verified on Etherscan (no API key); https://sepolia.etherscan.io/address/0x26dB7221903e62310409e454442adBb46E0B6E33"
+      },
+      "midnight": {
+        "vault": "7771c9e53afb45291ae2cecd48b5d55262734b08a98fc8276ed0f980031cd637",
+        "midnightName": "TB26W",
+        "vaultTokenDomainSeparator": "a28d64562dea14d049abc3538ee6fa850eaead788619255653b92e304fc5bb00",
+        "midnightColour": "7b044b55c0493a67eeb16f25d3757eea07f9abaf55e374739953afd449bc3b62",
+        "colourStatus": "derived offline as tokenType(vaultTokenDomainSeparator(erc20), vault) before any deposit (AA 00045 P2)"
+      }
+    },
+    {
+      "symbol": "TB52W",
+      "name": "Test T-Bill 52-week",
+      "decimals": 6,
+      "address": "0x02A0D1BaF66351715A84aC4763b82f1155BdD5b0",
+      "owner": "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+      "initialHolder": "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+      "initialSupply": "1000000000000",
+      "constructorArgs": [
+        "Test T-Bill 52-week",
+        "TB52W",
+        "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+        "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+        "1000000000000"
+      ],
+      "eip712DomainSeparator": "0xb67f4c2f60dd04aa4c4d23a28ea279c978a9de3d88e976545fedb0ddcd57225b",
+      "deployTx": "0xca55ee29e6cbb633e21a5e0127598752d93b98fd7ae9e1a6c706af88f2c01fe7",
+      "block": 11808113,
+      "deployedUtc": "2026-09-29T14:19:24Z",
+      "deployerNonce": 50,
+      "gasUsed": 1130539,
+      "effectiveGasPriceWei": 1032523655,
+      "sourceVerification": {
+        "verifier": "sourcify",
+        "match": "exact_match",
+        "creationMatch": "exact_match",
+        "runtimeMatch": "exact_match",
+        "verifiedUtc": "2026-09-29T14:21:20Z",
+        "job": "85a9614f-fc6a-4b88-aea8-83f17624acc9",
+        "url": "https://repo.sourcify.dev/11155111/0x02A0D1BaF66351715A84aC4763b82f1155BdD5b0",
+        "api": "https://sourcify.dev/server/v2/contract/11155111/0x02A0D1BaF66351715A84aC4763b82f1155BdD5b0",
+        "etherscan": "not verified on Etherscan (no API key); https://sepolia.etherscan.io/address/0x02A0D1BaF66351715A84aC4763b82f1155BdD5b0"
+      },
+      "midnight": {
+        "vault": "7771c9e53afb45291ae2cecd48b5d55262734b08a98fc8276ed0f980031cd637",
+        "midnightName": "TB52W",
+        "vaultTokenDomainSeparator": "441ea44bbaffa97b1658745ea6a27c144db8b9c0cd22b75d3b5adddcd0be2200",
+        "midnightColour": "8f4798a5ee48747f37562da76ed8711ad4b4ea1ad7ac16d80eb74b92792b9ec2",
+        "colourStatus": "derived offline as tokenType(vaultTokenDomainSeparator(erc20), vault) before any deposit (AA 00045 P2)"
+      }
+    }
+  ],
+  "notes": [
+    "TBILL (AA 00043) stays in sepolia-tbill.json and in TBill.sol, unchanged; these three share one parameterised source.",
+    "Each bridged colour is listed under the token's own symbol, not with a \"w\" prefix (owner 2026-09-28).",
+    "More supply: script/MintTestTBill.s.sol (TOKEN, MINT_TO, MINT_AMOUNT and the owner's key from the environment only), or cast send <TOKEN> \"mint(address,uint256)\" <to> <amount> from a keystore or hardware wallet."
+  ]
+}
