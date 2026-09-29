@@ -48,7 +48,7 @@ const SIGNET_CONTRACT_REF = { bytes: hexToBytes(sampleContractAddress()) };
 /** The simulated block time, in seconds (the unit `blockTimeLt` compares). */
 const NOW = 1_790_000_000;
 
-/** The tokens and values of deployments/stagenet-token-metadata.json (StkA, StkB, StkC, USDC; TBILL since AA 00043). */
+/** The tokens and values of deployments/stagenet-token-metadata.json (StkA, StkB, StkC, USDC; TBILL since AA 00043; TB13W, TB26W, TB52W since AA 00045). */
 const RECORD = JSON.parse(
   readFileSync(new URL("../deployments/stagenet-token-metadata.json", import.meta.url), "utf8"),
 ) as { vault: string; tokens: { label: string; erc20Address: string; colour: string; name: string; symbol: string; decimals: number }[] };
@@ -279,13 +279,16 @@ describe("the recorded publication values (deployments/stagenet-token-metadata.j
     readFileSync(new URL("../deployments/stagenet-vault.json", import.meta.url), "utf8"),
   ) as { vaultContractAddress: string; bridgedTokens: { erc20Address: string; midnightColour: string }[] };
 
-  it("are the owner's exact strings (2026-09-28: \"USDC / StkA\"; TBILL is \"T-Bill\" / \"TBILL\", AA 00043), decimals 6", () => {
+  it("are the owner's exact strings (2026-09-28: \"USDC / StkA\"; TBILL is \"T-Bill\" / \"TBILL\", AA 00043; TB13W/TB26W/TB52W are \"Test T-Bill 13/26/52-week\", AA 00045), decimals 6", () => {
     expect(RECORD.tokens.map((t) => [t.label, t.name, t.symbol, t.decimals])).toEqual([
       ["stkA", "StkA", "StkA", 6],
       ["stkB", "StkB", "StkB", 6],
       ["stkC", "StkC", "StkC", 6],
       ["USDC", "USDC", "USDC", 6],
       ["TBILL", "T-Bill", "TBILL", 6],
+      ["TB13W", "Test T-Bill 13-week", "TB13W", 6],
+      ["TB26W", "Test T-Bill 26-week", "TB26W", 6],
+      ["TB52W", "Test T-Bill 52-week", "TB52W", 6],
     ]);
   });
 

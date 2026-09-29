@@ -4,7 +4,7 @@
   "vault": "7771c9e53afb45291ae2cecd48b5d55262734b08a98fc8276ed0f980031cd637",
   "circuit": "publishTokenMetadata",
   "kind": 1,
-  "values": "The on-chain name and symbol are exactly these strings (owner, 2026-09-28: \"actually drop the w\", then \"USDC / StkA\"): capital S, not the ERC20s' lowercase symbol(). The wStkA/wStkB/wStkC/wUSDC labels in stagenet-vault.json are internal labels only. TBILL (AA 00043, owner 2026-09-28: \"a new ERC20 token called \\\"T-Bill\\\"\"): name \"T-Bill\", symbol \"TBILL\", decimals 6 — the ERC20's own name and symbol, and the bridged colour is listed as TBILL (no w prefix).",
+  "values": "The on-chain name and symbol are exactly these strings (owner, 2026-09-28: \"actually drop the w\", then \"USDC / StkA\"): capital S, not the ERC20s' lowercase symbol(). The wStkA/wStkB/wStkC/wUSDC labels in stagenet-vault.json are internal labels only. TBILL (AA 00043, owner 2026-09-28: \"a new ERC20 token called \\\"T-Bill\\\"\"): name \"T-Bill\", symbol \"TBILL\", decimals 6 — the ERC20's own name and symbol, and the bridged colour is listed as TBILL (no w prefix). TB13W, TB26W and TB52W (AA 00045, owner 2026-09-29: \"3 more assets symbol/name - same conditions as the TBILL\"): names \"Test T-Bill 13-week\", \"Test T-Bill 26-week\" and \"Test T-Bill 52-week\", symbols TB13W, TB26W and TB52W, decimals 6 — each the ERC20's own name and symbol, and each bridged colour is listed under its symbol (no w prefix).",
   "tokens": [
     {
       "label": "stkA",
@@ -118,6 +118,75 @@
           ],
           "validUntil": "1790651681",
           "at": "2026-09-29T02:19:12.915Z"
+        }
+      ]
+    },
+    {
+      "label": "TB13W",
+      "erc20Address": "0x5cF366decA552c30eBB2504d0b9Ee104A99f1c72",
+      "colour": "b3d96e9933fb4548ce8a17a63f4c92bb3894b3571873c3edcc8a08aa7ce2512b",
+      "name": "Test T-Bill 13-week",
+      "symbol": "TB13W",
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "00146f92422789c74133a6f6d26fd12184ab0740bf2a414d4449c4c00c47f104c2",
+          "txHash": "5ca5f4065934e66f4dab31ae08ceccce64093ab178116d570bc8e10f957ef357",
+          "blockHeight": 675470,
+          "status": "SucceedEntirely",
+          "events": [
+            50650,
+            50651,
+            50652
+          ],
+          "validUntil": "1790697306",
+          "at": "2026-09-29T14:59:18.284Z"
+        }
+      ]
+    },
+    {
+      "label": "TB26W",
+      "erc20Address": "0x26dB7221903e62310409e454442adBb46E0B6E33",
+      "colour": "7b044b55c0493a67eeb16f25d3757eea07f9abaf55e374739953afd449bc3b62",
+      "name": "Test T-Bill 26-week",
+      "symbol": "TB26W",
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "0054b26e5186930e54af00fe10f1eb73c8c5f4e30822ed106a46441e6429f4983e",
+          "txHash": "ee6a4135f75041d3b2995c561b413059ef276ef65ca58da1c5828b2ec6337e5d",
+          "blockHeight": 675720,
+          "status": "SucceedEntirely",
+          "events": [
+            50758,
+            50759,
+            50760
+          ],
+          "validUntil": "1790698785",
+          "at": "2026-09-29T15:24:18.527Z"
+        }
+      ]
+    },
+    {
+      "label": "TB52W",
+      "erc20Address": "0x02A0D1BaF66351715A84aC4763b82f1155BdD5b0",
+      "colour": "8f4798a5ee48747f37562da76ed8711ad4b4ea1ad7ac16d80eb74b92792b9ec2",
+      "name": "Test T-Bill 52-week",
+      "symbol": "TB52W",
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "003bdea00b08c2eb0958a44e8407f713403626bd26b291b9e690052a514622c404",
+          "txHash": "fda6832e2dd08cb6ad91ad5ad2c9ce60860ddaaa9d3a362a79a78d3ca804a8b8",
+          "blockHeight": 675919,
+          "status": "SucceedEntirely",
+          "events": [
+            50771,
+            50772,
+            50773
+          ],
+          "validUntil": "1790700009",
+          "at": "2026-09-29T15:44:12.977Z"
         }
       ]
     }
