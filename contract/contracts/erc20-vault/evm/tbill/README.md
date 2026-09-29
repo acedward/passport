@@ -10,9 +10,15 @@ It is bridged through the same witness-free Sig Network ERC20 vault as `../stk-t
 **TBILL** (no "w" prefix), with MIP-0018 metadata name "T-Bill", symbol "TBILL", decimals 6.
 The deployment record is `../../deployments/sepolia-tbill.json`.
 
+**Deployed on Sepolia**: [`0x1531b11722CF9b600816ED0eAcBc49594DbB991f`](https://sepolia.etherscan.io/address/0x1531b11722CF9b600816ED0eAcBc49594DbB991f)
+(tx `0x4c695a178b7759961c5a4dab0c00848a68aad7f97ceb49b535c0f03a5cce3fc0`, block 11,804,461), owner and
+initial holder `0x484738A67858305Edfc139B194Ed430Fe4D8e56b`, 1,000,000 TBILL. Source verified on
+Sourcify, exact match: https://repo.sourcify.dev/11155111/0x1531b11722CF9b600816ED0eAcBc49594DbB991f.
+Bridged colour (vault `7771c9e5…`): `05b32284398b1a75dac4f92dcb8802a57ce2194dd3cae781f870430c18a8a8e9`.
+
 Every command runs in Docker (`ghcr.io/foundry-rs/foundry:v1.5.1`). The owner's key comes from
 the `.sepolia` file (`SK=`), mounted read-only and sourced **inside** the container, so it never
-reaches a command line. Forge's artefact writer races on the macOS bind mount, so the build
+reaches a command line (`SK=0x${SK#0x}` adds the `0x` that `vm.envUint` needs, inside the container). Forge's artefact writer races on the macOS bind mount, so the build
 output and cache stay inside the container.
 
 ```sh
@@ -27,7 +33,7 @@ $FOUNDRY 'forge soldeer install && forge test'
 # deploy: Sepolia only, deployer 0x4847…e56b only; owner = holder = the deployer; 1,000,000 TBILL
 docker run --rm $SECRET -v $PWD:/evm -w /evm/tbill -e FOUNDRY_OUT=/tmp/out -e FOUNDRY_CACHE_PATH=/tmp/cache \
   --entrypoint sh ghcr.io/foundry-rs/foundry:v1.5.1 -c \
-  "set -a; . /secrets/sepolia; set +a; forge script script/DeployTBill.s.sol --rpc-url $RPC --broadcast --slow"
+  "set -a; . /secrets/sepolia; SK=0x\${SK#0x}; set +a; forge script script/DeployTBill.s.sol --rpc-url $RPC --broadcast --slow"
 
 # verify the source on Sourcify (no API key needed)
 $FOUNDRY "forge verify-contract <TBILL> src/TBill.sol:TBill --chain 11155111 --verifier sourcify --watch"
@@ -36,7 +42,7 @@ $FOUNDRY "forge verify-contract <TBILL> src/TBill.sol:TBill --chain 11155111 --v
 docker run --rm $SECRET -v $PWD:/evm -w /evm/tbill -e FOUNDRY_OUT=/tmp/out -e FOUNDRY_CACHE_PATH=/tmp/cache \
   -e TBILL=<TBILL> -e MINT_TO=0x… -e MINT_AMOUNT=1000000000 \
   --entrypoint sh ghcr.io/foundry-rs/foundry:v1.5.1 -c \
-  "set -a; . /secrets/sepolia; set +a; forge script script/MintTBill.s.sol --rpc-url $RPC --broadcast"
+  "set -a; . /secrets/sepolia; SK=0x\${SK#0x}; set +a; forge script script/MintTBill.s.sol --rpc-url $RPC --broadcast"
 ```
 
 `cast send <TBILL> "mint(address,uint256)" <to> <amount>` works too, from an encrypted keystore

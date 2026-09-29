@@ -1,0 +1,49 @@
+{
+  "network": "sepolia",
+  "chainId": 11155111,
+  "project": "AA 00043 \u2014 TBILL (\"T-Bill\"), a full ERC20 on Sepolia, bridged to Midnight stagenet",
+  "source": "evm/tbill/src/TBill.sol (OpenZeppelin 5.4.0 ERC20 + ERC20Permit + ERC20Burnable + Ownable, owner-only mint; solc 0.8.28, optimizer 200, evm cancun, metadata hash ipfs)",
+  "token": {
+    "name": "T-Bill",
+    "symbol": "TBILL",
+    "decimals": 6,
+    "address": "0x1531b11722CF9b600816ED0eAcBc49594DbB991f",
+    "owner": "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+    "initialHolder": "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+    "initialSupply": "1000000000000",
+    "features": [
+      "ERC20",
+      "EIP-2612 permit (EIP-712 domain name \"T-Bill\", version \"1\")",
+      "burn / burnFrom",
+      "Ownable: owner-only mint(address,uint256)",
+      "no pause"
+    ],
+    "eip712DomainSeparator": "0xaa3689f14d1dc65b16031f04539a63c020b709dcea145072bc4284941cd18d26"
+  },
+  "deployer": "0x484738A67858305Edfc139B194Ed430Fe4D8e56b",
+  "deployTx": "0x4c695a178b7759961c5a4dab0c00848a68aad7f97ceb49b535c0f03a5cce3fc0",
+  "block": 11804461,
+  "deployedUtc": "2026-09-29T01:38:48Z",
+  "gasUsed": 1126605,
+  "sourceVerification": {
+    "verifier": "sourcify",
+    "match": "exact_match",
+    "creationMatch": "exact_match",
+    "runtimeMatch": "exact_match",
+    "verifiedUtc": "2026-09-29T01:39:28Z",
+    "url": "https://repo.sourcify.dev/11155111/0x1531b11722CF9b600816ED0eAcBc49594DbB991f",
+    "api": "https://sourcify.dev/server/v2/contract/11155111/0x1531b11722CF9b600816ED0eAcBc49594DbB991f",
+    "etherscan": "not verified on Etherscan (no API key); https://sepolia.etherscan.io/address/0x1531b11722CF9b600816ED0eAcBc49594DbB991f"
+  },
+  "midnight": {
+    "vault": "7771c9e53afb45291ae2cecd48b5d55262734b08a98fc8276ed0f980031cd637",
+    "midnightName": "TBILL",
+    "vaultTokenDomainSeparator": "489f80fa3cb62c79c8dc21a973e06b3d78e101a3146a6690733129c5b1d36500",
+    "midnightColour": "05b32284398b1a75dac4f92dcb8802a57ce2194dd3cae781f870430c18a8a8e9",
+    "colourStatus": "derived offline as tokenType(vaultTokenDomainSeparator(erc20), vault); confirmed by the first mint in project 00043 P3"
+  },
+  "notes": [
+    "The bridged colour is listed as TBILL, not wTBILL: the owner asked on 2026-09-28 for bridged tokens to show the ERC20's own name, with no \"w\" prefix.",
+    "More supply: script/MintTBill.s.sol (the owner's key from the environment only), or cast send <TBILL> \"mint(address,uint256)\" <to> <amount> from a keystore or hardware wallet."
+  ]
+}
