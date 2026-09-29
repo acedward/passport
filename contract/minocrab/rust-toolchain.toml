@@ -1,0 +1,5 @@
+[toolchain]
+# The real floor of minocrab 9f4d6a6's dependency tree (sysinfo 0.39.6 requires rustc 1.95).
+channel = "1.95.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
