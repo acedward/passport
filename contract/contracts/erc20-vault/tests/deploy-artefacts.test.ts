@@ -32,6 +32,8 @@ const VAULT_CIRCUITS = [
   "startWithdraw",
   "completeWithdraw",
   "refundWithdraw",
+  // Project 00038 (MIP-0018): appended, inserted into the deployed vault by VerifierKeyInsert.
+  "publishTokenMetadata",
 ] as const;
 
 const artefacts = fingerprintDeployArtefacts();

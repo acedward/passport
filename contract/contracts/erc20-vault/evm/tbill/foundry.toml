@@ -1,0 +1,33 @@
+# TBILL ("T-Bill") — the full Sepolia ERC20 that AA project 00043 bridges to Midnight
+# stagenet through the witness-free vault in ../../ (Sig Network MPC), the same vault as
+# ../stk-tokens. Dependencies come from Soldeer (soldeer.lock pins the same OpenZeppelin
+# 5.4.0 and forge-std 1.10.0 as ../stk-tokens); `dependencies/` is not committed.
+#
+# Unlike ../stk-tokens, the metadata hash stays in the bytecode (Foundry's default
+# `bytecode_hash = "ipfs"`), so Sourcify can verify the deployed contract as an EXACT match.
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = ["dependencies"]
+solc_version = "0.8.28"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+remappings = [
+  "@openzeppelin/contracts/=dependencies/@openzeppelin-contracts-5.4.0/",
+  "forge-std/=dependencies/forge-std-1.10.0/src/",
+]
+
+[fuzz]
+runs = 512
+
+[dependencies]
+"@openzeppelin-contracts" = "5.4.0"
+forge-std = "1.10.0"
+
+[soldeer]
+remappings_generate = false
+remappings_regenerate = false
+recursive_deps = false

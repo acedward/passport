@@ -1,12 +1,41 @@
 # The witness-free ERC20 vault
 
 A fork of Sig Network's [`midnight-examples` ERC20 vault][upstream] (`examples/erc20-vault`
-@ `11482cdcea5bb1475de0b66f1ec56bde4bfec61d`, MIT) that a **Passport account can call
-cross-contract**. It bridges an ERC20 on an EVM chain into a shielded Midnight colour and
-back, with Sig Network's Signet MPC network executing and attesting the EVM side.
+@ **`erc20-vault-v0.3.0`**, `a696fc40de6dd33c36c902f9e7a20ea1d8caadc4`, MIT) on
+**`@sig-net/midnight` / `@sig-net/midnight-contract` 0.23.0**
+([`midnight-integration` `v0.23.0`][sdk], `43b74e4a9432a2c0a51f312df2c5c5f03f2f6b82`), that a
+**Passport account can call cross-contract**. It bridges an ERC20 on an EVM chain into a
+shielded Midnight colour and back, with Sig Network's Signet MPC network executing and
+attesting the EVM side.
 
-Project 00034, PR-F. Spec: FR-016 – FR-020, FR-026. Plan:
-`plans/00034-sub-f-vault-fork.md` in the organizer workspace.
+Project 00034 PR-F wrote the fork on upstream `11482cd` / SDK 0.22.0-rc.1; project 00037
+re-based it on v0.3.0 / 0.23.0 (plan `plans/00037-stagenet-sepolia-stk-erc20-bridge.md` in
+the organizer workspace).
+
+[sdk]: https://github.com/sig-net/midnight-integration
+
+## What the v0.3.0 / 0.23.0 re-base changed (project 00037)
+
+**The contract did not change**, because upstream's did not: `examples/erc20-vault/contract/src/erc20-vault.compact`
+is byte-identical at `11482cd`, `erc20-vault-v0.2.0` and `erc20-vault-v0.3.0` (sha256
+`3421d652…d30321`, 1,108 lines). Re-applying the witness-free transformation below to
+v0.3.0 therefore yields this fork's source unchanged; only its provenance header moved, and
+all seven vault verifier keys are byte-identical to the 00034 build. The Signet singleton's
+v0.23.0 source is byte-identical to the copy vendored before, and its verifier keys still
+equal the ones deployed on stagenet (`tests/signet-vk-onchain.test.ts`, with
+`SIGNET_VK_ONCHAIN=1`).
+
+What v0.3.0 / 0.23.0 changed is off-chain, and it is ported here:
+
+| v0.3.0 / 0.23.0 change | Here |
+|---|---|
+| stagenet MPC root key `0x047dd8ec…` (0.22.0-rc.1 had `0x04cb41ba…`) | read from the SDK (`getMpcRootPublicKey`), never hard-coded; `tests/sdk-0.23-facts.test.ts` pins it. **A vault initialised against the old root can never settle.** |
+| MPC output cache (`MpcOutputCacheReader`, `…/midnight-cache-storage-testnet/v1/stagenet`) | `src/relayer.ts` reads the attested bytes from it first; they count only once the attestation verifies over them. The three-candidate `bool` recompute stays as the fallback |
+| `signetEventSourceFromPublicDataProvider` removed; `signetEventSourceFromIndexer` reads the indexer's events directly | `src/relayer.ts` (`indexerUrl`, default `INDEXER_URL`) |
+| every MPC poll waits up to 20 min (Sepolia finality ≈ 13 min) | signature ≤ 20 min; attestation ≤ 33 min from the broadcast; the `finalized` head is reported on the way |
+| `startDeposit` refuses a deposit the derived account cannot pay | `src/preflight.ts` (`depositPreflight`): the ERC20 balance **and** the sweep's gas |
+| — | resumable by request id: `onProgress` reports each stage; a re-run re-assembles the signed transaction and never re-broadcasts a mined one |
+| — | `deploy/stagenet.ts` + `deploy/run-stagenet.sh`: stagenet deploy, deposits and withdrawals, with the owner's secrets mounted read-only |
 
 [upstream]: https://github.com/sig-net/midnight-examples
 
@@ -58,6 +87,8 @@ vaultPath(): Bytes<32>                                   // pad(32, "vault")
 vaultTokenDomainSeparator(erc20Address: Bytes<20>): Bytes<32>
 vaultResponseSchema(): Bytes<34>
 initialiseDigest(vaultAddress, vaultEvm, chainId, responseKey): Bytes<32>
+tokenMetadataDigest(vaultAddress, erc20Address, name, nameLen, symbol, symbolLen,
+                    decimals, validUntil): Bytes<32>             // project 00038
 
 // proof-bearing
 constructor(deployerPublicKey: Secp256k1Point, signetContract: SignetSigner)
@@ -82,6 +113,11 @@ completeWithdraw(requestId: RequestId, respondBidirectionalEvent: RespondBidirec
                  serializedOutput: Bytes<1>, mintNonce: Bytes<32>): Maybe<ShieldedCoinInfo>
 refundWithdraw(requestId: RequestId, respondBidirectionalEvent: RespondBidirectionalEvent,
                serializedOutput: Bytes<5>, mintNonce: Bytes<32>): ShieldedCoinInfo
+
+// project 00038 (MIP-0018), added to the deployed vault by VerifierKeyInsert
+publishTokenMetadata(erc20Address: Bytes<20>, name: Bytes<32>, nameLen: Uint<8>,
+                     symbol: Bytes<32>, symbolLen: Uint<8>, decimals: Uint<8>,
+                     validUntil: Uint<64>, adminSignature: Secp256k1EcdsaSignature): []
 ```
 
 Every argument type crossing the boundary is shared — `RequestId` and
@@ -99,6 +135,7 @@ Costs (compactc 0.34.0 `--feature-zkir-v3`):
 | `refundWithdraw` | 16 | 40,003 | 112.0 MiB |
 | `completeDeposit` | 16 | 40,308 | 112.0 MiB |
 | `completeWithdraw` | 16 | 40,310 | 112.0 MiB |
+| `publishTokenMetadata` (00038) | 17 | 129,100 | 224.1 MiB |
 
 ## Three rules a caller must respect
 
@@ -151,20 +188,143 @@ send **the ERC20 and gas ETH** to it.
 
 ```sh
 npm install
-npm run compile        # SignetSigner, then the Signet module circuits, then the vault
-npm test               # 94 offline tests; no network, no Docker
+npm run compile        # compactc 0.34.0 --feature-zkir-v3: SignetSigner, the Signet module circuits, the vault
+npm test               # 177 offline tests (+1 on-chain check each with SIGNET_VK_ONCHAIN=1 / VAULT_VK_ONCHAIN=1)
 npm run witness-free   # the one-line property check
 ./run-f4.sh all        # the localnet end-to-end run (claims the shared Docker stack)
 ```
 
+Project 00037 ran the suites in Docker (`node:24-bookworm-slim`, the package mounted at
+`/work`, `node_modules` installed inside the container). On a macOS bind mount, install into
+the container's own filesystem and copy `node_modules` across with `cp -R`: `npm` writing
+straight into the mount fails with `ENOTDIR`.
+
+## Stagenet (project 00037)
+
+```sh
+deploy/run-stagenet.sh preflight          # read-only: node version, SDK counterparties, singleton VKs
+deploy/run-stagenet.sh deploy             # deploy + initialise (resumable)
+deploy/run-stagenet.sh deposit-address    # the recipient's Sepolia deposit address
+deploy/run-stagenet.sh deposit-fund  --token stkA --amount 100 --gas-eth 0.002
+deploy/run-stagenet.sh deposit-start --token stkA --amount 100
+deploy/run-stagenet.sh relay --request <id>
+deploy/run-stagenet.sh deposit-complete --request <id>
+deploy/run-stagenet.sh withdraw-gas | withdraw-start --token stkA --amount 1 | withdraw-complete --request <id>
+deploy/run-stagenet.sh status | balances
+
+# any other ERC20, by address and a label (decimals read on chain), e.g. Circle's Sepolia USDC:
+deploy/run-stagenet.sh deposit-fund  --token USDC --erc20 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238 --amount 50
+deploy/run-stagenet.sh deposit-start --token USDC --amount 50      # --midnight-name defaults to wUSDC
+# TBILL (AA 00043, evm/tbill/), listed on Midnight as TBILL: no "w" prefix, so name it explicitly:
+deploy/run-stagenet.sh deposit-fund  --token TBILL --erc20 0x1531b11722CF9b600816ED0eAcBc49594DbB991f --midnight-name TBILL --amount 10000 --run tbill-p3
+# the "Test T-Bill" series (AA 00045, evm/tbill/src/TestTBill.sol), each listed under its own symbol; one deposit at a time:
+deploy/run-stagenet.sh deposit-fund  --token TB13W --erc20 0x5cF366decA552c30eBB2504d0b9Ee104A99f1c72 --midnight-name TB13W --amount 10000 --run tb13w-p3
+deploy/run-stagenet.sh deposit-fund  --token TB26W --erc20 0x26dB7221903e62310409e454442adBb46E0B6E33 --midnight-name TB26W --amount 10000 --run tb26w-p3
+deploy/run-stagenet.sh deposit-fund  --token TB52W --erc20 0x02A0D1BaF66351715A84aC4763b82f1155BdD5b0 --midnight-name TB52W --amount 10000 --run tb52w-p3
+# a second deposit of the same token needs its own run key (a completed run is never reopened):
+deploy/run-stagenet.sh deposit-fund  --token stkA --run stkA-p8 --amount 10000 --evidence p8-deposit-stkA.json
+```
+
+- The vault has no ERC20 allow-list: `startDeposit` takes any non-zero address, and the
+  colour is `tokenType(vaultTokenDomainSeparator(erc20), vault)`. `deploy/bridge-token.ts`
+  resolves `--token` against `deployments/sepolia-stk.json`, then against ERC20s earlier runs
+  bridged; a label, an address or a Midnight name is never reused for a different token.
+
+- The Midnight wallet is a mnemonic FILE (`WALLET=…`), mounted read-only and read
+  in-process (`deploy/mnemonic.ts`); the Sepolia key file (`SK=…`) is mounted only for the
+  two commands that spend on Sepolia. Neither ever reaches a command line or a log.
+- Wallet commands hold the shared funding-wallet lock and refuse to run next to another
+  container that mounts the same wallet. DUST fees use `FEE_BLOCKS_MARGIN=5`.
+- **The contract maintenance authority is kept.** `deploy` generates the vault's CMA signing
+  key, writes it to `~/.config/aa-00037/vault-maintenance.signing-key.json` (mode 600, never
+  printed) BEFORE deploying with it, and checks on chain that the committee is exactly that
+  key with threshold 1. Losing it would freeze the vault's circuit set: no later
+  `VerifierKeyInsert` (for example a metadata circuit) could ever land.
+- Records: `deployments/sepolia-stk.json` (the stk ERC20s), `deployments/sepolia-tbill.json`
+  (TBILL, AA 00043), `deployments/sepolia-test-tbills.json` (TB13W, TB26W, TB52W, AA 00045) and `deployments/stagenet-vault.json` (the vault, its EVM account, response
+  key, maintenance verifying key, the bridged colours `wStkA/wStkB/wStkC`, `wUSDC` (Circle's
+  Sepolia USDC `0x1c7D…7238`), `TBILL` (`0x1531…991f`) and `TB13W` / `TB26W` / `TB52W`
+  (`0x5cF3…1c72` / `0x26dB…6E33` / `0x02A0…D5b0`), every completed deposit run, and the
+  deposit addresses).
+
 The callee is compiled **before** the caller, and the output directory name IS the declared
 contract type name: `managed/SignetSigner`, `managed/Erc20Vault`.
+
+## MIP-0018 token metadata (project 00038)
+
+The deployed vault describes its bridged colours on chain with
+[MIP-0018](https://github.com/midnightntwrk/midnight-improvement-proposals/blob/main/mips/mip-0018-on-chain-token-metadata.md)
+`mip-0018:token-metadata[v1]` events, without a redeploy: `publishTokenMetadata` was compiled
+against the deployed ledger layout and added to the live vault by a maintenance update
+(`VerifierKeyInsert`) signed by its maintenance authority, the MIP's "Upgrade Path for
+Existing Contracts": tx `00bafa3830e562eda55f56a6573ac6f5f57e5fd87f80dc29f024a4be2730d88ee2`,
+stagenet block 654,990, `SucceedEntirely` (2026-09-28); the seven original keys were re-read
+unchanged and the maintenance counter went 0 → 1. The four colours were then published as
+`StkA`, `StkB`, `StkC` and `USDC` (blocks 655,072 / 655,115 / 655,140 / 655,190; txs in
+`deployments/stagenet-token-metadata.json`). AA 00043 published the TBILL colour as name
+`T-Bill`, symbol `TBILL`, decimals 6 (block 667,887, 2026-09-29). AA 00045 published TB13W, TB26W and
+TB52W as `Test T-Bill 13-week` / `TB13W`, `Test T-Bill 26-week` / `TB26W` and `Test T-Bill 52-week` /
+`TB52W`, decimals 6 (blocks 675,470 / 675,720 / 675,919, 2026-09-29).
+
+**The SDK cannot insert this key.** midnight-js 5.0.0-beta.7's `submitInsertVerifierKeyTx` goes
+through compact-js 2.5.5-rc.8, which hard-codes `ContractOperationVersionedVerifierKey('v3', …)`
+(keys headed `midnight:verifier-key[v6]`, ZKIR v2). A `--feature-zkir-v3` key is `[v7]`, ledger
+version `'v4'`, and is refused before signing. `deploy/maintenance.ts` builds the same
+`MaintenanceUpdate` with ledger-v9 directly, taking the version from the key's own header, and
+midnight-js `submitTx` submits it (`tests/maintenance.test.ts` pins the gap).
+
+- **The circuit** emits three events for one bridged colour per call — `name` and `symbol`
+  (UTF-8, val-type 1) and `decimals` (val-type 2 as `Uint<128>`) — through the MIP's reference
+  module, vendored byte for byte at `src/vendor/TokenMetadata.compact`
+  (`acedward/mip-0018-midnight-contracts` @ `7d9f659`, Apache-2.0). `domainSep` is derived in
+  the circuit with the vault's own `vaultTokenDomainSeparator(erc20)`, so it can only describe a
+  colour the vault mints; kind 1 (shielded native).
+- **The gate**: a secp256k1 signature, as an argument (the vault stays witness-free), under the
+  deployer key the constructor sealed — the key `initialise` checks — over
+  `tokenMetadataDigest = persistentHash([pad(32, "vault:token-metadata:v1"), kernel.self(), erc20,
+  name, nameLen, symbol, symbolLen, decimals, validUntil])`. `validUntil` (unix seconds) is
+  checked against the block time (`blockTimeLt`), so a signed message can only be replayed,
+  unchanged, until it expires; the signer caps it at 24 h (default 1 h). No nonce: a new ledger
+  field would have broken the in-place upgrade.
+- **The build gate**: all seven original circuits compile to verifier keys byte-identical to
+  the deployed vault's (`deployments/stagenet-vault-vk-baseline.json`, read from the indexer
+  before the upgrade), exactly one circuit is added, 0 witnesses, the same 11 ledger fields
+  (`tests/mip18-build-gate.test.ts`; `deploy/run-stagenet.sh vk-check` re-reads the chain).
+  A cross-contract caller checks the callee's key per called circuit, so Passport accounts
+  compiled against the vault are unaffected.
+- **Values** (`deployments/stagenet-token-metadata.json`, the owner's exact strings):
+  `StkA` / `StkB` / `StkC` / `USDC` as both name and symbol, decimals 6; TBILL as name `T-Bill`,
+  symbol `TBILL`, decimals 6; TB13W / TB26W / TB52W as names `Test T-Bill 13-week` / `26-week` /
+  `52-week` with their symbols, decimals 6. The `wStkA`… labels in `stagenet-vault.json` are internal labels only.
+
+```sh
+deploy/run-stagenet.sh vk-check                               # read-only: chain vs this build (the gate)
+deploy/run-stagenet.sh maintenance-insert-vk                  # VerifierKeyInsert publishTokenMetadata (maintenance key)
+deploy/run-stagenet.sh metadata-negative --mode wrong-signer  # must fail, changes nothing
+deploy/run-stagenet.sh metadata-publish --token stkA          # stkA | stkB | stkC | USDC | TBILL | TB13W | TB26W | TB52W (admin key; --valid-for 3600)
+deploy/run-stagenet.sh metadata-read                          # read-only: the MIP §7 consumer, checked against the file
+# any contract, any indexer, no secrets:
+node_modules/.bin/tsx deploy/token-metadata-consumer.ts --contract <address> \
+  [--indexer <graphql url>] [--node <rpc url>] [--expect deployments/stagenet-token-metadata.json] [--json out.json]
+```
+
+The consumer (`deploy/token-metadata-consumer.ts`, codec in `src/token-metadata.ts`) applies
+MIP §7: it reads the contract's `Misc` events, ignores other names, rejects transport
+violations, applies only successful transactions and — with `--node` — only events the chain
+corroborates (the event bytes are in the indexer's raw transaction, the node's canonical block
+at that height carries that raw transaction, and it is finalized), folds last-write-wins, and
+derives each colour itself as `tokenType(domainSep, contract)`. The codec reproduces every
+payload of the reference implementation's simulator corpus and its 32-case verdict corpus
+(`tests/fixtures/mip-0018/`, Apache-2.0).
+
+`maintenance-insert-vk` reads the maintenance key and `metadata-publish` the initialise (admin)
+key from the state directory, in-process only; neither is created, printed or written anywhere.
 
 ### Two things that are not Sig Network's recipe
 
 **The Signet singleton is recompiled from vendored source**, not linked from
 `node_modules/@sig-net/midnight-contract/dist/managed`. Every published version of that
-package through 0.22.0-rc.4 ships generated TypeScript pinned to `compact-runtime
+package through 0.23.0 ships generated TypeScript pinned to `compact-runtime
 0.18.0-rc.1`, and the 0.19.0 runtime this project uses refuses to import it, with no
 override. The rebuild is **byte-identical** in verifier keys, prover keys and ZKIR, so a
 contract compiled against it can still call the singleton Sig Network has already deployed.
@@ -184,15 +344,24 @@ rebuild against the package's own TypeScript twins. **PR-C and PR-S need this to
 |---|---|
 | `src/erc20-vault.compact` | the contract |
 | `src/vendor/signet-contract.compact` | the Signet singleton, vendored verbatim (MIT) |
+| `src/vendor/TokenMetadata.compact` | the MIP-0018 reference module, vendored byte for byte (Apache-2.0; `src/vendor/README.md`) |
+| `src/token-metadata.ts`, `src/token-metadata-signer.ts` | the MIP-0018 codec / validator / fold, and the admin signer for `publishTokenMetadata` |
 | `src/index.ts` | the export surface: recipients, ledger paths, address derivation |
-| `src/signet-sdk.ts` | the `@sig-net/midnight` shim (Q25) |
-| `tests/` | the offline suites |
-| `deploy/` | deploy + initialise + the artefact receipt |
+| `src/signet-sdk.ts` | the `@sig-net/midnight` shim (Q25), mirroring 0.23.0's export list |
+| `src/relayer.ts` | the relayer loop: signature, broadcast, attestation (output cache first) |
+| `src/preflight.ts` | the underfunded-deposit refusal |
+| `tests/` | the offline suites (+ the on-chain singleton check) |
+| `deploy/` | deploy + initialise + the artefact receipt; `stagenet.ts` / `run-stagenet.sh` for stagenet; `token-metadata-consumer.ts`, the MIP §7 consumer; `maintenance.ts`, the `VerifierKeyInsert` builder |
+| `deployments/` | the Sepolia ERC20s, the stagenet vault, its pre-upgrade verifier-key baseline and the MIP-0018 values, public values only |
+| `evm/stk-tokens/` | the stkA/stkB/stkC ERC20s (Foundry, OpenZeppelin 5.4.0) |
+| `evm/tbill/` | TBILL ("T-Bill"), the full ERC20 of AA 00043: permit, burn, owner-only mint; and `TestTBill`, its parameterised twin for the "Test T-Bill" series TB13W / TB26W / TB52W (AA 00045); deploy and mint scripts (Foundry, OpenZeppelin 5.4.0) |
 | `e2e/`, `infra/`, `run-f4.sh` | the localnet end-to-end run |
 | `managed/` | compiler output — gitignored |
 
 ## Licence
 
 MIT. Original work © 2026 SigNetwork (`midnight-examples/LICENSE`); modifications © 2026
-the Midnight Passport EVM-account project, under the same terms. The contract carries its
+the Midnight Passport EVM-account project, under the same terms. Two vendored parts keep their
+own licence, Apache-2.0: `src/vendor/TokenMetadata.compact` and `tests/fixtures/mip-0018/`, from
+`acedward/mip-0018-midnight-contracts`. The contract carries its
 provenance commit in its header, and a test asserts it stays there.

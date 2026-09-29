@@ -72,7 +72,15 @@ describe("the fork is witness-free", () => {
 
   it("keeps the MIT provenance header of the work it forks", () => {
     expect(source).toContain("SPDX-License-Identifier: MIT");
-    expect(source).toContain("11482cdcea5bb1475de0b66f1ec56bde4bfec61d");
     expect(source).toContain("Copyright (c) 2026 SigNetwork");
+  });
+
+  it("names its upstream base: erc20-vault-v0.3.0, byte-identical to the first fork's 11482cd", () => {
+    // Project 00037 re-based the fork. Upstream's erc20-vault.compact has the same sha256 at
+    // 11482cd, erc20-vault-v0.2.0 and erc20-vault-v0.3.0, so the header names all of them.
+    expect(source).toContain("erc20-vault-v0.3.0 (a696fc40de6dd33c36c902f9e7a20ea1d8caadc4)");
+    expect(source).toContain("11482cdcea5bb1475de0b66f1ec56bde4bfec61d");
+    expect(source).toContain("3421d652b2305a80cc8b102a228539f041a55c5778c9c27cafa3d6a4d9d30321");
+    expect(source).toContain("@sig-net/* 0.23.0");
   });
 });

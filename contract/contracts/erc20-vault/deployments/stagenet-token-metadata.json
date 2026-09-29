@@ -1,0 +1,194 @@
+{
+  "standard": "MIP-0018 (midnightntwrk/midnight-improvement-proposals mips/mip-0018-on-chain-token-metadata.md @ 37a3471), event mip-0018:token-metadata[v1]",
+  "network": "stagenet",
+  "vault": "7771c9e53afb45291ae2cecd48b5d55262734b08a98fc8276ed0f980031cd637",
+  "circuit": "publishTokenMetadata",
+  "kind": 1,
+  "values": "The on-chain name and symbol are exactly these strings (owner, 2026-09-28: \"actually drop the w\", then \"USDC / StkA\"): capital S, not the ERC20s' lowercase symbol(). The wStkA/wStkB/wStkC/wUSDC labels in stagenet-vault.json are internal labels only. TBILL (AA 00043, owner 2026-09-28: \"a new ERC20 token called \\\"T-Bill\\\"\"): name \"T-Bill\", symbol \"TBILL\", decimals 6 — the ERC20's own name and symbol, and the bridged colour is listed as TBILL (no w prefix). TB13W, TB26W and TB52W (AA 00045, owner 2026-09-29: \"3 more assets symbol/name - same conditions as the TBILL\"): names \"Test T-Bill 13-week\", \"Test T-Bill 26-week\" and \"Test T-Bill 52-week\", symbols TB13W, TB26W and TB52W, decimals 6 — each the ERC20's own name and symbol, and each bridged colour is listed under its symbol (no w prefix).",
+  "tokens": [
+    {
+      "label": "stkA",
+      "erc20Address": "0x2Ab7BE0769e3BBD5c7d047B422CB383fCC06FB52",
+      "colour": "5eb2a3cebb2ebe7ba910c78f62c9e28e0d74acbd00c810730def3578860e6a02",
+      "name": "StkA",
+      "symbol": "StkA",
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "004f8f70b71da79e78063b71bc90fc103a45a89f4214695099eb1afdfc9133b54e",
+          "txHash": "b82105c35ff4c79a2acbf43aa525071128be19e14a424bd061e09da2a4392d10",
+          "blockHeight": 655072,
+          "status": "SucceedEntirely",
+          "events": [
+            48337,
+            48338,
+            48339
+          ],
+          "validUntil": "1790574718",
+          "at": "2026-09-28T04:56:12.566Z"
+        }
+      ]
+    },
+    {
+      "label": "stkB",
+      "erc20Address": "0xF2bEFf36543219C8feC2AB2f42070AA65D3C844B",
+      "colour": "e7ca18cb056477a5aca5cce387306d56526c2f226b4a4e34f068e3a3e8179588",
+      "name": "StkB",
+      "symbol": "StkB",
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "00a8877df76a281f30d7f2d9e6a5503304008b8a84b544f5d7f2a8bb6100bf2594",
+          "txHash": "b2f28c11b6fc05450e2c8533f5e1361cbededdead0c785297ca1fc1b32beadf2",
+          "blockHeight": 655115,
+          "status": "SucceedEntirely",
+          "events": [
+            48347,
+            48348,
+            48349
+          ],
+          "validUntil": "1790574997",
+          "at": "2026-09-28T05:00:30.147Z"
+        }
+      ]
+    },
+    {
+      "label": "stkC",
+      "erc20Address": "0x70c5c1978e5d428fa5C82111980e1aF0A64a270D",
+      "colour": "db8ae472c587a0709094eeaf98b81a0d46752db1a807e77bd209814e808f19d9",
+      "name": "StkC",
+      "symbol": "StkC",
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "00575ef7434f1ba446920d092b6033c0e42fbb614b4cc5c22d10c61b5b1542939c",
+          "txHash": "f3acb54533b27dfdd610684fe02c2c61a0739a6f1b03041e1e5564b1d1b6fad4",
+          "blockHeight": 655140,
+          "status": "SucceedEntirely",
+          "events": [
+            48366,
+            48367,
+            48368
+          ],
+          "validUntil": "1790575245",
+          "at": "2026-09-28T05:03:21.414Z"
+        }
+      ]
+    },
+    {
+      "label": "USDC",
+      "erc20Address": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+      "colour": "e5afe273bcb1252cfbc81ad6ca1caaafe22312c8c29f9b104a2fe3ead980bb2d",
+      "name": "USDC",
+      "symbol": "USDC",
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "00580201aa8331a89f48bab806ed41dab35444425a4d945285076b5570a8030a42",
+          "txHash": "1d10940019b7dbd1d90cc9ec3629d9fd0d9b830cfe958ebe122eb56e375bb93c",
+          "blockHeight": 655190,
+          "status": "SucceedEntirely",
+          "events": [
+            48378,
+            48379,
+            48380
+          ],
+          "validUntil": "1790575417",
+          "at": "2026-09-28T05:08:12.131Z"
+        }
+      ]
+    },
+    {
+      "label": "TBILL",
+      "erc20Address": "0x1531b11722CF9b600816ED0eAcBc49594DbB991f",
+      "colour": "05b32284398b1a75dac4f92dcb8802a57ce2194dd3cae781f870430c18a8a8e9",
+      "name": "T-Bill",
+      "symbol": "TBILL",
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "008c622ca0da44c458d7ba67a6b6630ee09eb356d5bc5e7b31f77de7d1d10dffd2",
+          "txHash": "79e507b52d0f7f0779262e686fbd9567199b28fb59b17c0d642fbefaba1a796d",
+          "blockHeight": 667887,
+          "status": "SucceedEntirely",
+          "events": [
+            49964,
+            49965,
+            49966
+          ],
+          "validUntil": "1790651681",
+          "at": "2026-09-29T02:19:12.915Z"
+        }
+      ]
+    },
+    {
+      "label": "TB13W",
+      "erc20Address": "0x5cF366decA552c30eBB2504d0b9Ee104A99f1c72",
+      "colour": "b3d96e9933fb4548ce8a17a63f4c92bb3894b3571873c3edcc8a08aa7ce2512b",
+      "name": "Test T-Bill 13-week",
+      "symbol": "TB13W",
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "00146f92422789c74133a6f6d26fd12184ab0740bf2a414d4449c4c00c47f104c2",
+          "txHash": "5ca5f4065934e66f4dab31ae08ceccce64093ab178116d570bc8e10f957ef357",
+          "blockHeight": 675470,
+          "status": "SucceedEntirely",
+          "events": [
+            50650,
+            50651,
+            50652
+          ],
+          "validUntil": "1790697306",
+          "at": "2026-09-29T14:59:18.284Z"
+        }
+      ]
+    },
+    {
+      "label": "TB26W",
+      "erc20Address": "0x26dB7221903e62310409e454442adBb46E0B6E33",
+      "colour": "7b044b55c0493a67eeb16f25d3757eea07f9abaf55e374739953afd449bc3b62",
+      "name": "Test T-Bill 26-week",
+      "symbol": "TB26W",
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "0054b26e5186930e54af00fe10f1eb73c8c5f4e30822ed106a46441e6429f4983e",
+          "txHash": "ee6a4135f75041d3b2995c561b413059ef276ef65ca58da1c5828b2ec6337e5d",
+          "blockHeight": 675720,
+          "status": "SucceedEntirely",
+          "events": [
+            50758,
+            50759,
+            50760
+          ],
+          "validUntil": "1790698785",
+          "at": "2026-09-29T15:24:18.527Z"
+        }
+      ]
+    },
+    {
+      "label": "TB52W",
+      "erc20Address": "0x02A0D1BaF66351715A84aC4763b82f1155BdD5b0",
+      "colour": "8f4798a5ee48747f37562da76ed8711ad4b4ea1ad7ac16d80eb74b92792b9ec2",
+      "name": "Test T-Bill 52-week",
+      "symbol": "TB52W",
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "003bdea00b08c2eb0958a44e8407f713403626bd26b291b9e690052a514622c404",
+          "txHash": "fda6832e2dd08cb6ad91ad5ad2c9ce60860ddaaa9d3a362a79a78d3ca804a8b8",
+          "blockHeight": 675919,
+          "status": "SucceedEntirely",
+          "events": [
+            50771,
+            50772,
+            50773
+          ],
+          "validUntil": "1790700009",
+          "at": "2026-09-29T15:44:12.977Z"
+        }
+      ]
+    }
+  ]
+}

@@ -44,6 +44,8 @@ import {
 import { setNetworkId, getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
 import * as ledger from '@midnightntwrk/ledger-v9';
 import { WalletFacade } from '@midnightntwrk/wallet-sdk-facade';
+
+import { seedHexFromMnemonicFile } from './mnemonic.js';
 import { DustWallet } from '@midnightntwrk/wallet-sdk-dust-wallet';
 import { HDWallet, Roles } from '@midnightntwrk/wallet-sdk-hd';
 import { ShieldedWallet } from '@midnightntwrk/wallet-sdk-shielded';
@@ -80,7 +82,7 @@ const NoopTxHistoryStorage = {
 // @ts-expect-error required for wallet sync
 globalThis.WebSocket = WebSocket;
 
-const NETWORK = process.env.MIDNIGHT_NETWORK ?? 'local';
+export const NETWORK = process.env.MIDNIGHT_NETWORK ?? 'local';
 
 const CONFIGS: Record<
   string,
@@ -101,6 +103,24 @@ const CONFIGS: Record<
       process.env.PROOF_SERVER_URL ??
       process.env.MIDNIGHT_PROOF_SERVER_URL ??
       'http://127.0.0.1:16300',
+  },
+  // Project 00037: Midnight's public STAGENET (node 2.0.0-d9729c13, ledger 9.1 rc.3), the
+  // only network Sig Network's MPC serves. The proof server is always a local one.
+  stagenet: {
+    networkId: 'stagenet',
+    indexer:
+      process.env.INDEXER_URL ??
+      process.env.MIDNIGHT_INDEXER_URL ??
+      'https://indexer.stagenet.shielded.tools/api/v4/graphql',
+    indexerWS:
+      process.env.INDEXER_WS_URL ??
+      process.env.MIDNIGHT_INDEXER_WS_URL ??
+      'wss://indexer.stagenet.shielded.tools/api/v4/graphql/ws',
+    node: process.env.NODE_URL ?? process.env.MIDNIGHT_NODE_URL ?? 'https://rpc.stagenet.shielded.tools',
+    proofServer:
+      process.env.PROOF_SERVER_URL ??
+      process.env.MIDNIGHT_PROOF_SERVER_URL ??
+      'http://127.0.0.1:6300',
   },
 };
 
@@ -137,6 +157,38 @@ export function deriveKeys(seed: string) {
   return result.keys;
 }
 
+/** The seed the deploy tooling opens: STAGENET_WALLET_FILE (a mnemonic file) or WALLET_SEED (hex). */
+export function walletSeedFromEnv(): string {
+  const file = process.env.STAGENET_WALLET_FILE ?? process.env.FUNDING_WALLET_FILE;
+  if (file) return seedHexFromMnemonicFile(file);
+  const seed = process.env.WALLET_SEED;
+  if (seed) return seed;
+  throw new Error('STAGENET_WALLET_FILE (mnemonic file) or WALLET_SEED (hex seed) is required');
+}
+
+/**
+ * DUST parameters for the dust wallet: the LIVE ones from the indexer on a public network
+ * (stagenet's live ledger parameters differ from `initialParameters()`), the genesis ones
+ * on the local stack.
+ */
+export async function liveDustParameters(): Promise<any> {
+  if (CONFIG.networkId === 'undeployed') return ledger.LedgerParameters.initialParameters().dust;
+  try {
+    const res = await fetch(CONFIG.indexer, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: '{ block { height ledgerParameters } }' }),
+    });
+    const body: any = await res.json();
+    const hex: string | undefined = body?.data?.block?.ledgerParameters;
+    if (!hex) throw new Error('no ledgerParameters in the indexer answer');
+    return ledger.LedgerParameters.deserialize(Buffer.from(hex, 'hex')).dust;
+  } catch (error) {
+    console.warn(`  ⚠ live ledger parameters unavailable (${String((error as Error)?.message ?? error)}); using initialParameters().dust`);
+    return ledger.LedgerParameters.initialParameters().dust;
+  }
+}
+
 export async function createWallet(seed: string) {
   const keys = deriveKeys(seed);
   const networkId = getNetworkId();
@@ -148,7 +200,13 @@ export async function createWallet(seed: string) {
     networkId,
   );
 
-  const feeBlocksMargin = Number(process.env.FEE_BLOCKS_MARGIN ?? '100');
+  // The ledger CONSUMES the whole declared fee (estimate x 1.046^margin): 100 burns ~89x
+  // the required DUST, 5 keeps ~25% headroom (workspace rule; project 00037 default).
+  const feeBlocksMargin = Number(process.env.FEE_BLOCKS_MARGIN ?? '5');
+  if (!Number.isInteger(feeBlocksMargin) || feeBlocksMargin < 0 || feeBlocksMargin > 100) {
+    throw new RangeError('FEE_BLOCKS_MARGIN must be an integer from 0 to 100');
+  }
+  const dustParameters = await liveDustParameters();
 
   const configuration = {
     networkId,
@@ -170,10 +228,7 @@ export async function createWallet(seed: string) {
     unshielded: (config: any) =>
       UnshieldedWallet(config).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore)),
     dust: (config: any) =>
-      DustWallet(config).startWithSecretKey(
-        dustSecretKey,
-        ledger.LedgerParameters.initialParameters().dust,
-      ),
+      DustWallet(config).startWithSecretKey(dustSecretKey, dustParameters),
   });
 
   await wallet.start(shieldedSecretKeys, dustSecretKey);
@@ -301,7 +356,9 @@ export async function createProviders(walletCtx: WalletContext, contractZkPath: 
 
   return {
     privateStateProvider: levelPrivateStateProvider({
-      midnightDbName: `midnight-level-db`,
+      // Project 00037: point it OUTSIDE the repository on a public network (the store
+      // also holds the contract maintenance signing key midnight-js files per deploy).
+      midnightDbName: process.env.MIDNIGHT_LEVEL_DB ?? `midnight-level-db`,
       privateStateStoreName: 'erc20-vault-fork',
       privateStoragePasswordProvider: () => 'passport-evm!erc20-vault-fork',
       accountId: state.shielded.encryptionPublicKey.toHexString().slice(0, 16),

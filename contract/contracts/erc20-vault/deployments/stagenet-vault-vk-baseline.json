@@ -1,0 +1,34 @@
+{
+  "what": "The verifier keys of the stagenet vault as DEPLOYED (before project 00038's maintenance update), read from the indexer: the baseline of the MIP-0018 build gate. Every one of these circuits must compile to exactly these bytes; tests/mip18-build-gate.test.ts checks the local build against it.",
+  "network": "stagenet",
+  "vault": "7771c9e53afb45291ae2cecd48b5d55262734b08a98fc8276ed0f980031cd637",
+  "readAtUtc": "2026-09-28T04:12:05.397Z",
+  "indexer": "https://indexer.stagenet.shielded.tools/api/v4/graphql",
+  "indexerHeadHeight": 654632,
+  "maintenanceAuthority": {
+    "committee": [
+      "schnorr:d11f7ae108f40edb920629603e7f5191025f55cf9da3b06b1109e200e5891eb1"
+    ],
+    "threshold": 1,
+    "counter": "0"
+  },
+  "verifierKeysSha256": {
+    "abandonDeposit": "b50ff3961af1dc904e5e2559a3a93f9a16abde58ea1a8154cd925562bf67a350",
+    "completeDeposit": "7a61ca4e09a63e4e7f713a3570f47c64e31c90d9a5301d6f454437550a44c90e",
+    "completeWithdraw": "33590f23466f75e046fc293e5f3669dade92797606d698e0ba1670697fc92776",
+    "initialise": "177e7feaef12c2f5acfebf711026bb19f4958e0cf45a6ea6261afa172c5a3d07",
+    "refundWithdraw": "03fcc5a2ab10c95080e4d704c7cac2a072de389b0d0b3c8a66771e5775c57869",
+    "startDeposit": "92eecf2be3aae82c1771c5a7bd7f4a85e51b3fe11c6377e929b3b6b218094990",
+    "startWithdraw": "23c977cec9866eab96e3998d61af39d3812e299ccbcbd3fd9d4102fcc9b2717c"
+  },
+  "verifierKeyBytes": {
+    "abandonDeposit": 2025,
+    "completeDeposit": 2745,
+    "completeWithdraw": 2745,
+    "initialise": 2745,
+    "refundWithdraw": 2745,
+    "startDeposit": 2121,
+    "startWithdraw": 2121
+  },
+  "newCircuit00038": "publishTokenMetadata"
+}
