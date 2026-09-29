@@ -4,7 +4,7 @@
   "vault": "7771c9e53afb45291ae2cecd48b5d55262734b08a98fc8276ed0f980031cd637",
   "circuit": "publishTokenMetadata",
   "kind": 1,
-  "values": "The on-chain name and symbol are exactly these strings (owner, 2026-09-28: \"actually drop the w\", then \"USDC / StkA\"): capital S, not the ERC20s' lowercase symbol(). The wStkA/wStkB/wStkC/wUSDC labels in stagenet-vault.json are internal labels only.",
+  "values": "The on-chain name and symbol are exactly these strings (owner, 2026-09-28: \"actually drop the w\", then \"USDC / StkA\"): capital S, not the ERC20s' lowercase symbol(). The wStkA/wStkB/wStkC/wUSDC labels in stagenet-vault.json are internal labels only. TBILL (AA 00043, owner 2026-09-28: \"a new ERC20 token called \\\"T-Bill\\\"\"): name \"T-Bill\", symbol \"TBILL\", decimals 6 — the ERC20's own name and symbol, and the bridged colour is listed as TBILL (no w prefix).",
   "tokens": [
     {
       "label": "stkA",
@@ -95,6 +95,29 @@
           ],
           "validUntil": "1790575417",
           "at": "2026-09-28T05:08:12.131Z"
+        }
+      ]
+    },
+    {
+      "label": "TBILL",
+      "erc20Address": "0x1531b11722CF9b600816ED0eAcBc49594DbB991f",
+      "colour": "05b32284398b1a75dac4f92dcb8802a57ce2194dd3cae781f870430c18a8a8e9",
+      "name": "T-Bill",
+      "symbol": "TBILL",
+      "decimals": 6,
+      "publications": [
+        {
+          "tx": "008c622ca0da44c458d7ba67a6b6630ee09eb356d5bc5e7b31f77de7d1d10dffd2",
+          "txHash": "79e507b52d0f7f0779262e686fbd9567199b28fb59b17c0d642fbefaba1a796d",
+          "blockHeight": 667887,
+          "status": "SucceedEntirely",
+          "events": [
+            49964,
+            49965,
+            49966
+          ],
+          "validUntil": "1790651681",
+          "at": "2026-09-29T02:19:12.915Z"
         }
       ]
     }

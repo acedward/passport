@@ -215,6 +215,8 @@ deploy/run-stagenet.sh status | balances
 # any other ERC20, by address and a label (decimals read on chain), e.g. Circle's Sepolia USDC:
 deploy/run-stagenet.sh deposit-fund  --token USDC --erc20 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238 --amount 50
 deploy/run-stagenet.sh deposit-start --token USDC --amount 50      # --midnight-name defaults to wUSDC
+# TBILL (AA 00043, evm/tbill/), listed on Midnight as TBILL: no "w" prefix, so name it explicitly:
+deploy/run-stagenet.sh deposit-fund  --token TBILL --erc20 0x1531b11722CF9b600816ED0eAcBc49594DbB991f --midnight-name TBILL --amount 10000 --run tbill-p3
 # a second deposit of the same token needs its own run key (a completed run is never reopened):
 deploy/run-stagenet.sh deposit-fund  --token stkA --run stkA-p8 --amount 10000 --evidence p8-deposit-stkA.json
 ```
@@ -234,10 +236,11 @@ deploy/run-stagenet.sh deposit-fund  --token stkA --run stkA-p8 --amount 10000 -
   printed) BEFORE deploying with it, and checks on chain that the committee is exactly that
   key with threshold 1. Losing it would freeze the vault's circuit set: no later
   `VerifierKeyInsert` (for example a metadata circuit) could ever land.
-- Records: `deployments/sepolia-stk.json` (the ERC20s) and `deployments/stagenet-vault.json`
-  (the vault, its EVM account, response key, maintenance verifying key, the bridged colours
-  `wStkA/wStkB/wStkC` and `wUSDC` (Circle's Sepolia USDC `0x1c7D…7238`), every completed
-  deposit run, and the deposit addresses).
+- Records: `deployments/sepolia-stk.json` (the stk ERC20s), `deployments/sepolia-tbill.json`
+  (TBILL, AA 00043) and `deployments/stagenet-vault.json` (the vault, its EVM account, response
+  key, maintenance verifying key, the bridged colours `wStkA/wStkB/wStkC`, `wUSDC` (Circle's
+  Sepolia USDC `0x1c7D…7238`) and `TBILL` (`0x1531…991f`), every completed deposit run, and the
+  deposit addresses).
 
 The callee is compiled **before** the caller, and the output directory name IS the declared
 contract type name: `managed/SignetSigner`, `managed/Erc20Vault`.
@@ -253,7 +256,8 @@ Existing Contracts": tx `00bafa3830e562eda55f56a6573ac6f5f57e5fd87f80dc29f024a4b
 stagenet block 654,990, `SucceedEntirely` (2026-09-28); the seven original keys were re-read
 unchanged and the maintenance counter went 0 → 1. The four colours were then published as
 `StkA`, `StkB`, `StkC` and `USDC` (blocks 655,072 / 655,115 / 655,140 / 655,190; txs in
-`deployments/stagenet-token-metadata.json`).
+`deployments/stagenet-token-metadata.json`). AA 00043 published the TBILL colour as name
+`T-Bill`, symbol `TBILL`, decimals 6 (block 667,887, 2026-09-29).
 
 **The SDK cannot insert this key.** midnight-js 5.0.0-beta.7's `submitInsertVerifierKeyTx` goes
 through compact-js 2.5.5-rc.8, which hard-codes `ContractOperationVersionedVerifierKey('v3', …)`
@@ -282,14 +286,14 @@ midnight-js `submitTx` submits it (`tests/maintenance.test.ts` pins the gap).
   A cross-contract caller checks the callee's key per called circuit, so Passport accounts
   compiled against the vault are unaffected.
 - **Values** (`deployments/stagenet-token-metadata.json`, the owner's exact strings):
-  `StkA` / `StkB` / `StkC` / `USDC` as both name and symbol, decimals 6. The
-  `wStkA`… labels in `stagenet-vault.json` are internal labels only.
+  `StkA` / `StkB` / `StkC` / `USDC` as both name and symbol, decimals 6; TBILL as name `T-Bill`,
+  symbol `TBILL`, decimals 6. The `wStkA`… labels in `stagenet-vault.json` are internal labels only.
 
 ```sh
 deploy/run-stagenet.sh vk-check                               # read-only: chain vs this build (the gate)
 deploy/run-stagenet.sh maintenance-insert-vk                  # VerifierKeyInsert publishTokenMetadata (maintenance key)
 deploy/run-stagenet.sh metadata-negative --mode wrong-signer  # must fail, changes nothing
-deploy/run-stagenet.sh metadata-publish --token stkA          # stkA | stkB | stkC | USDC (admin key; --valid-for 3600)
+deploy/run-stagenet.sh metadata-publish --token stkA          # stkA | stkB | stkC | USDC | TBILL (admin key; --valid-for 3600)
 deploy/run-stagenet.sh metadata-read                          # read-only: the MIP §7 consumer, checked against the file
 # any contract, any indexer, no secrets:
 node_modules/.bin/tsx deploy/token-metadata-consumer.ts --contract <address> \
@@ -342,6 +346,7 @@ rebuild against the package's own TypeScript twins. **PR-C and PR-S need this to
 | `deploy/` | deploy + initialise + the artefact receipt; `stagenet.ts` / `run-stagenet.sh` for stagenet; `token-metadata-consumer.ts`, the MIP §7 consumer; `maintenance.ts`, the `VerifierKeyInsert` builder |
 | `deployments/` | the Sepolia ERC20s, the stagenet vault, its pre-upgrade verifier-key baseline and the MIP-0018 values, public values only |
 | `evm/stk-tokens/` | the stkA/stkB/stkC ERC20s (Foundry, OpenZeppelin 5.4.0) |
+| `evm/tbill/` | TBILL ("T-Bill"), the full ERC20 of AA 00043: permit, burn, owner-only mint; deploy and mint scripts (Foundry, OpenZeppelin 5.4.0) |
 | `e2e/`, `infra/`, `run-f4.sh` | the localnet end-to-end run |
 | `managed/` | compiler output — gitignored |
 
