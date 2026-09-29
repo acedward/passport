@@ -58,3 +58,46 @@ deploy/run-stagenet.sh relay            --request <id>
 deploy/run-stagenet.sh deposit-complete --request <id>
 deploy/run-stagenet.sh withdraw-start --token TBILL --amount 1        # back to 0x4847…e56b
 ```
+
+## The "Test T-Bill" series — TB13W, TB26W, TB52W (AA 00045)
+
+`src/TestTBill.sol` is `TBill.sol`'s parameterised twin: the same OpenZeppelin 5.4.0 `ERC20` +
+`ERC20Permit` + `ERC20Burnable` + `Ownable` token with an owner-only `mint`, 6 decimals and no
+pause, but the name and symbol are constructor arguments (the EIP-712 domain name is the
+name, version "1"). `TBill.sol` itself is left exactly as deployed, so TBILL's verified source
+stays reproducible from this repo.
+
+| Symbol | Name | Decimals | Initial supply (to `0x4847…e56b`, also the owner) |
+|---|---|---|---|
+| TB13W | Test T-Bill 13-week | 6 | 1,000,000 |
+| TB26W | Test T-Bill 26-week | 6 | 1,000,000 |
+| TB52W | Test T-Bill 52-week | 6 | 1,000,000 |
+
+Each is bridged to stagenet through the same vault under its own symbol (no "w" prefix), with
+MIP-0018 metadata name = the full name, symbol = the symbol, decimals 6.
+
+```sh
+# tests: every token test runs once per series token (TB13WTest, TB26WTest, TB52WTest) + series checks
+$FOUNDRY 'forge soldeer install && forge test --match-path test/TestTBill.t.sol'
+
+# deploy all three (Sepolia only, deployer 0x4847…e56b only; TB13W, TB26W, TB52W in that order)
+docker run --rm $SECRET -v $PWD:/evm -w /evm/tbill -e FOUNDRY_OUT=/tmp/out -e FOUNDRY_CACHE_PATH=/tmp/cache \
+  --entrypoint sh ghcr.io/foundry-rs/foundry:v1.5.1 -c \
+  "set -a; . /secrets/sepolia; SK=0x\${SK#0x}; set +a; forge script script/DeployTestTBills.s.sol --rpc-url $RPC --broadcast --slow"
+
+# verify each on Sourcify (the constructor arguments come from the creation transaction)
+$FOUNDRY "forge verify-contract <TOKEN> src/TestTBill.sol:TestTBill --chain 11155111 --verifier sourcify --creation-transaction-hash <DEPLOY_TX> --watch"
+
+# mint more of one token (owner only): TOKEN = the series token; MINT_AMOUNT in base units (10^6 per token)
+docker run --rm $SECRET -v $PWD:/evm -w /evm/tbill -e FOUNDRY_OUT=/tmp/out -e FOUNDRY_CACHE_PATH=/tmp/cache \
+  -e TOKEN=<TOKEN> -e MINT_TO=0x… -e MINT_AMOUNT=1000000000 \
+  --entrypoint sh ghcr.io/foundry-rs/foundry:v1.5.1 -c \
+  "set -a; . /secrets/sepolia; SK=0x\${SK#0x}; set +a; forge script script/MintTestTBill.s.sol --rpc-url $RPC --broadcast"
+
+# bridge: one token at a time (deposits share the deposit address's Sepolia nonce)
+deploy/run-stagenet.sh deposit-fund  --token TB13W --erc20 <TB13W> --midnight-name TB13W --amount 10000 --run tb13w-p3 --evidence p3-deposit-TB13W.json
+deploy/run-stagenet.sh deposit-start --token TB13W --amount 10000 --run tb13w-p3 --evidence p3-deposit-TB13W.json
+deploy/run-stagenet.sh relay            --request <id>
+deploy/run-stagenet.sh deposit-complete --request <id>
+deploy/run-stagenet.sh withdraw-start --token TB13W --amount 1        # back to 0x4847…e56b
+```
