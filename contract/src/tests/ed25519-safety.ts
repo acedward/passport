@@ -145,7 +145,7 @@ async function callCircuit(mod: any, state: any, circuit: string, pk: any, useCo
 
 async function post(url: string, body: Uint8Array) {
   const t0 = performance.now();
-  const res = await fetch(url, { method: 'POST', body, headers: { 'content-type': 'application/octet-stream' }, signal: AbortSignal.timeout(900_000) });
+  const res = await fetch(url, { method: 'POST', body: body as unknown as BodyInit, headers: { 'content-type': 'application/octet-stream' }, signal: AbortSignal.timeout(900_000) });
   const bytes = new Uint8Array(await res.arrayBuffer());
   return { ok: res.ok, status: res.status, ms: performance.now() - t0, body: res.ok ? `(${bytes.length} B)` : Buffer.from(bytes).toString('utf8').slice(0, 300) };
 }

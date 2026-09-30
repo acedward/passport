@@ -25,6 +25,7 @@
 //
 // usage: node scripts/pin-contract-runtime.mjs <managed-contract-dir> [...]
 
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 
@@ -58,5 +59,23 @@ for (const dir of dirs) {
     if (after !== before) writeFileSync(file, after);
     const n = after.split(`from ${TO}`).length - 1;
     console.log(`  ✓ ${path.relative(process.cwd(), file)}: ${n} import(s) of ${TO}`);
+  }
+  // compactc's integrity manifest (compiler/contract-manifest.json) records each output file's
+  // size and SHA-256; midnight-js' NodeZkConfigProvider verifies artefacts against it. Keep the
+  // two rewritten entries true to the files on disk, so the manifest never describes bytes that
+  // no longer exist.
+  const manifestPath = path.join(dir, 'compiler', 'contract-manifest.json');
+  if (existsSync(manifestPath)) {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    for (const name of ['index.js', 'index.d.ts']) {
+      const entry = manifest?.contract?.[name];
+      const file = path.join(dir, 'contract', name);
+      if (!entry || !existsSync(file)) continue;
+      const bytes = readFileSync(file);
+      entry.size = bytes.length;
+      entry.hash = createHash('sha256').update(bytes).digest('hex');
+    }
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    console.log(`  ✓ ${path.relative(process.cwd(), manifestPath)}: contract/index.js and index.d.ts entries match the pinned files`);
   }
 }
