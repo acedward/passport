@@ -223,24 +223,38 @@ await runScenario('unit-offline', async () => {
   // by the arm marker in each derivation's DST. Distinct keys give distinct
   // entries trivially, so the property has to be tested where it could
   // actually collide — the SAME coordinates presented to both derivations.
-  // JubJub's field modulus is below secp256k1's p, so a JubJub point's
-  // coordinates are always numerically admissible as a k256 point's.
+  //
+  // Under compact-runtime 0.19 (compactc 0.34.0) a JubJub point's coordinates were
+  // numerically admissible as a k256 point's, and the two derivations were compared
+  // directly. compact-runtime 0.20 (compactc 0.35.0, project 00047) validates curve points
+  // at the type boundary: a Secp256k1Point off the curve is a TYPE ERROR, so the same
+  // coordinates can no longer be presented to both arms at all. That refusal is asserted
+  // here — it is the stronger form of the property — and the arm-marker separation is
+  // still checked on the one encoding both arms can share: the same BYTES hashed under
+  // each arm's DST.
   step('[both arms] the arm marker keeps the shared device set disjoint');
   {
     const addr = new Uint8Array(randomBytes(32));
     const { x, y } = jDevice.pk;
-    const asJubjub = pureCircuits.derive_device_entry_with_jubjub(
-      { bytes: addr }, { x, y }, 0n, 0n,
-    );
+    let refused = false;
+    try {
+      pureCircuits.derive_device_entry_with_k256(
+        { bytes: addr }, { x, y, identity: false }, K256_ENVELOPE_NONE, 0n, 0n,
+      );
+    } catch (e) {
+      refused = /expected value of type Secp256k1Point/.test(String((e as Error).message));
+    }
+    assert(refused, '[both arms] a JubJub point is refused as a k256 key (runtime 0.20 curve check)');
+    const asJubjub = pureCircuits.derive_device_entry_with_jubjub({ bytes: addr }, { x, y }, 0n, 0n);
     const asK256 = pureCircuits.derive_device_entry_with_k256(
-      { bytes: addr }, { x, y, identity: false }, K256_ENVELOPE_NONE, 0n, 0n,
+      { bytes: addr }, kDevice.pk, K256_ENVELOPE_NONE, 0n, 0n,
     );
     assert(
       !Buffer.from(asJubjub).equals(Buffer.from(asK256)),
-      '[both arms] identical coordinates derive different entries under each arm',
+      '[both arms] the two arms derive different entries on one account',
     );
     const bootJ = pureCircuits.derive_boot_commitment_with_jubjub(addr, { x, y });
-    const bootK = pureCircuits.derive_boot_commitment_with_k256(addr, { x, y, identity: false }, K256_ENVELOPE_NONE);
+    const bootK = pureCircuits.derive_boot_commitment_with_k256(addr, kDevice.pk, K256_ENVELOPE_NONE);
     assert(
       !Buffer.from(bootJ).equals(Buffer.from(bootK)),
       '[both arms] the boot commitment is arm-marked, so only one arm can activate',
