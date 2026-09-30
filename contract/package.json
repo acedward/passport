@@ -70,6 +70,8 @@
     "test:unit": "tsx src/tests/unit-offline.ts",
     "test:ed25519-message": "tsx src/tests/ed25519-message-offline.ts",
     "test:ed25519-offline": "tsx src/tests/ed25519-offline.ts",
+    "ed25519-lax-twin": "bash scripts/ed25519-lax-twin.sh",
+    "test:ed25519-safety": "tsx src/tests/ed25519-safety.ts",
     "test:crossimpl-offline": "tsx src/tests/crossimpl-offline.ts",
     "test:auth-crossimpl": "tsx src/tests/auth-crossimpl.ts",
     "test:auth": "tsx src/tests/auth-conformance.ts",
