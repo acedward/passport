@@ -294,6 +294,17 @@ contract Erc20Vault {
 //     in-circuit keccak — about 28,300 of which recompute a domain separator
 //     that is constant for the deployment.
 //
+//   arm `ed25519` — RFC 8032 Ed25519, the scheme of Solana wallets (Phantom
+//     `signMessage`), verified by the standard library's `ed25519Verify<#n>`
+//     (compactc 0.35.0) with R = identity also refused. The wallet signs a
+//     readable, fixed-layout message the circuit renders from its own
+//     arguments (operation, amounts, fingerprints, nonce, the challenge in
+//     hex), so what it displays is what executes. Every challenge binds the
+//     sealed `evm_domain_salt` as the account's network salt. DST families:
+//     "midnight:account:device:ed:v1", "midnight:account:auth:ed:v1:*",
+//     "midnight:account:boot:ed:v1". See the arm's section below and
+//     docs/ED25519-ARM.md.
+//
 // Per-arm circuits instead of one circuit with an in-circuit scheme choice:
 // Compact compiles every exported circuit to its own proof, so a proof
 // through a `_with_jubjub` circuit pays only the Schnorr constraints and a
@@ -341,11 +352,15 @@ contract Erc20Vault {
 // §2).
 //
 // Toolchain: requires the ZKIR v3 backend (compile with --feature-zkir-v3,
-// Compact toolchain 0.34.0; the secp256k1 and keccak256 surfaces live in the
-// compiler's zkir-v3-library.compact and are loaded only when the v3 IR is
-// enabled) and a ledger-9 network with a ZKIR-3.0-capable proof server.
+// Compact toolchain 0.35.0 since project 00047, pinned by release-archive
+// SHA-256 in scripts/compile-account.sh; the secp256k1, keccak256, Curve25519
+// and sha512 surfaces live in the compiler's zkir-v3-library.compact and are
+// loaded only when the v3 IR is enabled) and a ledger-9 network. Proving needs
+// a ZKIR-3.1 proof server (9.0.0-rc.8 or later: the `ed25519` arm uses the
+// sha512 instruction); the generated module needs compact-runtime 0.20.0
+// (scripts/pin-contract-runtime.mjs).
 //
-// Deploy: the three arms export 26 impure circuits between them and NO account
+// Deploy: the arms export over 26 impure circuits between them and NO account
 // carries them all — 26 verifier keys price at 82,654 bytes written against a
 // 50,000-byte block budget. Every account deploys the subset its owner's
 // devices need, in waves (src/wallet/wave-deploy.ts), and the client is built
