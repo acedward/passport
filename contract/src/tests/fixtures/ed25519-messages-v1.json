@@ -1,0 +1,265 @@
+{
+  "format": "passport ed25519 message F3 v1",
+  "cases": [
+    {
+      "name": "withdrawShielded zero, 6 dec",
+      "sha256": "a68bf694d6763649599894fd35abef82ef7a6366901b4bc765248a404b8ddcb5",
+      "text": "Night Market - stagenet \nWithdraw shielded\nAmount                  0.000000 twUSDC   [e934b965]\nTo key a70baebb930b2bee\nAccount c307a862b710d2fb nonce                    0\nDigest 18527fbaac49b1e25cfb32440c30bf8de8cec8ada8df03a1d67c286036e9ac3c"
+    },
+    {
+      "name": "withdrawUnshielded zero, 6 dec",
+      "sha256": "f9dd57a6752dbe9dd5734ed6b99f273a2ca75cb0e118fa489cb768832d4875dd",
+      "text": "                        \nWithdraw unshielded\nAmount                  0.000000 twUSDC   [e934b965]\nTo address a2e1d4cc1db07f0a\nAccount e6a06c03f05cc3aa nonce                    1\nDigest 0a0fff3a3bf449d9aa5492d169f916cc7913b476500865f4eed45ed121840700"
+    },
+    {
+      "name": "withdrawShielded 1 base unit, 6 dec",
+      "sha256": "94703d36faa422e72395b9042ae33daa929326383d4bc85aaf2efbe4ce4f26bc",
+      "text": "X                       \nWithdraw shielded\nAmount                  0.000001 twUSDC   [e934b965]\nTo key 55f84a524254f171\nAccount 77ca2412071459d8 nonce                   17\nDigest 4209ff4979f210aea300324a2ccda2592fde1c4e05100770fb7ac9d673aa6c40"
+    },
+    {
+      "name": "withdrawUnshielded 1 base unit, 6 dec",
+      "sha256": "894c6f343b2056843955b3b3ab964f0d0882c8b5fd45449598cfd7ee157498f5",
+      "text": "ABCDEFGHIJKLMNOPQRSTUVWX\nWithdraw unshielded\nAmount                  0.000001 twUSDC   [e934b965]\nTo address 3fd3fc0ac3e9a76f\nAccount c241b86f3538badf nonce           4294967296\nDigest 043a54502a00d522e427af366631c047c5887dd6c1a38b55f4259536a2254d4c"
+    },
+    {
+      "name": "withdrawShielded 1 base unit, 8 dec",
+      "sha256": "5ff0675d07e03a969dad97e4fd982988a73e7a4be5bd6a9201700072cb5536a6",
+      "text": "Night Market | ~!@#$%^&*\nWithdraw shielded\nAmount                0.00000001 twBTC    [ad2ba014]\nTo key 2b61655d1fecec2e\nAccount 89eafef23ff5c96b nonce 18446744073709551615\nDigest c62966c7382b131811cca9e84ac35211bf0d749dcbae4f1ae0c0a65d831e0dab"
+    },
+    {
+      "name": "withdrawUnshielded 1 base unit, 8 dec",
+      "sha256": "98ceb7f02dee707730fa3dde5884f5bec4ad36510c422f4d85bee9a97e2e4dd8",
+      "text": "Night Market - stagenet \nWithdraw unshielded\nAmount                0.00000001 twBTC    [ad2ba014]\nTo address 45b765ec8b6942eb\nAccount 49b8c088545e0a25 nonce                    0\nDigest 473d9db7c0ee6079f93efcf11e09612ff2d60eb1581e71be4f4819e2d92c2408"
+    },
+    {
+      "name": "withdrawShielded 1 base unit, 18 dec",
+      "sha256": "79714e3cf23a2687abf30b147ee6ab77c53aaeebfecaeaa618d004ab08853abe",
+      "text": "                        \nWithdraw shielded\nAmount      0.000000000000000001 twETH    [2862f0f3]\nTo key c24760c4c0ea0975\nAccount 706be083cca9d4d4 nonce                    1\nDigest 2b4ce2a7e0abf958d05c6fad30dc00977d022d5b611640b86cb722d32336e3dc"
+    },
+    {
+      "name": "withdrawUnshielded 1 base unit, 18 dec",
+      "sha256": "e03b462873c0cd546b93cedfa3366c77d980352d72c0c6a73f854492a6c67873",
+      "text": "X                       \nWithdraw unshielded\nAmount      0.000000000000000001 twETH    [2862f0f3]\nTo address e093496da5ca542d\nAccount 817a18be45e0bdb6 nonce                   17\nDigest f29d73b941effd096d8eb43d0c10877e4106d42ed3159a24a6cb49bd694b1b56"
+    },
+    {
+      "name": "withdrawShielded 1 base unit, 0 dec",
+      "sha256": "6e74673716f638d0cc4c43f631d9497424a15aad71f82c9b29ad37d37a2491da",
+      "text": "ABCDEFGHIJKLMNOPQRSTUVWX\nWithdraw shielded\nAmount                         1 WHOLE    [ea319c76]\nTo key d12737bf93a4316e\nAccount 64e7cc114ef0d3e9 nonce           4294967296\nDigest 384e6b33b34df647f86744f2e9d6343d9c3f82164342e8d2e6c0e90e2c6e1566"
+    },
+    {
+      "name": "withdrawUnshielded 1 base unit, 0 dec",
+      "sha256": "ec6646b0b65f1e95b1391fcd8c3a1b058b5f005ea708833422180679620e32b2",
+      "text": "Night Market | ~!@#$%^&*\nWithdraw unshielded\nAmount                         1 WHOLE    [ea319c76]\nTo address 8b7133328990a243\nAccount dbe221a7cdac10d1 nonce 18446744073709551615\nDigest bca6c8529b357a5da058e72f9ba5c6311b51cbf50c03ee05eedc9740fbcb5fc9"
+    },
+    {
+      "name": "withdrawShielded 10 twUSDC",
+      "sha256": "2ce560204bf7e6a723667935038368d7868ec3a15d8a1e063021b7960036e09b",
+      "text": "Night Market - stagenet \nWithdraw shielded\nAmount                 10.000000 twUSDC   [e934b965]\nTo key dbf68449cff10c89\nAccount 823656ad6d70be82 nonce                    0\nDigest cbf0177b2b60e5996058cb5a4a498041cfa14d8c48085811994bb6af222d7a6c"
+    },
+    {
+      "name": "withdrawUnshielded 10 twUSDC",
+      "sha256": "01148a9dbb17e593c3c4ff9e5bba653e72bb5930ef261fe0ad95483359e833f4",
+      "text": "                        \nWithdraw unshielded\nAmount                 10.000000 twUSDC   [e934b965]\nTo address 9e868bc4d68c129b\nAccount 62a5ca08b9ee0988 nonce                    1\nDigest 80ebe4fecddd780e277054494348a3c71f77c45840e0098e7e51f79d9da17105"
+    },
+    {
+      "name": "withdrawShielded 0.0002 twBTC",
+      "sha256": "057a2d7fdac12bb17d26d89728fe6b88a68db7ed877eb7ca54b4404e38b8e0b8",
+      "text": "X                       \nWithdraw shielded\nAmount                0.00020000 twBTC    [ad2ba014]\nTo key 1a9313ae1f377e2c\nAccount bf51a74775a21003 nonce                   17\nDigest 5ae4ba9f9d94755f9d4f7de363b12213bbfeb8d0961087d721570e682e5702fb"
+    },
+    {
+      "name": "withdrawUnshielded 0.0002 twBTC",
+      "sha256": "e0194365e23b991ea045b5b7469b29ae5b90cdaf7c918aa2355d26cb9ff200ee",
+      "text": "ABCDEFGHIJKLMNOPQRSTUVWX\nWithdraw unshielded\nAmount                0.00020000 twBTC    [ad2ba014]\nTo address 3ed6fcb4febed027\nAccount 0533c2071722d7a0 nonce           4294967296\nDigest d4a330555e824147b136d04b3ab47272bca26ca5b6974337f8b098d51b753ba4"
+    },
+    {
+      "name": "withdrawShielded 1 twETH",
+      "sha256": "2f5575004e6e8edffe71e7d1cc56cdb8b9d073106b7a28abb894d39683918b88",
+      "text": "Night Market | ~!@#$%^&*\nWithdraw shielded\nAmount      1.000000000000000000 twETH    [2862f0f3]\nTo key 81fa607b99bdfc85\nAccount e63e3de67e938a01 nonce 18446744073709551615\nDigest 84e57ff06309cce2c305c95aa55444c090d19d831a1308e837b151b2cd801107"
+    },
+    {
+      "name": "withdrawUnshielded 1 twETH",
+      "sha256": "50e3f87fe89b171e5fae32bb2a9ad1cb6ead7e53b9909804176738ef16118fc5",
+      "text": "Night Market - stagenet \nWithdraw unshielded\nAmount      1.000000000000000000 twETH    [2862f0f3]\nTo address a95a23a86a3c2512\nAccount 3f0b3111a414b10e nonce                    0\nDigest 1dbf697d7cb8e2497dfcf20e68c04306511923f674f2439c0e46a8ba679f27cc"
+    },
+    {
+      "name": "withdrawShielded max u64, 0 dec",
+      "sha256": "c7a16e1c2397e6a38a2b4e8484ab3b7b9f4c10e4afcfb8f85d578102bc46dc9e",
+      "text": "                        \nWithdraw shielded\nAmount      18446744073709551615 WHOLE    [ea319c76]\nTo key 8a750d6f77b637be\nAccount c134c0032b9aa0f8 nonce                    1\nDigest 743ba8be12f65b2194b824d2c35b7836aa5141650af99b8a6e65eecd0e72802b"
+    },
+    {
+      "name": "withdrawUnshielded max u64, 0 dec",
+      "sha256": "f267a050edcb8d5c6329c1ff4ba0939e8ae8d4acd1685349cb2454e9494248e8",
+      "text": "X                       \nWithdraw unshielded\nAmount      18446744073709551615 WHOLE    [ea319c76]\nTo address e680e15c49072abd\nAccount e843c89875f46853 nonce                   17\nDigest e838c73a0c972a3dc0a0df8870b4319ce1a1b080870fce2ac4d2bc0d5503196e"
+    },
+    {
+      "name": "withdrawShielded max u64, 6 dec",
+      "sha256": "783bd8de3d83c5b6b477a158ff568a73b770974e4d676b0c76c310921338c5bf",
+      "text": "ABCDEFGHIJKLMNOPQRSTUVWX\nWithdraw shielded\nAmount     18446744073709.551615 twUSDM   [723e4cac]\nTo key 5c6987e9469f2ccb\nAccount ac8af506b75d8dc4 nonce           4294967296\nDigest 7cb3f5263c9931511e726750620023d3933011621d2b5c3a653a1f98e3249c66"
+    },
+    {
+      "name": "withdrawUnshielded max u64, 6 dec",
+      "sha256": "986fcade3fd73be23fb86f0fb1bdfc11e302763c3bab1585d7fe321934f6c911",
+      "text": "Night Market | ~!@#$%^&*\nWithdraw unshielded\nAmount     18446744073709.551615 twUSDM   [723e4cac]\nTo address a9730284682c1133\nAccount c1fed745cfa33d89 nonce 18446744073709551615\nDigest bda6ae72e1d1d957fc18a109001f92b064fd2aab2b27298136ebdc94b961aa13"
+    },
+    {
+      "name": "withdrawShielded max u64, 18 dec",
+      "sha256": "e2e3899596218826d815634e5a14adce318566c0d57446e653f02bc719b98d10",
+      "text": "Night Market - stagenet \nWithdraw shielded\nAmount     18.446744073709551615 twETH    [2862f0f3]\nTo key 971d425039155e4e\nAccount 1c5f291f866853f2 nonce                    0\nDigest ecfda0e4f0b72857da2b7e9359fb286681100a7e0981950b1287aad20c55f09a"
+    },
+    {
+      "name": "withdrawUnshielded max u64, 18 dec",
+      "sha256": "4f448be792c37486a49a1003624af9aaa78bb05af83ad4abd168bc66e4c38514",
+      "text": "                        \nWithdraw unshielded\nAmount     18.446744073709551615 twETH    [2862f0f3]\nTo address e3423a33c88d86e9\nAccount f268f0d6740fd34d nonce                    1\nDigest 4cc83d1bf470ad7c92b75c361e6e3259d0feb033280efd77b8df038703e70de4"
+    },
+    {
+      "name": "withdrawShielded max renderable, 0 dec",
+      "sha256": "73b989bd5a3e129a0c964be8e904fc2d1a9c53119ac12636d7e59095851fe6a5",
+      "text": "X                       \nWithdraw shielded\nAmount  999999999999999999999999 WHOLE    [ea319c76]\nTo key 6276fa4dd9280691\nAccount 6b7f62e1fd54b791 nonce                   17\nDigest b401058ab1bdd2f39e35d053c95e85d17e19562df3a42ae03461bd7cc3204dc3"
+    },
+    {
+      "name": "withdrawUnshielded max renderable, 0 dec",
+      "sha256": "069a9253981775bcea4e53caad891d3084622a2fbda6e84783dac79663157ef5",
+      "text": "ABCDEFGHIJKLMNOPQRSTUVWX\nWithdraw unshielded\nAmount  999999999999999999999999 WHOLE    [ea319c76]\nTo address bf66ef0cca3fe8cc\nAccount 1d97dd4c86b2756f nonce           4294967296\nDigest 5ef079790e7050d64f013f7b01cf7a9b85b299933e5164579c32eebd4084987f"
+    },
+    {
+      "name": "withdrawShielded max renderable, 18 dec",
+      "sha256": "fec5cf2bee6e683b7123c6d0c7988d781aaa2668e8292cc0d7f4f0385cd5ed8b",
+      "text": "Night Market | ~!@#$%^&*\nWithdraw shielded\nAmount 999999.999999999999999999 EIGHTCHR [dc0e0a46]\nTo key 13f5d69136ef4342\nAccount c8377e1a1c4bf9c5 nonce 18446744073709551615\nDigest 86755311513a86a2ff601340742d842e787c4f797ffb0d174af308445e4483ef"
+    },
+    {
+      "name": "withdrawUnshielded max renderable, 18 dec",
+      "sha256": "8e3af5ce047c963337657129039e82c75116c17cde407ac47ac903e9bdb1d100",
+      "text": "Night Market - stagenet \nWithdraw unshielded\nAmount 999999.999999999999999999 EIGHTCHR [dc0e0a46]\nTo address 31d2390c7551eb85\nAccount 40a6a71376b5678f nonce                    0\nDigest ee467f9244c62e52c1a227bda6a5c4bbe119092c27df1924a8286cf3a623f809"
+    },
+    {
+      "name": "withdrawShielded 1234567.891 twBTC",
+      "sha256": "818eb98228aa633307fec6f3cf4fb58910f50631ed9d2ad9ab252bf24bddfacd",
+      "text": "                        \nWithdraw shielded\nAmount          1234567.89100000 twBTC    [ad2ba014]\nTo key 882c1ffd9020d349\nAccount 6a98f0476f9e0e75 nonce                    1\nDigest bf08d89ea030ed8fca3f334a73667aa3e224512c8d69bceb0f93f7aa1875092b"
+    },
+    {
+      "name": "withdrawUnshielded 1234567.891 twBTC",
+      "sha256": "4a30e8afa2b4afa7e73bd1875a32239704484ff38ba82fbee588a5144492dfaa",
+      "text": "X                       \nWithdraw unshielded\nAmount          1234567.89100000 twBTC    [ad2ba014]\nTo address f3dc89fa979bc512\nAccount df0b96087d3e7edd nonce                   17\nDigest 1eb2b7aaafe38830b628dbe8249decc99b7e648d4a4f39949683d8e255ef26b3"
+    },
+    {
+      "name": "withdrawShielded unshielded 250 utwUSDC",
+      "sha256": "56ef48cbbb4a544ce4ce3357f77bc34f10bb5b76d18ea4fa6dc0bab193f9f173",
+      "text": "ABCDEFGHIJKLMNOPQRSTUVWX\nWithdraw shielded\nAmount                250.000000 utwUSDC  [a9e63fe9]\nTo key 8e2ebc8e33e3f4e3\nAccount dde03a6b3b717209 nonce           4294967296\nDigest 949e40a3d39bc36afaf3b98376f771ba63212e3c292c6256cee77244bbd9497d"
+    },
+    {
+      "name": "withdrawUnshielded unshielded 250 utwUSDC",
+      "sha256": "b75d0538e286f925d816409ce8f85291c4b26afecbc2ff5ec0ead2b7de3bdef1",
+      "text": "Night Market | ~!@#$%^&*\nWithdraw unshielded\nAmount                250.000000 utwUSDC  [a9e63fe9]\nTo address e5c7338dfef4c910\nAccount 634b245e815069f7 nonce 18446744073709551615\nDigest cea9f5ec6366f643722d1d8690382b28130020baccb9cc84378ce3db277636de"
+    },
+    {
+      "name": "withdrawShielded unshielded 0.5 utwBTC",
+      "sha256": "09111d1cc5fd157fe47c55a380239f36be36123fdb02df3264b4c28edbcaea0d",
+      "text": "Night Market - stagenet \nWithdraw shielded\nAmount                0.50000000 utwBTC   [84392e97]\nTo key 98f0cf069109482c\nAccount c43431f20392f68d nonce                    0\nDigest 927fa9c8253d783cbbdcb14c1aeb95b33afaeb34df3be41306b95d5c74a7851a"
+    },
+    {
+      "name": "withdrawUnshielded unshielded 0.5 utwBTC",
+      "sha256": "67da6479a4045d4c039697bfd1cc9c3f6d1532526efcdd513a7baff27304f819",
+      "text": "                        \nWithdraw unshielded\nAmount                0.50000000 utwBTC   [84392e97]\nTo address 21d8311ee414b4f8\nAccount e2cad53503e1b286 nonce                    1\nDigest cb6980e9e92beeca26734891b965e098bc950161792916a810a541295f827a68"
+    },
+    {
+      "name": "withdrawShieldedToContract 1 base unit, 6 dec",
+      "sha256": "e165608326e2535a4b9d58d741595763bfc98bce105931f4a439c2d61360422b",
+      "text": "X                       \nWithdraw to contract\nAmount                  0.000001 twUSDC   [e934b965]\nTo contract 7d22303deba07582\nAccount 6fdbc7c9362462e4 nonce                   17\nDigest cf7ee0ada553acba8ceaf4d767cb6cb8fcfe1a7188640359926f4657ed6382a0"
+    },
+    {
+      "name": "withdrawShieldedToContract 10 twUSDC",
+      "sha256": "e14f95167d59cbea1610712714777ed5259a047c65531d4e2c29f5655eed0bf2",
+      "text": "ABCDEFGHIJKLMNOPQRSTUVWX\nWithdraw to contract\nAmount                 10.000000 twUSDC   [e934b965]\nTo contract 8d493d9c1d4aa399\nAccount 0adca30d03568c3f nonce           4294967296\nDigest f08b0543cca47d56021ec0da5680a37f165dc42856ebaff7014df104902299e3"
+    },
+    {
+      "name": "withdrawShieldedToContract max u64, 6 dec",
+      "sha256": "6712dd89a5ac275bb3e59bcab33ebcbef2634124f87c9b80dde44d597584ea03",
+      "text": "Night Market | ~!@#$%^&*\nWithdraw to contract\nAmount     18446744073709.551615 twUSDM   [723e4cac]\nTo contract 4473f4ca91a3b70b\nAccount 2e126a17a62bdf91 nonce 18446744073709551615\nDigest 4c12aa6deddc4d686a556e84b3b9313c6ca2375a8d3c2b1518419710ae850788"
+    },
+    {
+      "name": "withdrawShieldedToContract 1234567.891 twBTC",
+      "sha256": "608c5e29664ad752c17de6db06a6a96b0fd50b37854890f0f54c7dd2909ed8b8",
+      "text": "Night Market - stagenet \nWithdraw to contract\nAmount          1234567.89100000 twBTC    [ad2ba014]\nTo contract 0d8568bddc723353\nAccount f43f0130a3e6ee48 nonce                    0\nDigest 6a29288d1e1aecc2f2f653de8c31c9951467b3f873251cdb628aa9a0c03b2194"
+    },
+    {
+      "name": "withdrawShieldedToContract 3 twUSDC",
+      "sha256": "863b433ff15cb6ea7e9f4b97b038b6dfb7ed6ffa97f21e8a322d32233f916096",
+      "text": "                        \nWithdraw to contract\nAmount                  3.000000 twUSDC   [e934b965]\nTo contract 63fbcb17ca835e42\nAccount 7f276d62f07d0c5d nonce                    1\nDigest 0de4a3bb5371d2109ce2c5429eb4cda1a5b9962f60eae808b5668fbc2ac28150"
+    },
+    {
+      "name": "withdrawShieldedToContract unknown token",
+      "sha256": "12bf3c43ab175b897dd1034191b7faefcd4c4f3d0e627da4cd33e51ae2422e0f",
+      "text": "X                       \nWithdraw to contract\nAmount                        42 ?        [ca7365cd]\nTo contract 99085e4de34a3d9a\nAccount ed5f4744f5cdfc6d nonce                   17\nDigest eac87af53846473e6275f95ae5a21705c98f74ffc165184cf7e61863b8777ec4"
+    },
+    {
+      "name": "withdrawShielded unknown token",
+      "sha256": "7740a6a8538ce34a87bb95ad8dd97edf0430c0af607f53e9a820c971dc356017",
+      "text": "ABCDEFGHIJKLMNOPQRSTUVWX\nWithdraw shielded\nAmount                 123456789 ?        [ca7365cd]\nTo key def00825bd953266\nAccount 49459b01a587f8a2 nonce           4294967296\nDigest 5c89ab9570622fcb468b0655eeb3fae7a6f5cda322648f538250836d3c664138"
+    },
+    {
+      "name": "appendInbox",
+      "sha256": "108d1f3ad2533c28c1fceb811a98ed500523da3bd3356e2f36e36dba969ab69b",
+      "text": "Night Market | ~!@#$%^&*\nFile inbox note\nNote 4f25f57f85699991\nAccount c5f6116559b7fbfc nonce 18446744073709551615\nDigest 9b405a5f6e8cf57b89d789706182597e735f868b87bbaae35ef2cb19e5c8f4d0"
+    },
+    {
+      "name": "appendInbox zero entry",
+      "sha256": "e4751a4629a8cbbc6e7fde357fa0b80b588053e2de16fdac012824f24449787c",
+      "text": "Night Market - stagenet \nFile inbox note\nNote 0000000000000000\nAccount 0de230c9181cbc5f nonce                    0\nDigest 373dca6239d016d7f7b400675352980c706fd9ae20758d82f713eefc632c7f51"
+    },
+    {
+      "name": "rotateEncKey",
+      "sha256": "a60ea3117dd001dc90f1adbf1240fc505ccf8ecb5454bd63aeb208dd4a745375",
+      "text": "                        \nRotate encryption key\nNew key d7af6338c169e76e\nAccount b2c6f072e4eb346f nonce                    1\nDigest 3963b71a12599a6cb6e48b154684acc6e6f8a7521c9bb9bc610452957a4ddea1"
+    },
+    {
+      "name": "addDevice",
+      "sha256": "ae4ee15352c0959b14f6083880a728f47883dfec041490eb15a31c1047237b0f",
+      "text": "X                       \nAdd device\nEntry eb21aa2eb90164dd\nAccount e7b095c69a50809d nonce                   17\nDigest 0b6139fcd25550bf91f645da76fee49a3afcf843ca7fdd4762ee125995a24fca"
+    },
+    {
+      "name": "removeDevice",
+      "sha256": "da8f34ae28986c0aa91b375f3cea6af2b0e9575e954559ea82cd8d3fdac38d45",
+      "text": "ABCDEFGHIJKLMNOPQRSTUVWX\nRemove device\nEntry 5c4fcdf159e82262\nAccount 8d6789dc518a3093 nonce           4294967296\nDigest 9a671fdae7db78ca6e6338a3746b07d29143deb769d05dfbdf31ab4f4acb4094"
+    },
+    {
+      "name": "openSwapShielded 10 twUSDC for 0.0002 twBTC, open, never",
+      "sha256": "dca503a00202fcbb467f0197aab9a104edc90910a63a4ba65972835ff7482efd",
+      "text": "Night Market | ~!@#$%^&*\nSwap offer\nGive                 10.000000 twUSDC   [e934b965]\nGet                 0.00020000 twBTC    [ad2ba014]\nTaker anyone          \nExpires                never\nAccount 7775594c1df2808a nonce 18446744073709551615\nDigest 82d206a409bcc4b372398a227667673b0918ba4a5cf3a84a852c76b31993d512"
+    },
+    {
+      "name": "openSwapShielded 1 twETH for 2500 twUSDC, open, deadline",
+      "sha256": "7fd9910c931b1cce7a5e82a7645594fe02f290e8a92d70fd0488d5b5038080f7",
+      "text": "Night Market - stagenet \nSwap offer\nGive      1.000000000000000000 twETH    [2862f0f3]\nGet                2500.000000 twUSDC   [e934b965]\nTaker anyone          \nExpires           1759200000\nAccount fd373300f1224bf1 nonce                    0\nDigest ebd38895df57a6164f375ca12dd1123596e177e8dfa129dcbf93995cb8bfd899"
+    },
+    {
+      "name": "openSwapShielded twUSDM for twUSDC, named, deadline",
+      "sha256": "702c29496b54e2129311ca01fdc0f9527fd2524d4d99ac13f05823c859db01bf",
+      "text": "                        \nSwap offer\nGive                 99.990000 twUSDM   [723e4cac]\nGet                 100.000000 twUSDC   [e934b965]\nTaker a7a9c6b437cc244f\nExpires           1759203600\nAccount 8142e809e4097bf5 nonce                    1\nDigest 9fa87f3fa5701af5272b296e1f474c332922242fce34f53b904baf44dc2bdbed"
+    },
+    {
+      "name": "openSwapShielded twBTC for twETH, named, max deadline",
+      "sha256": "e9746df54b2308804f8e3ebf1207d831d917cc1e12a9ceb30e186cdd0aab354e",
+      "text": "X                       \nSwap offer\nGive                0.00000001 twBTC    [ad2ba014]\nGet       0.000000000000000001 twETH    [2862f0f3]\nTaker 4b241ed3515a9c65\nExpires 18446744073709551615\nAccount 4daa5448b7f71119 nonce                   17\nDigest a4326904f69f91ad771fda86a2a07d473f6d68b142c0a35a718b6b67ba857de6"
+    },
+    {
+      "name": "openSwapShielded 1 base unit each, open, deadline 1",
+      "sha256": "6467bb77cf388fdf9730d97818c4a61285a13bb54e03a2ea29d9d009fda0b591",
+      "text": "ABCDEFGHIJKLMNOPQRSTUVWX\nSwap offer\nGive                         1 WHOLE    [ea319c76]\nGet                 0.00000001 twBTC    [ad2ba014]\nTaker anyone          \nExpires                    1\nAccount 3c47671cc0137c73 nonce           4294967296\nDigest cdb2082181f7f0d247cd3d72b817ff092621d1c426a2a404931f47a5d3e79a51"
+    },
+    {
+      "name": "openSwapShielded max renderable both, open",
+      "sha256": "89d7b21472dd20eee3feb10ddf248e9dd6a856e2dfde21e9b3aaae38e6032601",
+      "text": "Night Market | ~!@#$%^&*\nSwap offer\nGive 999999.999999999999999999 EIGHTCHR [dc0e0a46]\nGet   999999999999999999999999 WHOLE    [ea319c76]\nTaker anyone          \nExpires                never\nAccount 0f983d68dd306a78 nonce 18446744073709551615\nDigest 386695f0bdc5b802b976fe2f256c7a731c406795fa8f90bd2730b4ac502b86d9"
+    },
+    {
+      "name": "openSwapShielded max u64 give, named",
+      "sha256": "d9da25d65ecc538cfdc9c4e887cd868956fba6dd253b28a89c01fa898443d441",
+      "text": "Night Market - stagenet \nSwap offer\nGive     18446744073709.551615 twUSDC   [e934b965]\nGet       0.000000000000012345 twETH    [2862f0f3]\nTaker bdcc953ce05793d3\nExpires           4000000000\nAccount ae1b6597321ce78e nonce                    0\nDigest 9e03200208e50741ed7048f8c8a5a018980ca9f912152dfa2791cfcd2c969bb7"
+    },
+    {
+      "name": "openSwapShielded unknown want token, open",
+      "sha256": "9bd0314716cf63c7a6a86ce1f271a7c2dd0505a419aa3046b6200ed92d9e0a94",
+      "text": "                        \nSwap offer\nGive                  5.000000 twUSDC   [e934b965]\nGet                          7 ?        [ca7365cd]\nTaker anyone          \nExpires                never\nAccount 51d51b077c8f4569 nonce                    1\nDigest 17eba13b2860cbb1659d2f3e81bdce1f2e94531f336e9ac342e277d66c681d03"
+    }
+  ]
+}

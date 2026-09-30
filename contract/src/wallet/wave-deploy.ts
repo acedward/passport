@@ -104,7 +104,12 @@ export const accountCircuits = (arms: readonly Arm[]): string[] =>
  * not carry fails at the node rather than silently.
  */
 export function contractForArms(arms: readonly Arm[]): typeof Contract {
-  const keep = new Set(accountCircuits(arms));
+  return contractRestrictedTo(accountCircuits(arms));
+}
+
+/** The compiled contract restricted to exactly these circuit ids. */
+export function contractRestrictedTo(circuits: readonly string[]): typeof Contract {
+  const keep = new Set(circuits);
   return class RestrictedAccountContract extends (Contract as any) {
     constructor(...args: any[]) {
       super(...args);
@@ -184,16 +189,56 @@ export const EVM_GATED_IN_WAVE_ONE = 5;
  * account with the jubjub arm added in wave 2 inserts 10 verifier keys).
  */
 
+/**
+ * How many of the `ed25519` arm's seven gated circuits fit wave 1 (project 00047).
+ *
+ * The arm's gated circuits are k=17/18 like the `evm` arm's, so its wave 1 is capped at the
+ * same eight operations the node was measured to accept for `evm` (Q28): the deposits, the
+ * activation and five gated circuits. The ORDER is `GATED_BASES`, so what waits for wave 2
+ * is the device-lifecycle pair, exactly as for `evm`. `src/tests/ed25519-local-e2e.ts`
+ * deploys this split on a ledger-9 localnet (docs/ED25519-ARM.md records the measurement).
+ */
+export const ED25519_GATED_IN_WAVE_ONE = 5;
+
+/** The ed25519 arm's offer circuit, which — like `open_swap_shielded_with_evm` for MN Bank —
+ *  only accounts that trade carry (it rides wave 2). */
+export const ED25519_SWAP_CIRCUIT = 'open_swap_shielded_with_ed25519';
+
 /** The circuits each wave carries when the caller names none. */
 export function defaultWaves(firstArm: Arm): { waveOne: string[]; waveTwo: string[] } {
-  if (firstArm !== 'evm') {
+  if (firstArm !== 'evm' && firstArm !== 'ed25519') {
     return { waveOne: [...SHARED_CIRCUITS, ...armCircuits(firstArm)], waveTwo: [] };
   }
-  const gated = GATED_BASES.map((base) => `${base}_with_evm`);
+  const inWaveOne = firstArm === 'evm' ? EVM_GATED_IN_WAVE_ONE : ED25519_GATED_IN_WAVE_ONE;
+  const gated = GATED_BASES.map((base) => `${base}_with_${firstArm}`);
   return {
-    waveOne: [...SHARED_CIRCUITS, 'activate_initial_device_with_evm', ...gated.slice(0, EVM_GATED_IN_WAVE_ONE)],
-    waveTwo: gated.slice(EVM_GATED_IN_WAVE_ONE),
+    waveOne: [...SHARED_CIRCUITS, `activate_initial_device_with_${firstArm}`, ...gated.slice(0, inWaveOne)],
+    waveTwo: gated.slice(inWaveOne),
   };
+}
+
+/**
+ * The waves of an account whose device is a Solana wallet (`ed25519`), with or without the
+ * offer circuit. A market account passes `{ withSwap: true }`; the offer circuit then rides the
+ * maintenance update that also retires the authority (`retireAuthority` stays true: a customer
+ * account keeps no key above its device seam).
+ */
+export function ed25519AccountWaves(o: { withSwap?: boolean } = {}): { waveOne: string[]; waveTwo: string[] } {
+  const w = defaultWaves('ed25519');
+  return { waveOne: w.waveOne, waveTwo: [...w.waveTwo, ...(o.withSwap ? [ED25519_SWAP_CIRCUIT] : [])] };
+}
+
+/** Every circuit an ed25519 account of that shape carries (what `contractForEd25519Account`
+ *  keeps, and what `findDeployedContract` checks key for key). */
+export const ed25519AccountCircuits = (o: { withSwap?: boolean } = {}): string[] => {
+  const w = ed25519AccountWaves(o);
+  return [...w.waveOne, ...w.waveTwo];
+};
+
+/** The compiled contract restricted to an ed25519 account's circuits (`contractForArms(['ed25519'])`
+ *  plus, for a market account, the offer circuit). */
+export function contractForEd25519Account(o: { withSwap?: boolean } = {}): typeof Contract {
+  return contractRestrictedTo(ed25519AccountCircuits(o));
 }
 
 async function withDustRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {

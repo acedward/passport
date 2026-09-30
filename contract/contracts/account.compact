@@ -2307,6 +2307,615 @@ export circuit open_swap_shielded_with_evm(
   return do_open_swap(coin, give_amount, recipient_kind, recipient, want, want_entry, change_entry);
 }
 
+// ── Arm ed25519 (project 00047): a Solana wallet (Phantom) as the device ─────
+//
+// RFC 8032 Ed25519, verified in-circuit by the standard library's `ed25519Verify<#n>`
+// (compactc 0.35.0, ZKIR 3.1). The device is the wallet's public key A, carried as a
+// `Curve25519Point`; the client decodes the wallet's 32-byte key STRICTLY (noble
+// `Point.fromBytes`, no ZIP-215) before it becomes an argument, and the runtime refuses
+// any point off the curve or outside the prime-order subgroup. DST families:
+// "midnight:account:device:ed:v1", "midnight:account:auth:ed:v1:*",
+// "midnight:account:boot:ed:v1" (the arm marker is `ed`: the device DST must fit 32 bytes).
+//
+// WHAT IS SIGNED. Not the challenge alone, and not a wallet envelope: a Solana wallet's
+// `signMessage` signs the raw bytes it is given, so the message IS the approval screen.
+// Each gated circuit renders a fixed-layout, printable-ASCII message from its own
+// arguments (docs/ED25519-ARM.md, "The message, F3"):
+//
+//     Night Market - stagenet            <- a 24-byte label the dApp chooses (printable)
+//     Swap offer                         <- the operation, fixed per circuit
+//     Give              10.000000 twUSDC [e934b965]
+//     Get                0.00020000 twBTC [ad2ba014]
+//     Taker anyone
+//     Expires                never
+//     Account 5f2a9c1e0a1b2c3d nonce                   17
+//     Digest <64 hex>                    <- the challenge
+//
+// Everything a wallet shows is COMPUTED here from the values the circuit executes on:
+// the operation, every amount (decimal digits, with the token's decimal point), the
+// colour, recipient and account fingerprints, the deadline and the auth_nonce. The two
+// things the dApp supplies for display only — the label and each token's symbol and
+// decimals — are part of the signed text itself, so they are approved as shown and a
+// relay cannot swap them; they are checked to be printable, so they cannot forge a line.
+// The challenge binds, a second time and in full, everything the text abbreviates or
+// cannot show (the full addresses, the witness coin, the inbox entries, the network salt).
+//
+// A signed message can never be read as anything else a Solana wallet signs: it starts
+// with printable ASCII, not a transaction header or the off-chain prefix 0xff "solana
+// offchain", and it has no "wants you to sign in with your Solana account" line.
+//
+// SAFETY beyond `ed25519Verify`'s own checks (s < L by type, prime-order A and R by type,
+// A != identity): the seam also refuses R = identity, the one case libsodium refuses and
+// the stdlib accepts (spike 3, +411 rows). Malleability: the runtime refuses S + L as a
+// type error, and the consumed single-use entry makes any twin inert. The network is
+// bound through the account's sealed `evm_domain_salt`, which every ed25519 challenge
+// carries (for an ed25519-born account it is keccak256("midnight:" || networkId), as for
+// an evm-born one).
+
+// Display inputs: the base-unit amount's decimal digits (little-endian, d[0] = units),
+// the index of its most significant SHOWN digit (the larger of its top non-zero digit and
+// the units position `decimals`), the token's decimals (0..18) and its symbol (8 bytes,
+// printable ASCII, space-padded). The digits are checked against the amount, so they add
+// no freedom: for a given amount and decimals there is exactly one valid EdAmount.
+export struct EdAmount {
+  digits:   Vector<24, Uint<8>>,
+  top:      Uint<8>,
+  decimals: Uint<8>,
+  symbol:   Vector<8, Uint<8>>,
+}
+
+// A 64-bit counter's decimal digits (auth_nonce, an offer deadline).
+export struct EdCount {
+  digits: Vector<20, Uint<8>>,
+  top:    Uint<8>,
+}
+
+export struct EdShow {
+  label: Vector<24, Uint<8>>,
+  nonce: EdCount,
+}
+
+export struct EdShowAmount {
+  label:  Vector<24, Uint<8>>,
+  nonce:  EdCount,
+  amount: EdAmount,
+}
+
+export struct EdShowSwap {
+  label: Vector<24, Uint<8>>,
+  nonce: EdCount,
+  give:  EdAmount,
+  want:  EdAmount,
+  until: EdCount,
+}
+
+export pure circuit derive_boot_commitment_with_ed25519(salt: Bytes<32>, pk: Curve25519Point): Bytes<32> {
+  return persistentHash<[Bytes<32>, Bytes<32>, Curve25519Point]>(
+    [pad(32, "midnight:account:boot:ed:v1"), salt, pk]
+  );
+}
+
+export pure circuit derive_device_entry_with_ed25519(
+  self_addr: ContractAddress,
+  pk:        Curve25519Point,
+  epoch:     Uint<32>,
+  counter:   Uint<64>,
+): Bytes<32> {
+  return persistentHash<[Bytes<32>, ContractAddress, Curve25519Point, Uint<32>, Uint<64>]>(
+    [pad(32, "midnight:account:device:ed:v1"), self_addr, pk, epoch, counter]
+  );
+}
+
+// The identity is the only prime-order-subgroup point whose x-coordinate is zero.
+circuit require_live_ed25519_key(pk: Curve25519Point): [] {
+  assert((curve25519PointX(pk) as Bytes<32>) != pad(32, ""), "device key is the identity");
+}
+
+export circuit activate_initial_device_with_ed25519(pk: Curve25519Point, salt: Bytes<32>): [] {
+  assert(!booted, "already activated");
+  require_live_ed25519_key(pk);
+  assert(derive_boot_commitment_with_ed25519(salt, pk) == boot, "boot commitment mismatch");
+  do_activate_initial_device(derive_device_entry_with_ed25519(
+    kernel.self(), pk, device_epoch, 0 as Uint<64>
+  ));
+}
+
+// ── Challenge constructions, arm ed25519 ─────────────────────────────────────
+//
+// Preimage: [DST_CIRCUIT, self, pk, network_salt, ...args, ...witness_values, auth_nonce].
+// The k256 arm's discipline (AUTH-10, no signature term, no grinding: Ed25519 hashes its
+// message itself) plus the account's sealed network salt.
+
+export pure circuit challenge_withdraw_unshielded_with_ed25519(
+  self_addr: ContractAddress, pk: Curve25519Point, network: Bytes<32>,
+  color: Bytes<32>, amount: Uint<128>, recipient: UserAddress, nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>([pad(64, "midnight:account:auth:ed:v1:withdraw_unshielded")]);
+  return persistentHash<[Bytes<32>, ContractAddress, Curve25519Point, Bytes<32>, Bytes<32>, Uint<128>, UserAddress, Uint<64>]>(
+    [dst, self_addr, pk, network, color, amount, recipient, nonce_value]
+  );
+}
+
+export pure circuit challenge_withdraw_shielded_with_ed25519(
+  self_addr: ContractAddress, pk: Curve25519Point, network: Bytes<32>,
+  recipient: ZswapCoinPublicKey, color: Bytes<32>, amount: Uint<128>,
+  coin: QualifiedShieldedCoinInfo, nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>([pad(64, "midnight:account:auth:ed:v1:withdraw_shielded")]);
+  return persistentHash<[Bytes<32>, ContractAddress, Curve25519Point, Bytes<32>, ZswapCoinPublicKey, Bytes<32>, Uint<128>, QualifiedShieldedCoinInfo, Uint<64>]>(
+    [dst, self_addr, pk, network, recipient, color, amount, coin, nonce_value]
+  );
+}
+
+export pure circuit challenge_withdraw_shielded_to_contract_with_ed25519(
+  self_addr: ContractAddress, pk: Curve25519Point, network: Bytes<32>,
+  recipient: ContractAddress, color: Bytes<32>, amount: Uint<128>,
+  coin: QualifiedShieldedCoinInfo, nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>([pad(64, "midnight:account:auth:ed:v1:withdraw_shielded_to_contract")]);
+  return persistentHash<[Bytes<32>, ContractAddress, Curve25519Point, Bytes<32>, ContractAddress, Bytes<32>, Uint<128>, QualifiedShieldedCoinInfo, Uint<64>]>(
+    [dst, self_addr, pk, network, recipient, color, amount, coin, nonce_value]
+  );
+}
+
+export pure circuit challenge_append_inbox_with_ed25519(
+  self_addr: ContractAddress, pk: Curve25519Point, network: Bytes<32>,
+  entry: Bytes<192>, nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>([pad(64, "midnight:account:auth:ed:v1:append_inbox")]);
+  return persistentHash<[Bytes<32>, ContractAddress, Curve25519Point, Bytes<32>, Bytes<192>, Uint<64>]>(
+    [dst, self_addr, pk, network, entry, nonce_value]
+  );
+}
+
+export pure circuit challenge_rotate_enc_key_with_ed25519(
+  self_addr: ContractAddress, pk: Curve25519Point, network: Bytes<32>,
+  new_key: Bytes<32>, nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>([pad(64, "midnight:account:auth:ed:v1:rotate_enc_key")]);
+  return persistentHash<[Bytes<32>, ContractAddress, Curve25519Point, Bytes<32>, Bytes<32>, Uint<64>]>(
+    [dst, self_addr, pk, network, new_key, nonce_value]
+  );
+}
+
+export pure circuit challenge_add_device_with_ed25519(
+  self_addr: ContractAddress, pk: Curve25519Point, network: Bytes<32>,
+  new_entry: Bytes<32>, nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>([pad(64, "midnight:account:auth:ed:v1:add_device")]);
+  return persistentHash<[Bytes<32>, ContractAddress, Curve25519Point, Bytes<32>, Bytes<32>, Uint<64>]>(
+    [dst, self_addr, pk, network, new_entry, nonce_value]
+  );
+}
+
+export pure circuit challenge_remove_device_with_ed25519(
+  self_addr: ContractAddress, pk: Curve25519Point, network: Bytes<32>,
+  entry: Bytes<32>, nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>([pad(64, "midnight:account:auth:ed:v1:remove_device")]);
+  return persistentHash<[Bytes<32>, ContractAddress, Curve25519Point, Bytes<32>, Bytes<32>, Uint<64>]>(
+    [dst, self_addr, pk, network, entry, nonce_value]
+  );
+}
+
+export pure circuit challenge_open_swap_shielded_with_ed25519(
+  self_addr: ContractAddress, pk: Curve25519Point, network: Bytes<32>,
+  give_color: Bytes<32>, give_amount: Uint<128>, recipient_kind: Uint<8>, recipient: Bytes<32>,
+  want: ShieldedCoinInfo, want_entry: Bytes<192>, change_entry: Bytes<192>, valid_until: Uint<64>,
+  coin: QualifiedShieldedCoinInfo, nonce_value: Uint<64>,
+): Bytes<32> {
+  const dst = persistentHash<[Bytes<64>]>([pad(64, "midnight:account:auth:ed:v1:open_swap_shielded")]);
+  return persistentHash<[Bytes<32>, ContractAddress, Curve25519Point, Bytes<32>, Bytes<32>, Uint<128>, Uint<8>, Bytes<32>, ShieldedCoinInfo, Bytes<192>, Bytes<192>, Uint<64>, QualifiedShieldedCoinInfo, Uint<64>]>(
+    [dst, self_addr, pk, network, give_color, give_amount, recipient_kind, recipient, want,
+     want_entry, change_entry, valid_until, coin, nonce_value]
+  );
+}
+
+// ── The message, F3: rendering helpers ──────────────────────────────────────
+//
+// Compact has no division and no bitwise operations, so decimal digits arrive as display
+// inputs and are CHECKED (value == sum of d[i]·10^i, every d[i] <= 9, nothing shown above
+// `top`), and hex digits are computed by comparison, the way the standard library's
+// `curve25519BaseIsOdd` reaches the low bit.
+
+// value == sum(digits[i] * 10^i), each digit in 0..9, digits above `top` are zero, and
+// `top` is `units` or the position of a non-zero digit: one valid (digits, top) per value.
+circuit ed_digits_match<#n>(value: Field, digits: Vector<n, Uint<8>>, top: Uint<8>, units: Uint<8>): [] {
+  assert(top >= units, "display: top below the units digit");
+  assert(top < n, "display: top out of range");
+  const acc = fold((a: [Field, Field], d: Uint<8>): [Field, Field] => [a[0] + (d as Field) * a[1], a[1] * 10],
+                   [0 as Field, 1 as Field], digits);
+  assert(acc[0] == value, "display: digits do not match the value");
+  for (const i of 0..n) {
+    assert(digits[i] <= 9, "display: digit out of range");
+    if (i > top) {
+      assert(digits[i] == 0, "display: non-zero digit above top");
+    }
+    if (i == top && top != units) {
+      assert(digits[i] != 0, "display: top digit is zero");
+    }
+  }
+}
+
+// Printable ASCII only (0x20..0x7e): a label or symbol cannot start a new line or hide text.
+circuit ed_printable<#n>(v: Vector<n, Uint<8>>): [] {
+  for (const c of v) {
+    assert(c >= 32 && c <= 126, "display: text must be printable ASCII");
+  }
+}
+
+circuit ed_hexdigit(n: Uint<8>): Uint<8> {
+  return (n < 10 ? n + 48 : n + 87) as Uint<8>;
+}
+
+// One byte as two lowercase hex digits.
+circuit ed_hexpair(b: Uint<8>): [Uint<8>, Uint<8>] {
+  const h8 = b >= 128;
+  const b1 = h8 ? b - 128 : b;
+  const h4 = b1 >= 64;
+  const b2 = h4 ? b1 - 64 : b1;
+  const h2 = b2 >= 32;
+  const b3 = h2 ? b2 - 32 : b2;
+  const h1 = b3 >= 16;
+  const lo = h1 ? b3 - 16 : b3;
+  const hi = (h8 ? 8 : 0) + (h4 ? 4 : 0) + (h2 ? 2 : 0) + (h1 ? 1 : 0);
+  return [ed_hexdigit(hi as Uint<8>), ed_hexdigit(lo as Uint<8>)];
+}
+
+// The first 4 bytes of a 32-byte value as 8 hex digits (a colour fingerprint).
+circuit ed_hex4(b: Bytes<32>): Vector<8, Uint<8>> {
+  const p = map(ed_hexpair, slice<4>(b, 0) as Vector<4, Uint<8>>);
+  return [...p[0], ...p[1], ...p[2], ...p[3]];
+}
+
+// The first 8 bytes of a byte string as 16 hex digits (an address fingerprint).
+circuit ed_hex8<#n>(b: Bytes<n>): Vector<16, Uint<8>> {
+  const p = map(ed_hexpair, slice<8>(b, 0) as Vector<8, Uint<8>>);
+  return [...p[0], ...p[1], ...p[2], ...p[3], ...p[4], ...p[5], ...p[6], ...p[7]];
+}
+
+// All 32 bytes as 64 hex digits (the digest line).
+circuit ed_hex32(b: Bytes<32>): Vector<64, Uint<8>> {
+  const p = map(ed_hexpair, b as Vector<32, Uint<8>>);
+  return [...p[0],  ...p[1],  ...p[2],  ...p[3],  ...p[4],  ...p[5],  ...p[6],  ...p[7],
+          ...p[8],  ...p[9],  ...p[10], ...p[11], ...p[12], ...p[13], ...p[14], ...p[15],
+          ...p[16], ...p[17], ...p[18], ...p[19], ...p[20], ...p[21], ...p[22], ...p[23],
+          ...p[24], ...p[25], ...p[26], ...p[27], ...p[28], ...p[29], ...p[30], ...p[31]];
+}
+
+// A base-unit amount as a 25-character, right-aligned decimal with the token's decimal
+// point (no point when decimals = 0), blank-padded on the left. Amounts of 10^24 base
+// units or more cannot be rendered, so an ed25519 call refuses them.
+circuit ed_amount(value: Uint<128>, a: EdAmount): Vector<25, Uint<8>> {
+  assert(a.decimals <= 18, "display: decimals out of range");
+  ed_printable<8>(a.symbol);
+  ed_digits_match<24>(value as Field, a.digits, a.top, a.decimals);
+  const d = a.digits;
+  // Left to right, position q counts from the right (q = 24 .. 0); x[q] = d[q], y[q] = d[q-1].
+  const x = [0,     d[23], d[22], d[21], d[20], d[19], d[18], d[17], d[16], d[15], d[14], d[13], d[12],
+             d[11], d[10], d[9],  d[8],  d[7],  d[6],  d[5],  d[4],  d[3],  d[2],  d[1],  d[0]];
+  const y = [d[23], d[22], d[21], d[20], d[19], d[18], d[17], d[16], d[15], d[14], d[13], d[12], d[11],
+             d[10], d[9],  d[8],  d[7],  d[6],  d[5],  d[4],  d[3],  d[2],  d[1],  d[0],  0];
+  const q = [24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0];
+  return map((qq: Uint<8>, dx: Uint<8>, dy: Uint<8>): Uint<8> => {
+    const shift = a.decimals != 0 && qq > a.decimals;
+    const point = a.decimals != 0 && qq == a.decimals;
+    const shown = shift ? qq <= a.top + 1 : qq <= a.top;
+    const digit = shift ? dy : dx;
+    return (point ? 46 : (shown ? digit + 48 : 32)) as Uint<8>;
+  }, q, x, y);
+}
+
+// A 64-bit counter as 20 right-aligned decimal digits.
+circuit ed_count(value: Uint<64>, c: EdCount): Vector<20, Uint<8>> {
+  ed_digits_match<20>(value as Field, c.digits, c.top, 0);
+  const d = c.digits;
+  const x = [d[19], d[18], d[17], d[16], d[15], d[14], d[13], d[12], d[11], d[10],
+             d[9],  d[8],  d[7],  d[6],  d[5],  d[4],  d[3],  d[2],  d[1],  d[0]];
+  const q = [19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0];
+  return map((qq: Uint<8>, dx: Uint<8>): Uint<8> => (qq <= c.top ? dx + 48 : 32) as Uint<8>, q, x);
+}
+
+// The deadline of an offer: its decimal value, or "never" for zero (no deadline, Q8-B).
+circuit ed_deadline(value: Uint<64>, c: EdCount): Vector<20, Uint<8>> {
+  const digits = ed_count(value, c);
+  const never = pad(20, "               never") as Vector<20, Uint<8>>;
+  const none = value == 0;
+  return map((n: Uint<8>, v: Uint<8>): Uint<8> => none ? n : v, never, digits);
+}
+
+// The dApp's label, checked printable (24 bytes, space-padded).
+circuit ed_label(label: Vector<24, Uint<8>>): Vector<24, Uint<8>> {
+  ed_printable<24>(label);
+  return label;
+}
+
+// "Account <16 hex> nonce <20>\nDigest <64 hex>" — the tail every message ends with.
+circuit ed_tail(self_addr: ContractAddress, nonce_value: Uint<64>, nonce: EdCount, challenge: Bytes<32>): Vector<123, Uint<8>> {
+  return [...pad(8, "Account "), ...ed_hex8<32>(self_addr.bytes), ...pad(7, " nonce "),
+          ...ed_count(nonce_value, nonce), 10,
+          ...pad(7, "Digest "), ...ed_hex32(challenge)];
+}
+
+// "<amount> <symbol> [<colour>]\n" (46 bytes), the tail of every amount line.
+circuit ed_amount_tail(value: Uint<128>, color: Bytes<32>, a: EdAmount): Vector<46, Uint<8>> {
+  return [...ed_amount(value, a), 32, ...a.symbol, 32, 91, ...ed_hex4(color), 93, 10];
+}
+
+// ── The message, F3: one pure circuit per gated operation ────────────────────
+//
+// Exported, and therefore free: a dApp, a relay or an auditor obtains the contract's own
+// bytes for any call, and `src/wallet/ed25519-message.ts` is an independent TypeScript
+// renderer tested byte for byte against these (src/tests/ed25519-message-offline.ts).
+
+export pure circuit ed25519_message_withdraw_unshielded(
+  self_addr: ContractAddress, challenge: Bytes<32>, nonce_value: Uint<64>,
+  color: Bytes<32>, amount: Uint<128>, recipient: UserAddress, show: EdShowAmount,
+): Bytes<249> {
+  return Bytes[...ed_label(show.label), 10, ...pad(19, "Withdraw unshielded"), 10,
+               ...pad(7, "Amount "), ...ed_amount_tail(amount, color, show.amount),
+               ...pad(11, "To address "), ...ed_hex8<32>(recipient.bytes), 10,
+               ...ed_tail(self_addr, nonce_value, show.nonce, challenge)];
+}
+
+export pure circuit ed25519_message_withdraw_shielded(
+  self_addr: ContractAddress, challenge: Bytes<32>, nonce_value: Uint<64>,
+  recipient: ZswapCoinPublicKey, color: Bytes<32>, amount: Uint<128>, show: EdShowAmount,
+): Bytes<243> {
+  return Bytes[...ed_label(show.label), 10, ...pad(17, "Withdraw shielded"), 10,
+               ...pad(7, "Amount "), ...ed_amount_tail(amount, color, show.amount),
+               ...pad(7, "To key "), ...ed_hex8<32>(recipient.bytes), 10,
+               ...ed_tail(self_addr, nonce_value, show.nonce, challenge)];
+}
+
+export pure circuit ed25519_message_withdraw_shielded_to_contract(
+  self_addr: ContractAddress, challenge: Bytes<32>, nonce_value: Uint<64>,
+  recipient: ContractAddress, color: Bytes<32>, amount: Uint<128>, show: EdShowAmount,
+): Bytes<251> {
+  return Bytes[...ed_label(show.label), 10, ...pad(20, "Withdraw to contract"), 10,
+               ...pad(7, "Amount "), ...ed_amount_tail(amount, color, show.amount),
+               ...pad(12, "To contract "), ...ed_hex8<32>(recipient.bytes), 10,
+               ...ed_tail(self_addr, nonce_value, show.nonce, challenge)];
+}
+
+export pure circuit ed25519_message_append_inbox(
+  self_addr: ContractAddress, challenge: Bytes<32>, nonce_value: Uint<64>,
+  entry: Bytes<192>, show: EdShow,
+): Bytes<186> {
+  return Bytes[...ed_label(show.label), 10, ...pad(15, "File inbox note"), 10,
+               ...pad(5, "Note "), ...ed_hex8<192>(entry), 10,
+               ...ed_tail(self_addr, nonce_value, show.nonce, challenge)];
+}
+
+export pure circuit ed25519_message_rotate_enc_key(
+  self_addr: ContractAddress, challenge: Bytes<32>, nonce_value: Uint<64>,
+  new_key: Bytes<32>, show: EdShow,
+): Bytes<195> {
+  return Bytes[...ed_label(show.label), 10, ...pad(21, "Rotate encryption key"), 10,
+               ...pad(8, "New key "), ...ed_hex8<32>(new_key), 10,
+               ...ed_tail(self_addr, nonce_value, show.nonce, challenge)];
+}
+
+export pure circuit ed25519_message_add_device(
+  self_addr: ContractAddress, challenge: Bytes<32>, nonce_value: Uint<64>,
+  new_entry: Bytes<32>, show: EdShow,
+): Bytes<182> {
+  return Bytes[...ed_label(show.label), 10, ...pad(10, "Add device"), 10,
+               ...pad(6, "Entry "), ...ed_hex8<32>(new_entry), 10,
+               ...ed_tail(self_addr, nonce_value, show.nonce, challenge)];
+}
+
+export pure circuit ed25519_message_remove_device(
+  self_addr: ContractAddress, challenge: Bytes<32>, nonce_value: Uint<64>,
+  entry: Bytes<32>, show: EdShow,
+): Bytes<185> {
+  return Bytes[...ed_label(show.label), 10, ...pad(13, "Remove device"), 10,
+               ...pad(6, "Entry "), ...ed_hex8<32>(entry), 10,
+               ...ed_tail(self_addr, nonce_value, show.nonce, challenge)];
+}
+
+// The offer. "Taker anyone" for the open shape (kind 0); for the named shape the taker's
+// coin public key fingerprint.
+export pure circuit ed25519_message_open_swap_shielded(
+  self_addr: ContractAddress, challenge: Bytes<32>, nonce_value: Uint<64>,
+  give_color: Bytes<32>, give_amount: Uint<128>, recipient_kind: Uint<8>, recipient: Bytes<32>,
+  want: ShieldedCoinInfo, valid_until: Uint<64>, show: EdShowSwap,
+): Bytes<313> {
+  const named = ed_hex8<32>(recipient);
+  const anyone = pad(16, "anyone") as Vector<16, Uint<8>>;
+  const open = recipient_kind == 0;
+  const taker = map((a: Uint<8>, n: Uint<8>): Uint<8> => open ? (a == 0 ? 32 : a) as Uint<8> : n, anyone, named);
+  return Bytes[...ed_label(show.label), 10, ...pad(10, "Swap offer"), 10,
+               ...pad(5, "Give "), ...ed_amount_tail(give_amount, give_color, show.give),
+               ...pad(5, "Get  "), ...ed_amount_tail(want.value, want.color, show.want),
+               ...pad(6, "Taker "), ...taker, 10,
+               ...pad(8, "Expires "), ...ed_deadline(valid_until, show.until), 10,
+               ...ed_tail(self_addr, nonce_value, show.nonce, challenge)];
+}
+
+// ── The authorisation seam, arm ed25519 ─────────────────────────────────────
+//
+// The k256/evm seam shape: consume the device's current entry and insert its successor,
+// then verify, then advance auth_nonce and round. The message is computed by the CALLER
+// (each gated export renders its own); `n` is its length.
+circuit require_authorised_with_ed25519<#n>(
+  pk:          Curve25519Point,
+  use_counter: Uint<64>,
+  sig:         Ed25519Signature,
+  msg:         Bytes<n>,
+): [] {
+  const entry = disclose(derive_device_entry_with_ed25519(kernel.self(), pk, device_epoch, use_counter));
+  assert(devices.member(entry), "unknown device entry");
+  devices.remove(entry);
+  devices.insert(disclose(derive_device_entry_with_ed25519(
+    kernel.self(), pk, device_epoch, ((use_counter + (1 as Uint<64>)) as Uint<64>)
+  )));
+  // libsodium's small-order-R rule, which `ed25519Verify` does not apply (spike 3 §4): a
+  // commitment R at the identity is refused even when the equation holds.
+  assert((curve25519PointX(sig.r) as Bytes<32>) != pad(32, ""), "R is the identity");
+  // `ed25519Verify` refuses the identity key itself.
+  assert(ed25519Verify<n>(msg, sig, pk), "invalid signature");
+  auth_nonce = ((auth_nonce + (1 as Uint<64>)) as Uint<64>);
+  bump_round();
+}
+
+// ── Gated exports, arm ed25519: (…args, pk, use_counter, sig, show) ──────────
+
+export circuit withdraw_unshielded_with_ed25519(
+  color:       Bytes<32>,
+  amount:      Uint<128>,
+  recipient:   UserAddress,
+  pk:          Curve25519Point,
+  use_counter: Uint<64>,
+  sig:         Ed25519Signature,
+  show:        EdShowAmount,
+): [] {
+  const challenge = challenge_withdraw_unshielded_with_ed25519(
+    kernel.self(), pk, evm_domain_salt, color, amount, recipient, auth_nonce
+  );
+  const msg = ed25519_message_withdraw_unshielded(
+    kernel.self(), challenge, auth_nonce, color, amount, recipient, show
+  );
+  require_authorised_with_ed25519<249>(pk, use_counter, sig, msg);
+  do_withdraw_unshielded(color, amount, recipient);
+}
+
+export circuit append_inbox_with_ed25519(
+  entry:       Bytes<192>,
+  pk:          Curve25519Point,
+  use_counter: Uint<64>,
+  sig:         Ed25519Signature,
+  show:        EdShow,
+): [] {
+  const challenge = challenge_append_inbox_with_ed25519(
+    kernel.self(), pk, evm_domain_salt, entry, auth_nonce
+  );
+  const msg = ed25519_message_append_inbox(kernel.self(), challenge, auth_nonce, entry, show);
+  require_authorised_with_ed25519<186>(pk, use_counter, sig, msg);
+  do_append_inbox(entry);
+}
+
+export circuit withdraw_shielded_with_ed25519(
+  recipient:   ZswapCoinPublicKey,
+  color:       Bytes<32>,
+  amount:      Uint<128>,
+  pk:          Curve25519Point,
+  use_counter: Uint<64>,
+  sig:         Ed25519Signature,
+  show:        EdShowAmount,
+): Maybe<ShieldedCoinInfo> {
+  const coin = held_coin(color);
+  const challenge = challenge_withdraw_shielded_with_ed25519(
+    kernel.self(), pk, evm_domain_salt, recipient, color, amount, coin, auth_nonce
+  );
+  const msg = ed25519_message_withdraw_shielded(
+    kernel.self(), challenge, auth_nonce, recipient, color, amount, show
+  );
+  require_authorised_with_ed25519<243>(pk, use_counter, sig, msg);
+  return do_withdraw_shielded(recipient, amount, coin);
+}
+
+export circuit withdraw_shielded_to_contract_with_ed25519(
+  recipient:   ContractAddress,
+  color:       Bytes<32>,
+  amount:      Uint<128>,
+  pk:          Curve25519Point,
+  use_counter: Uint<64>,
+  sig:         Ed25519Signature,
+  show:        EdShowAmount,
+): [ShieldedCoinInfo, Maybe<ShieldedCoinInfo>] {
+  const coin = held_coin(color);
+  const challenge = challenge_withdraw_shielded_to_contract_with_ed25519(
+    kernel.self(), pk, evm_domain_salt, recipient, color, amount, coin, auth_nonce
+  );
+  const msg = ed25519_message_withdraw_shielded_to_contract(
+    kernel.self(), challenge, auth_nonce, recipient, color, amount, show
+  );
+  require_authorised_with_ed25519<251>(pk, use_counter, sig, msg);
+  return do_withdraw_shielded_to_contract(recipient, amount, coin);
+}
+
+export circuit rotate_enc_key_with_ed25519(
+  new_key:     Bytes<32>,
+  pk:          Curve25519Point,
+  use_counter: Uint<64>,
+  sig:         Ed25519Signature,
+  show:        EdShow,
+): [] {
+  const challenge = challenge_rotate_enc_key_with_ed25519(
+    kernel.self(), pk, evm_domain_salt, new_key, auth_nonce
+  );
+  const msg = ed25519_message_rotate_enc_key(kernel.self(), challenge, auth_nonce, new_key, show);
+  require_authorised_with_ed25519<195>(pk, use_counter, sig, msg);
+  do_rotate_enc_key(new_key);
+}
+
+export circuit add_device_with_ed25519(
+  new_entry:   Bytes<32>,
+  pk:          Curve25519Point,
+  use_counter: Uint<64>,
+  sig:         Ed25519Signature,
+  show:        EdShow,
+): [] {
+  const challenge = challenge_add_device_with_ed25519(
+    kernel.self(), pk, evm_domain_salt, new_entry, auth_nonce
+  );
+  const msg = ed25519_message_add_device(kernel.self(), challenge, auth_nonce, new_entry, show);
+  require_authorised_with_ed25519<182>(pk, use_counter, sig, msg);
+  do_add_device(new_entry);
+}
+
+export circuit remove_device_with_ed25519(
+  entry:       Bytes<32>,
+  pk:          Curve25519Point,
+  use_counter: Uint<64>,
+  sig:         Ed25519Signature,
+  show:        EdShow,
+): [] {
+  const challenge = challenge_remove_device_with_ed25519(
+    kernel.self(), pk, evm_domain_salt, entry, auth_nonce
+  );
+  const msg = ed25519_message_remove_device(kernel.self(), challenge, auth_nonce, entry, show);
+  require_authorised_with_ed25519<185>(pk, use_counter, sig, msg);
+  // As on the other arms: the caller's post-roll entry is off limits.
+  do_remove_device(entry, derive_device_entry_with_ed25519(
+    kernel.self(), pk, device_epoch, ((use_counter + (1 as Uint<64>)) as Uint<64>)
+  ));
+}
+
+export circuit open_swap_shielded_with_ed25519(
+  give_color:     Bytes<32>,
+  give_amount:    Uint<128>,
+  recipient_kind: Uint<8>,
+  recipient:      Bytes<32>,
+  want:           ShieldedCoinInfo,
+  want_entry:     Bytes<192>,
+  change_entry:   Bytes<192>,
+  valid_until:    Uint<64>,
+  pk:             Curve25519Point,
+  use_counter:    Uint<64>,
+  sig:            Ed25519Signature,
+  show:           EdShowSwap,
+): Maybe<ShieldedCoinInfo> {
+  const coin = held_coin(give_color);
+  assert_open_swap_terms(
+    give_color, give_amount, recipient_kind, recipient, want, coin.color, coin.value
+  );
+  assert_offer_live(valid_until);
+  const challenge = challenge_open_swap_shielded_with_ed25519(
+    kernel.self(), pk, evm_domain_salt, give_color, give_amount, recipient_kind, recipient, want,
+    want_entry, change_entry, valid_until, coin, auth_nonce
+  );
+  const msg = ed25519_message_open_swap_shielded(
+    kernel.self(), challenge, auth_nonce, give_color, give_amount, recipient_kind, recipient,
+    want, valid_until, show
+  );
+  require_authorised_with_ed25519<313>(
+    pk, use_counter, sig, msg
+  );
+  return do_open_swap(coin, give_amount, recipient_kind, recipient, want, want_entry, change_entry);
+}
+
 
 // ── The ERC20 bridge (project 00034 PR-G; spec User Stories 5 and 7, FR-021, FR-027) ────
 //

@@ -68,6 +68,8 @@
     "test:swap-deploy-budget": "tsx src/tests/swap-deploy-budget.ts",
     "probe:swap-placement": "tsx src/tests/swap-placement-probe.ts",
     "test:unit": "tsx src/tests/unit-offline.ts",
+    "test:ed25519-message": "tsx src/tests/ed25519-message-offline.ts",
+    "test:ed25519-offline": "tsx src/tests/ed25519-offline.ts",
     "test:crossimpl-offline": "tsx src/tests/crossimpl-offline.ts",
     "test:auth-crossimpl": "tsx src/tests/auth-crossimpl.ts",
     "test:auth": "tsx src/tests/auth-conformance.ts",
@@ -111,6 +113,7 @@
     "@noble/hashes": "2.2.0",
     "@sig-net/midnight": "0.22.0-rc.1",
     "rxjs": "^7.8.2",
+    "tweetnacl": "1.0.3",
     "ws": "^8.19.0"
   }
 }
