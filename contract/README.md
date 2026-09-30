@@ -24,6 +24,14 @@ chip (device-entry roll + in-circuit verification), and calls the same
 internal custody chip — the MIP-0012 custody semantics exist exactly
 once, below every arm.
 
+- **Arm `ed25519`** (project 00047) — a **Solana wallet** (Phantom
+  `signMessage`, RFC 8032 Ed25519) as the device, verified in plain Compact by
+  the standard library's `ed25519Verify<#n>` (compactc 0.35.0), with R =
+  identity also refused. The wallet signs a readable message the circuit
+  renders from its own arguments (format F3), so what the wallet shows is
+  what executes. Everything about it — the circuits, the message, the safety
+  matrix, the client API and the BREAKING notes of the compiler bump — is in
+  [`docs/ED25519-ARM.md`](docs/ED25519-ARM.md).
 - **Arm `jubjub`** — Schnorr over JubJub, the **normative MIP-0013
   scheme**, unchanged in substance from the trunk: §5.1 challenge
   preimage with signature announcement and grinding nonce, DST families
@@ -191,8 +199,16 @@ measured, it is live on both arms, and deriving the entry in-circuit does not
 prevent it. See erratum 8, which is the substantive open defect in this
 implementation and in MIP-0013 §3 and §6.
 
-Toolchain: the k256 arm requires ZKIR v3, so the whole contract compiles
-with it. The set this package pins is compactc 0.34.0 (language 0.26.0,
+Toolchain (since project 00047): the account compiles with **compactc 0.35.0**
+(language 0.27.0, ZKIR 3.1, compact-runtime 0.20.0 for the generated module
+only, pinned by release-archive SHA-256 in `scripts/compile-account.sh`); see
+`docs/ED25519-ARM.md` § "Toolchain and runtime" for the runtime pin, the two
+proof servers and the BREAKING notes. The paragraph below describes the
+0.34.0 set this package pinned before, which the ERC20 vault package still
+uses.
+
+The k256 arm requires ZKIR v3, so the whole contract compiles
+with it. The set this package pinned is compactc 0.34.0 (language 0.26.0,
 generates for compact-runtime 0.19.0), compact-js 2.5.5-rc.8 and
 midnight-js 5.0.0-beta.7, on the node 2.1.0 / ledger 9 localnet images
 with fresh volumes (see `infra/docker-compose.yml`). This line is now
@@ -232,7 +248,11 @@ the main branch; until it lands, the summary above is the citable form.
 
 ## Running
 
-The compile script pins `compact compile +0.34.0 --feature-zkir-v3`
+`npm run compile:account` runs `scripts/compile-account.sh`: compactc
+**0.35.0** `--feature-zkir-v3` (host `compact +0.35.0`, or the SHA-pinned
+`docker/compactc-0.35.0.Dockerfile` with `COMPACTC_TOOLCHAIN=docker`), then
+points the generated module at compact-runtime 0.20.0. Before project 00047,
+the compile script pinned `compact compile +0.34.0 --feature-zkir-v3`
 (language 0.26.0, ZKIR v3, generated code for compact-runtime 0.19.0);
 `compact update 0.34.0` installs it from the stable line. The move off
 0.33.0-rc.2 changed no circuit: all 18 `.zkir` files and all 36 proving
