@@ -241,21 +241,8 @@ export class Ed25519Device {
    *  the `held_coin` witness will return (AUTH-10). */
   async signOffer(ctx: CallContext, call: OfferCallArgs, coin: QualifiedCoin, useCounter: bigint): Promise<Ed25519Authorisation> {
     const salt = requireNetworkSalt(ctx);
-    const challenge = (pureCircuits as any).challenge_open_swap_shielded_with_ed25519(
-      { bytes: ctx.contractAddress }, this.pk, salt,
-      call.giveColor, call.giveAmount, call.recipientKind, call.recipient, call.want,
-      call.wantEntry, call.changeEntry, call.validUntil, coin, ctx.authNonce,
-    ) as Uint8Array;
-    const input: Ed25519MessageInput = {
-      op: 'openSwapShielded',
-      giveColor: call.giveColor,
-      giveAmount: call.giveAmount,
-      recipientKind: call.recipientKind,
-      recipient: call.recipient,
-      want: { color: call.want.color, value: call.want.value },
-      validUntil: call.validUntil,
-    };
-    return this.approve(ctx, challenge, input, useCounter, call.want);
+    const challenge = offerChallenge(ctx, salt, this.pk, call, coin);
+    return this.approve(ctx, challenge, offerInput(call), useCounter, call.want);
   }
 
   /** The message a call would ask the wallet to sign, without asking — for a dApp's preview. */
@@ -263,6 +250,14 @@ export class Ed25519Device {
     const salt = requireNetworkSalt(ctx);
     const { challenge, input } = ed25519RequestFor(ctx, salt, this.pk, request);
     const m = renderEd25519Message({ ...this.frame(ctx), challenge }, input);
+    return { text: m.text, bytes: m.bytes, challenge };
+  }
+
+  /** The offer's message without asking the wallet — for a dApp's preview. */
+  previewOffer(ctx: CallContext, call: OfferCallArgs, coin: QualifiedCoin): { text: string; bytes: Uint8Array; challenge: Uint8Array } {
+    const salt = requireNetworkSalt(ctx);
+    const challenge = offerChallenge(ctx, salt, this.pk, call, coin);
+    const m = renderEd25519Message({ ...this.frame(ctx), challenge }, offerInput(call));
     return { text: m.text, bytes: m.bytes, challenge };
   }
 
@@ -308,6 +303,25 @@ export class Ed25519Device {
     };
   }
 }
+
+/** The offer's challenge, from the contract's own pure circuit. */
+export function offerChallenge(ctx: CallContext, salt: Uint8Array, pk: Curve25519Point, call: OfferCallArgs, coin: QualifiedCoin): Uint8Array {
+  return (pureCircuits as any).challenge_open_swap_shielded_with_ed25519(
+    { bytes: ctx.contractAddress }, pk, salt,
+    call.giveColor, call.giveAmount, call.recipientKind, call.recipient, call.want,
+    call.wantEntry, call.changeEntry, call.validUntil, coin, ctx.authNonce,
+  ) as Uint8Array;
+}
+
+const offerInput = (call: OfferCallArgs): Ed25519MessageInput => ({
+  op: 'openSwapShielded',
+  giveColor: call.giveColor,
+  giveAmount: call.giveAmount,
+  recipientKind: call.recipientKind,
+  recipient: call.recipient,
+  want: { color: call.want.color, value: call.want.value },
+  validUntil: call.validUntil,
+});
 
 /** The account's network salt (the sealed `evm_domain_salt`), which every ed25519 challenge binds. */
 export function requireNetworkSalt(ctx: CallContext): Uint8Array {

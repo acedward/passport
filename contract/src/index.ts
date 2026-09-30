@@ -87,6 +87,7 @@ export {
   ed25519RequestFor,
   contractEd25519Message,
   requireNetworkSalt,
+  offerChallenge,
 } from './wallet/ed25519.js';
 export type {
   Ed25519Authorisation,
