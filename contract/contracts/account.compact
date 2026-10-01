@@ -2820,6 +2820,10 @@ export circuit withdraw_shielded_with_ed25519(
   show:        EdShowAmount,
 ): Maybe<ShieldedCoinInfo> {
   const coin = held_coin(color);
+  // C2: the witness is keyed by colour, but a DISHONEST prover's witness can return a coin of
+  // another colour. Without this the wallet would show (and the challenge bind) `color` while
+  // the coin of another token is spent; the offer has the same assert (assert_open_swap_terms).
+  assert(coin.color == color, "held coin colour does not match the withdrawn colour");
   const challenge = challenge_withdraw_shielded_with_ed25519(
     kernel.self(), pk, evm_domain_salt, recipient, color, amount, coin, auth_nonce
   );
@@ -2840,6 +2844,8 @@ export circuit withdraw_shielded_to_contract_with_ed25519(
   show:        EdShowAmount,
 ): [ShieldedCoinInfo, Maybe<ShieldedCoinInfo>] {
   const coin = held_coin(color);
+  // C2, as in withdraw_shielded_with_ed25519.
+  assert(coin.color == color, "held coin colour does not match the withdrawn colour");
   const challenge = challenge_withdraw_shielded_to_contract_with_ed25519(
     kernel.self(), pk, evm_domain_salt, recipient, color, amount, coin, auth_nonce
   );

@@ -187,6 +187,10 @@ await runScenario('ed25519-offline (A4 client)', async () => {
   const wd = await device.sign(ctx, requests[1], 0n);
   console.log(`  what Phantom shows for withdrawShielded:\n    ${wd.text.split('\n').join('\n    ')}`);
   assert(wd.text.includes('Amount                 10.000000 twUSDC   [e934b965]'), 'the amount line shows 10.000000 twUSDC with the colour fingerprint');
+  await refusesAsync(() => device.sign(ctx, { op: 'withdrawShielded', recipient: det('coin pk'), color: BTC, amount: 1n, coin }, 0n),
+    /another token/, 'C2: a shielded withdrawal naming twBTC with a twUSDC coin is refused before the wallet is asked');
+  await refusesAsync(() => device.sign(ctx, { op: 'withdrawShieldedToContract', recipient: det('contract'), color: BTC, amount: 1n, coin }, 0n),
+    /another token/, 'C2: the same for a withdrawal to a contract');
 
   step('the offer (open_swap_shielded_with_ed25519)');
   const call = {

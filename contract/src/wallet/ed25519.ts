@@ -344,6 +344,11 @@ export function ed25519RequestFor(
   const pc = pureCircuits as any;
   const self = { bytes: ctx.contractAddress };
   const n = ctx.authNonce;
+  if ((r.op === 'withdrawShielded' || r.op === 'withdrawShieldedToContract') && bytesToHex(r.coin.color) !== bytesToHex(r.color)) {
+    // C2: the circuit refuses it too (`held coin colour does not match the withdrawn colour`);
+    // refusing here keeps an honest client from asking the wallet at all.
+    throw new Error('the held coin is of another token than the withdrawal names; refusing to sign');
+  }
   switch (r.op) {
     case 'withdrawUnshielded':
       return {
