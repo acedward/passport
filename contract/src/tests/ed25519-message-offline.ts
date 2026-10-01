@@ -1,13 +1,19 @@
-// The ed25519 arm's message, format F3 v2 — the TypeScript renderer against the contract's own
-// (project 00047, A3; v2: P9.C, Q25 B′ and C6). No node, no proof server.
+// The ed25519 arm's message, format F3 v3 — the TypeScript renderer against the contract's own
+// (project 00047, A3; v2: P9.C, Q25 B′ and C6; v3: P10.C, Q36 / audit R2-3, the first line is
+// "Site: <label>"). No node, no proof server.
 //
 // For a golden corpus of calls (every gated operation; amounts at 0, 1 base unit, 10^decimals,
 // max u64 and the largest renderable 10^24 - 1, at 0, 6, 8 and 18 decimals; unknown and
 // unrenderable tokens; nonces from 0 to 2^64 - 1; deadlines from never to 9999-12-31 23:59:59
 // UTC including leap days; open and named takers; the rotate_enc_key cancel and a real
-// rotation; labels from empty to 24 characters), `renderEd25519Message` (TypeScript) and the
-// contract's exported `ed25519_message_*` pure circuits (the compiled Compact) must produce the
-// SAME BYTES, and both must equal the frozen golden file `fixtures/ed25519-messages-v2.json`.
+// rotation; labels from 1 to 24 characters, including labels that imitate enforced lines:
+// "Cancel all open offers" above a real rotation, "Give base units 1" above an offer, a token id),
+// `renderEd25519Message` (TypeScript) and the contract's exported `ed25519_message_*` pure
+// circuits (the compiled Compact) must produce the SAME BYTES, and both must equal the frozen
+// golden file `fixtures/ed25519-messages-v3.json`. Q36: the first line of every message is
+// "Site: " and the label, and the label changes nothing but that line; the circuit and
+// `edLabel` refuse exactly the same labels (no leading space, no run of spaces before more text,
+// not empty, printable ASCII only).
 // The circuit must also REFUSE every display input that does not describe the call: a wrong or
 // misplaced digit, a leading zero, a right-aligned number, a site label with other digits, two
 // points, no symbol, a symbol with a space or longer than 8, more than 18 decimals, an
@@ -33,6 +39,7 @@ import {
   edDeadline,
   edLabel,
   edNonce,
+  isRenderableLabel,
   parsesAsSolanaTransaction,
   renderEd25519Message,
   type Ed25519MessageInput,
@@ -46,7 +53,7 @@ function assert(cond: boolean, label: string): void {
 }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const GOLDEN = path.join(HERE, 'fixtures', 'ed25519-messages-v2.json');
+const GOLDEN = path.join(HERE, 'fixtures', 'ed25519-messages-v3.json');
 
 /** Deterministic bytes from a label (no randomness anywhere in the corpus). */
 const det = (label: string, n = 32): Uint8Array => {
@@ -80,7 +87,18 @@ const UNKNOWN = det('unknown token colour');
 const col = (name: keyof typeof TOKENS) => hexToBytes(TOKENS[name].color);
 
 const U64_MAX = (1n << 64n) - 1n;
-const LABELS = ['Night Market - stagenet', '', 'X', 'ABCDEFGHIJKLMNOPQRSTUVWX', 'Night Market | ~!@#$%^&*'];
+// Labels the arm accepts, including ones that imitate enforced lines (Q36): each must read as the
+// site's ("Site: Cancel all open offers"), never as a line of its own.
+const LABELS = [
+  'Night Market - stagenet',
+  'Cancel all open offers',
+  'X',
+  'ABCDEFGHIJKLMNOPQRSTUVWX',
+  'Night Market | ~!@#$%^&*',
+  'Give base units 1',
+  'Token e934b965a454ed68',
+  'Night Market - local',
+];
 const NONCES = [0n, 1n, 17n, 4294967296n, U64_MAX];
 
 interface CorpusCase {
@@ -93,8 +111,8 @@ interface CorpusCase {
 function corpus(): CorpusCase[] {
   const cases: CorpusCase[] = [];
   let k = 0;
-  const add = (name: string, input: Ed25519MessageInput) => {
-    cases.push({ name, label: LABELS[k % LABELS.length], authNonce: NONCES[k % NONCES.length], input });
+  const add = (name: string, input: Ed25519MessageInput, label?: string) => {
+    cases.push({ name, label: label ?? LABELS[k % LABELS.length], authNonce: NONCES[k % NONCES.length], input });
     k++;
   };
   // Amount edges per decimals class, over the three withdraws.
@@ -163,6 +181,19 @@ function corpus(): CorpusCase[] {
       validUntil: until,
     });
   }
+  // Q36 (audit R2-3): the attacks the two auditors named, each a label imitating the line that
+  // matters for its call. A's probe B: a REAL key change under "Cancel all open offers". B's: an
+  // offer giving 1000000 base units under "Give base units 1". And a fake token id, a fake amount.
+  add('Q36 rotateEncKey to a new key under the label "Cancel all open offers"',
+    { op: 'rotateEncKey', newKey: det('attacker enc key'), currentKey: det('enc key A') }, 'Cancel all open offers');
+  add('Q36 openSwapShielded giving 1000000 under the label "Give base units 1"', {
+    op: 'openSwapShielded', giveColor: col('twUSDC'), giveAmount: 1_000_000n, recipientKind: 0n, recipient: new Uint8Array(32),
+    want: { color: col('twBTC'), value: 1n }, validUntil: 1_790_861_696n,
+  }, 'Give base units 1');
+  add('Q36 withdrawShielded under the label "Token e934b965a454ed68"',
+    { op: 'withdrawShielded', recipient: det('rcpt q36'), color: col('twBTC'), amount: 5_000n }, 'Token e934b965a454ed68');
+  add('Q36 withdrawUnshielded under the label "Base units 1"',
+    { op: 'withdrawUnshielded', color: col('utwUSDC'), amount: 900_000_000n, recipient: det('addr q36') }, 'Base units 1');
   return cases;
 }
 
@@ -176,11 +207,11 @@ const frameFor = (c: CorpusCase) => ({
 
 const ctxFor = (c: CorpusCase) => ({ contractAddress: det(`account ${c.name}`), authNonce: c.authNonce });
 
-await runScenario('ed25519-message-offline (F3 v2)', async () => {
+await runScenario('ed25519-message-offline (F3 v3)', async () => {
   const cases = corpus();
 
   step(`golden corpus: ${cases.length} calls, TypeScript renderer == contract circuit`);
-  assert(cases.length >= 50, `the corpus has at least 50 calls (${cases.length})`);
+  assert(cases.length >= 61, `the corpus has at least 61 calls, P9.C's 61 plus the Q36 attacks (${cases.length})`);
   const golden: { name: string; sha256: string; text: string }[] = [];
   let equal = 0;
   const ops = new Set<string>();
@@ -202,9 +233,9 @@ await runScenario('ed25519-message-offline (F3 v2)', async () => {
   const lengths = new Set(Object.values(ED25519_MESSAGE_BYTES));
   assert(lengths.size === Object.keys(ED25519_MESSAGE_BYTES).length, `each operation has its own message length (${[...lengths].join(', ')})`);
 
-  step('the golden file (frozen v2 layout)');
+  step('the golden file (frozen v3 layout)');
   if (process.env.UPDATE_GOLDEN === '1' || !existsSync(GOLDEN)) {
-    writeFileSync(GOLDEN, JSON.stringify({ format: 'passport ed25519 message F3 v2', cases: golden }, null, 2) + '\n');
+    writeFileSync(GOLDEN, JSON.stringify({ format: 'passport ed25519 message F3 v3', cases: golden }, null, 2) + '\n');
     console.log(`  (wrote ${path.relative(process.cwd(), GOLDEN)})`);
   }
   const frozen = JSON.parse(readFileSync(GOLDEN, 'utf8')).cases as typeof golden;
@@ -223,6 +254,8 @@ await runScenario('ed25519-message-offline (F3 v2)', async () => {
     'openSwapShielded an hour from now-ish 2026-10-01 13:34:56',
     'rotateEncKey cancel (the current key)',
     'rotateEncKey to a new key',
+    'Q36 rotateEncKey to a new key under the label "Cancel all open offers"',
+    'Q36 openSwapShielded giving 1000000 under the label "Give base units 1"',
   ]) {
     const i = cases.findIndex((c) => c.name === name);
     if (i < 0) throw new Error(`no corpus case "${name}"`);
@@ -249,6 +282,98 @@ await runScenario('ed25519-message-offline (F3 v2)', async () => {
     assert(kt.includes('\nCancel all open offers\nYour key does not change\n') && !kt.includes('Rotate'), 're-affirming the current key reads as the cancel (Q30)');
     const r = cases.find((x) => x.name === 'rotateEncKey to a new key')!;
     assert(renderEd25519Message(frameFor(r), r.input).text.includes('\nRotate encryption key \nNew key '), 'another key reads as a rotation, never as a cancel');
+  }
+
+  step('Q36: the first line is the site\'s, and the label changes nothing else');
+  {
+    // Every line of every message starts with a word the circuit fixes; the first is "Site: ".
+    const FIXED = [
+      'Site: ', 'Withdraw unshielded', 'Withdraw shielded', 'Withdraw to contract', 'File inbox note', 'Swap offer',
+      'Cancel all open offers', 'Rotate encryption key', 'Your key does not change', 'New key ', 'Note ',
+      'Base units ', 'Token ', 'This site labels it: ', 'Give base units ', 'Give token ', 'Get base units ', 'Get token ',
+      'To address ', 'To key ', 'To contract ', 'Taker ', 'Expires ', 'Account ', 'Digest ',
+    ];
+    let marked = 0;
+    let isolated = 0;
+    for (const c of cases) {
+      const lines = renderEd25519Message(frameFor(c), c.input).text.split('\n');
+      if (lines[0] !== `Site: ${c.label.padEnd(24, ' ')}`) throw new Error(`"${c.name}": line 1 is not "Site: <label>": ${JSON.stringify(lines[0])}`);
+      marked++;
+      for (const line of lines) {
+        if (!FIXED.some((w) => line.startsWith(w))) throw new Error(`"${c.name}": a line starts with no fixed word: ${JSON.stringify(line)}`);
+      }
+      // Another label changes line 1 only, in TypeScript AND in the circuit.
+      const other = { ...frameFor(c), label: 'Night Market - stagenet' === c.label ? 'X' : 'Night Market - stagenet' };
+      const a = renderEd25519Message(frameFor(c), c.input);
+      const b = renderEd25519Message(other, c.input);
+      const ca = Buffer.from(contractEd25519Message(ctxFor(c), frameFor(c).challenge, c.input, a.show)).toString('latin1').split('\n');
+      const cb = Buffer.from(contractEd25519Message(ctxFor(c), frameFor(c).challenge, c.input, b.show)).toString('latin1').split('\n');
+      if (a.text.split('\n').slice(1).join('\n') !== b.text.split('\n').slice(1).join('\n') || ca.slice(1).join('\n') !== cb.slice(1).join('\n') || ca[0] === cb[0]) {
+        throw new Error(`"${c.name}": the label changed more than the first line`);
+      }
+      isolated++;
+    }
+    assert(marked === cases.length, `on all ${marked} calls the first line is "Site: " and the label`);
+    assert(isolated === cases.length, `on all ${isolated} calls another label changes the first line only (TypeScript and circuit)`);
+    const probe = cases.find((c) => c.name.startsWith('Q36 rotateEncKey'))!;
+    const pt = renderEd25519Message(frameFor(probe), probe.input).text;
+    assert(pt.startsWith('Site: Cancel all open offers  \nRotate encryption key \nNew key ') && !pt.includes('\nCancel all open offers'),
+      'A\'s probe B: a real key change under the label "Cancel all open offers" reads "Site: Cancel all open offers", then "Rotate encryption key"');
+    const offer = cases.find((c) => c.name.startsWith('Q36 openSwapShielded'))!;
+    const ot = renderEd25519Message(frameFor(offer), offer.input).text;
+    assert(ot.startsWith('Site: Give base units 1       \nSwap offer\nGive base units 1000000 ') && ot.split('\n').filter((l) => l.startsWith('Give base units')).length === 1,
+      'B\'s example: "Give base units 1" reads as the site\'s; the only "Give base units" line is the enforced 1000000');
+    const tok = cases.find((c) => c.name.startsWith('Q36 withdrawShielded'))!;
+    const tt = renderEd25519Message(frameFor(tok), tok.input).text;
+    assert(tt.startsWith('Site: Token e934b965a454ed68  \n') && tt.includes(`\nToken ${TOKENS.twBTC.color}\n`) && tt.split('\n').filter((l) => l.startsWith('Token ')).length === 1,
+      'a label that looks like a token id reads as the site\'s; the only "Token" line is the enforced one (twBTC)');
+    const bu = cases.find((c) => c.name.startsWith('Q36 withdrawUnshielded'))!;
+    const bt = renderEd25519Message(frameFor(bu), bu.input).text;
+    assert(bt.startsWith('Site: Base units 1            \n') && bt.split('\n').filter((l) => l.startsWith('Base units ')).length === 1,
+      'a label "Base units 1" reads as the site\'s; the only "Base units" line is the enforced 900000000');
+  }
+
+  step('Q36: the circuit and the TypeScript renderer refuse exactly the same labels');
+  {
+    // Raw label bytes, space-padded to 24: what a page could hand the circuit directly.
+    const raw = (t: string): bigint[] => [...t.padEnd(24, ' ')].map((ch) => BigInt(ch.charCodeAt(0)));
+    const wdc = cases.find((c) => c.name === 'withdrawShielded 10 twUSDC')!;
+    const circuitAccepts = (label: string): string => {
+      const good = renderEd25519Message(frameFor(wdc), wdc.input);
+      const show = structuredClone(good.show) as any;
+      show.label = raw(label);
+      try {
+        const bytes = contractEd25519Message(ctxFor(wdc), frameFor(wdc).challenge, wdc.input, show);
+        return `accepted: ${Buffer.from(bytes).toString('latin1').split('\n')[0]}`;
+      } catch (e) {
+        return `refused: ${String((e as Error).message).slice(0, 80)}`;
+      }
+    };
+    const tsAccepts = (label: string): string => {
+      try {
+        edLabel(label);
+        renderEd25519Message({ ...frameFor(wdc), label }, wdc.input);
+        return 'accepted';
+      } catch (e) {
+        return `refused: ${String((e as Error).message).slice(0, 60)}`;
+      }
+    };
+    const GOOD = ['Night Market - stagenet', 'Night Market - local', 'X', 'ABCDEFGHIJKLMNOPQRSTUVWX', 'a b c d e f g h i j k l',
+      'Cancel all open offers', 'Give base units 1', '~!@#$%^&*()_+{}|:"<>?', 'Night Market '];
+    const BAD = ['', ' ', '  Cancel all open offers', ' X', 'Give  base units 1', 'a  b', 'Night Market  -  stagenet'.slice(0, 24),
+      'tab\there', 'Night\x7fMarket', 'Night M\u00e4rket', 'line\nbreak', 'nul\u0000'];
+    for (const l of GOOD) {
+      const c = circuitAccepts(l);
+      const t = tsAccepts(l);
+      assert(c === `accepted: Site: ${l.padEnd(24, ' ')}` && t === 'accepted' && isRenderableLabel(l),
+        `${JSON.stringify(l)}: accepted by both (circuit line 1 ${JSON.stringify(c.slice(10))})`);
+    }
+    for (const l of BAD) {
+      const c = circuitAccepts(l);
+      const t = tsAccepts(l);
+      assert(/^refused: .*site label must be printable words/.test(c) && t.startsWith('refused') && !isRenderableLabel(l),
+        `${JSON.stringify(l)}: refused by both (circuit: ${c.slice(9, 60)}; TypeScript: ${t.slice(9, 50)})`);
+    }
   }
 
   step('the circuit refuses display inputs that do not describe the call');
@@ -284,7 +409,8 @@ await runScenario('ed25519-message-offline (F3 v2)', async () => {
   refuseOn(cases.find((c) => c.name === 'withdrawShielded 1 base unit, 6 dec')!, 'site label: 19 decimals', (s) => {
     s.amount.site = text('0.0000000000000000001 X', 34);
   }, /more than 18 decimals/);
-  refuse('a newline in the label', (s) => { s.label[3] = 10n; }, /printable ASCII/);
+  refuse('a newline in the label', (s) => { s.label[3] = 10n; }, /site label must be printable words/);
+  refuse('a leading space in the label (Q36)', (s) => { s.label = [32n, ...s.label.slice(0, 23)]; }, /site label must be printable words/);
   refuse('the wrong nonce', (s) => { s.nonce = edNonce(wd.authNonce + 1n); }, /digits do not match/);
   // The site may put the point anywhere: that is its (marked) label, and the base units line
   // above it still says what moves. The circuit accepts it, and the text says whose claim it is.

@@ -8,7 +8,7 @@
 // too, with a type error instead of a reason.
 //
 // WHAT THE WALLET SIGNS is the readable message the contract renders in-circuit
-// (`ed25519-message.ts`, format F3 v2, docs/ED25519-ARM.md). The arm has NO device
+// (`ed25519-message.ts`, format F3 v3, docs/ED25519-ARM.md). The arm has NO device
 // management (one device per account, Q27): its gated operations are the shielded and
 // unshielded withdrawals, the inbox append, rotate_enc_key (re-affirming the current key is
 // the market's on-chain cancel, Q30) and the offer. To authorise one call the device:
@@ -38,8 +38,8 @@ import { curve25519FromProjective, isValidCurve25519Point } from '@midnight-ntwr
 import { pureCircuits, type QualifiedCoin } from './contract.js';
 import { bytesToHex } from './hex.js';
 import {
-  ED25519_LABEL_BYTES,
   assertSafeEd25519Message,
+  edLabel,
   renderEd25519Message,
   type Ed25519MessageInput,
   type EdShowAny,
@@ -171,8 +171,9 @@ export interface Ed25519DeviceOptions {
   /** The wallet. Omitted: a key known only by its public half — enough to deploy and
    *  activate an account (activation is permissionless), not to authorise anything. */
   sign?: Ed25519SignFn;
-  /** The first line of every message: the dApp's name and network, <= 24 printable ASCII
-   *  characters (e.g. "Night Market - stagenet"). */
+  /** The dApp's name and network, shown after the circuit's fixed "Site: " on the first line of
+   *  every message (Q36): <= 24 characters, words of visible ASCII with single spaces between
+   *  them (e.g. "Night Market - stagenet"; `isRenderableLabel`). */
   label?: string;
   /** The dApp's token list: each amount's "This site labels it:" line (symbol and decimals).
    *  The base units and the full token id are shown whatever it says; unknown colours, or a
@@ -194,7 +195,8 @@ export class Ed25519Device {
     this.publicKey = typeof o.publicKey === 'string' ? base58Decode(o.publicKey) : Uint8Array.from(o.publicKey);
     this.pk = decodeEd25519Point(this.publicKey, 'the device public key');
     this.label = o.label ?? 'Midnight account';
-    if (this.label.length > ED25519_LABEL_BYTES) throw new RangeError('the label is at most 24 characters');
+    // The circuit's own rule for the first line (Q36): refused here, before any call, not at signing.
+    edLabel(this.label);
     this.tokens = o.tokens;
     this.signer = o.sign;
   }

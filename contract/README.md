@@ -28,9 +28,10 @@ once, below every arm.
   `signMessage`, RFC 8032 Ed25519) as the device, verified in plain Compact by
   the standard library's `ed25519Verify<#n>` (compactc 0.35.0), with R =
   identity also refused. The wallet signs a readable message the circuit
-  renders from its own arguments (format F3 v2: the exact base units and the
+  renders from its own arguments (format F3 v3: the exact base units and the
   full token id it enforces, the site's name and decimals marked as the
-  site's label, a UTC deadline), so what the wallet shows is what executes.
+  site's label, the site's own label behind a fixed `Site: `, a UTC
+  deadline), so what the wallet shows is what executes.
   One device per account: the arm has no add/remove-device circuits.
   Everything about it — the circuits, the message, the safety matrix, the
   client API and the BREAKING notes — is in

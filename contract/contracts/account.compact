@@ -2338,9 +2338,9 @@ export circuit open_swap_shielded_with_evm(
 // WHAT IS SIGNED. Not the challenge alone, and not a wallet envelope: a Solana wallet's
 // `signMessage` signs the raw bytes it is given, so the message IS the approval screen.
 // Each gated circuit renders a fixed-length, printable-ASCII message from its own
-// arguments (docs/ED25519-ARM.md, "The message, F3 v2"):
+// arguments (docs/ED25519-ARM.md, "The message, F3 v3"):
 //
-//     Night Market - stagenet            <- a 24-byte label the dApp chooses (printable)
+//     Site: Night Market - stagenet      <- "Site: " (fixed) + a 24-byte label the dApp chooses
 //     Swap offer                         <- the operation, fixed per circuit
 //     Give base units 10000000           <- ENFORCED: the exact base-unit amount
 //     Give token e934b965…02c9f          <- ENFORCED: the full 32-byte token id (64 hex)
@@ -2360,10 +2360,12 @@ export circuit open_swap_shielded_with_evm(
 // What the dApp CHOOSES is only display: the label on the first line, and, on each "This site
 // labels it:" line, where the decimal point goes and the token's symbol (Q25 B′: there is no
 // token registry on chain, so a name and decimals cannot be enforced; the line says whose
-// claim it is, and the base units and token id above it are what moves). They are printable,
-// so they cannot forge a line. The challenge binds, a second time and in full, everything
-// the text abbreviates or cannot show (the full addresses, the witness coin, the inbox
-// entries, the network salt). Variable-width fields are left-aligned and space-padded and end
+// claim it is, and the base units and token id above it are what moves). Both are marked as
+// the site's by fixed text the circuit renders in front of them ("Site: ", Q36; "This site
+// labels it: "), and both are printable without a newline, so neither can forge a line: every
+// line of every message starts with a word the circuit fixes. The challenge binds, a second
+// time and in full, everything the text abbreviates or cannot show (the full addresses, the
+// witness coin, the inbox entries, the network salt). Variable-width fields are left-aligned and space-padded and end
 // their line, so every operation's message keeps its own fixed length.
 //
 // ONE DEVICE PER ACCOUNT (Q27). The arm has no device management: no add_device or
@@ -2386,8 +2388,9 @@ export circuit open_swap_shielded_with_evm(
 // carries (for an ed25519-born account it is keccak256("midnight:" || networkId), as for
 // an evm-born one).
 
-// Display inputs (F3 v2). Texts are ASCII bytes, left-aligned and space-padded, and every one
-// is CHECKED against the value it describes, so none adds freedom beyond what is said here.
+// Display inputs (unchanged since F3 v2). Texts are ASCII bytes, left-aligned and space-padded,
+// and every one is CHECKED against the value it describes, so none adds freedom beyond what is
+// said here (the label's shape: `ed_label`).
 //
 // An amount: `units` is the base-unit amount in decimal ("10000000"), the enforced figure;
 // `site` is the site's label for it, "<amount with the site's decimal point> <symbol>"
@@ -2535,7 +2538,7 @@ export pure circuit challenge_open_swap_shielded_with_ed25519(
   );
 }
 
-// ── The message, F3 v2: rendering helpers ───────────────────────────────────
+// ── The message, F3 v3: rendering helpers ───────────────────────────────────
 //
 // Compact has no division, so decimal digits arrive as display inputs and are CHECKED
 // (the digits read back to the value, nothing else is shown), and hex digits are computed
@@ -2598,13 +2601,6 @@ circuit ed_site_text(value: Field, t: Vector<34, Uint<8>>): Vector<34, Uint<8>> 
   assert(t[0] != 48 || t[1] == 46 || t[1] == 32, "display: leading zero");
   assert(r[0] == value, "display: digits do not match the value");
   return t;
-}
-
-// Printable ASCII only (0x20..0x7e): a label cannot start a new line or hide text.
-circuit ed_printable<#n>(v: Vector<n, Uint<8>>): [] {
-  for (const c of v) {
-    assert(c >= 32 && c <= 126, "display: text must be printable ASCII");
-  }
 }
 
 circuit ed_hexdigit(n: Uint<8>): Uint<8> {
@@ -2690,10 +2686,23 @@ circuit ed_digit_char(x: Uint<8>): Uint<8> {
   return (x + 48) as Uint<8>;
 }
 
-// The dApp's label, checked printable (24 bytes, space-padded).
-circuit ed_label(label: Vector<24, Uint<8>>): Vector<24, Uint<8>> {
-  ed_printable<24>(label);
-  return label;
+// The first line (30 bytes): the fixed marker "Site: " and the dApp's label (Q36, audit R2-3).
+// The marker is the circuit's, so whatever the label says ("Cancel all open offers", "Give base
+// units 1", a token id) reads as the site's text, never as a line of its own: every line of
+// every message starts with a word this circuit fixes. The label (24 bytes) is words of visible
+// characters (0x21..0x7e) separated by single spaces, then space padding: it starts with a
+// visible character, and no visible character follows two spaces, so it reads as one phrase
+// right after "Site:" (no leading or inner run of spaces can push it away from the marker), and
+// it is never empty.
+circuit ed_label(label: Vector<24, Uint<8>>): Vector<30, Uint<8>> {
+  // [the previous byte was a space, the padding has begun (two spaces in a row), every byte fits]
+  const r = fold((a: [Boolean, Boolean, Boolean], c: Uint<8>): [Boolean, Boolean, Boolean] => {
+    const space = c == 32;
+    const shown = c >= 33 && c <= 126;
+    return [space, a[1] || (space && a[0]), a[2] && (space || (shown && !a[1]))];
+  }, [false, false, true], label);
+  assert(r[2] && label[0] != 32, "display: the site label must be printable words with single spaces");
+  return [...pad(6, "Site: "), ...label];
 }
 
 // "Account <16 hex> nonce <20>\nDigest <64 hex>" — the tail every message ends with (123 bytes).
@@ -2711,7 +2720,7 @@ circuit ed_amount_lines(value: Uint<128>, color: Bytes<32>, a: EdAmount): Vector
           ...pad(21, "This site labels it: "), ...ed_site_text(value as Field, a.site), 10];
 }
 
-// ── The message, F3 v2: one pure circuit per gated operation ─────────────────
+// ── The message, F3 v3: one pure circuit per gated operation ─────────────────
 //
 // Exported, and therefore free: a dApp, a relay or an auditor obtains the contract's own
 // bytes for any call, and `src/wallet/ed25519-message.ts` is an independent TypeScript
@@ -2720,7 +2729,7 @@ circuit ed_amount_lines(value: Uint<128>, color: Bytes<32>, a: EdAmount): Vector
 export pure circuit ed25519_message_withdraw_unshielded(
   self_addr: ContractAddress, challenge: Bytes<32>, nonce_value: Uint<64>,
   color: Bytes<32>, amount: Uint<128>, recipient: UserAddress, show: EdShowAmount,
-): Bytes<359> {
+): Bytes<365> {
   return Bytes[...ed_label(show.label), 10, ...pad(19, "Withdraw unshielded"), 10,
                ...ed_amount_lines(amount, color, show.amount),
                ...pad(11, "To address "), ...ed_hex8<32>(recipient.bytes), 10,
@@ -2730,7 +2739,7 @@ export pure circuit ed25519_message_withdraw_unshielded(
 export pure circuit ed25519_message_withdraw_shielded(
   self_addr: ContractAddress, challenge: Bytes<32>, nonce_value: Uint<64>,
   recipient: ZswapCoinPublicKey, color: Bytes<32>, amount: Uint<128>, show: EdShowAmount,
-): Bytes<353> {
+): Bytes<359> {
   return Bytes[...ed_label(show.label), 10, ...pad(17, "Withdraw shielded"), 10,
                ...ed_amount_lines(amount, color, show.amount),
                ...pad(7, "To key "), ...ed_hex8<32>(recipient.bytes), 10,
@@ -2740,7 +2749,7 @@ export pure circuit ed25519_message_withdraw_shielded(
 export pure circuit ed25519_message_withdraw_shielded_to_contract(
   self_addr: ContractAddress, challenge: Bytes<32>, nonce_value: Uint<64>,
   recipient: ContractAddress, color: Bytes<32>, amount: Uint<128>, show: EdShowAmount,
-): Bytes<361> {
+): Bytes<367> {
   return Bytes[...ed_label(show.label), 10, ...pad(20, "Withdraw to contract"), 10,
                ...ed_amount_lines(amount, color, show.amount),
                ...pad(12, "To contract "), ...ed_hex8<32>(recipient.bytes), 10,
@@ -2750,18 +2759,18 @@ export pure circuit ed25519_message_withdraw_shielded_to_contract(
 export pure circuit ed25519_message_append_inbox(
   self_addr: ContractAddress, challenge: Bytes<32>, nonce_value: Uint<64>,
   entry: Bytes<192>, show: EdShow,
-): Bytes<186> {
+): Bytes<192> {
   return Bytes[...ed_label(show.label), 10, ...pad(15, "File inbox note"), 10,
                ...pad(5, "Note "), ...ed_hex8<192>(entry), 10,
                ...ed_tail(self_addr, nonce_value, show.nonce, challenge)];
 }
 
-// rotate_enc_key (196 bytes). `current_key` is the account's enc_key when the call runs: the
+// rotate_enc_key (202 bytes). `current_key` is the account's enc_key when the call runs: the
 // same key is the market's cancel (Q30) and says so; any other key is a real rotation.
 export pure circuit ed25519_message_rotate_enc_key(
   self_addr: ContractAddress, challenge: Bytes<32>, nonce_value: Uint<64>,
   new_key: Bytes<32>, current_key: Bytes<32>, show: EdShow,
-): Bytes<196> {
+): Bytes<202> {
   const keep = new_key == current_key;
   const title = map((c: Uint<8>, r: Uint<8>): Uint<8> => keep ? c : (r == 0 ? 32 : r) as Uint<8>,
                     pad(22, "Cancel all open offers") as Vector<22, Uint<8>>,
@@ -2781,7 +2790,7 @@ export pure circuit ed25519_message_open_swap_shielded(
   self_addr: ContractAddress, challenge: Bytes<32>, nonce_value: Uint<64>,
   give_color: Bytes<32>, give_amount: Uint<128>, recipient_kind: Uint<8>, recipient: Bytes<32>,
   want: ShieldedCoinInfo, valid_until: Uint<64>, show: EdShowSwap,
-): Bytes<558> {
+): Bytes<564> {
   const named = ed_hex8<32>(recipient);
   const anyone = pad(16, "anyone") as Vector<16, Uint<8>>;
   const open = recipient_kind == 0;
@@ -2841,7 +2850,7 @@ export circuit withdraw_unshielded_with_ed25519(
   const msg = ed25519_message_withdraw_unshielded(
     kernel.self(), challenge, auth_nonce, color, amount, recipient, show
   );
-  require_authorised_with_ed25519<359>(pk, use_counter, sig, msg);
+  require_authorised_with_ed25519<365>(pk, use_counter, sig, msg);
   do_withdraw_unshielded(color, amount, recipient);
 }
 
@@ -2856,7 +2865,7 @@ export circuit append_inbox_with_ed25519(
     kernel.self(), pk, evm_domain_salt, entry, auth_nonce
   );
   const msg = ed25519_message_append_inbox(kernel.self(), challenge, auth_nonce, entry, show);
-  require_authorised_with_ed25519<186>(pk, use_counter, sig, msg);
+  require_authorised_with_ed25519<192>(pk, use_counter, sig, msg);
   do_append_inbox(entry);
 }
 
@@ -2880,7 +2889,7 @@ export circuit withdraw_shielded_with_ed25519(
   const msg = ed25519_message_withdraw_shielded(
     kernel.self(), challenge, auth_nonce, recipient, color, amount, show
   );
-  require_authorised_with_ed25519<353>(pk, use_counter, sig, msg);
+  require_authorised_with_ed25519<359>(pk, use_counter, sig, msg);
   return do_withdraw_shielded(recipient, amount, coin);
 }
 
@@ -2902,7 +2911,7 @@ export circuit withdraw_shielded_to_contract_with_ed25519(
   const msg = ed25519_message_withdraw_shielded_to_contract(
     kernel.self(), challenge, auth_nonce, recipient, color, amount, show
   );
-  require_authorised_with_ed25519<361>(pk, use_counter, sig, msg);
+  require_authorised_with_ed25519<367>(pk, use_counter, sig, msg);
   return do_withdraw_shielded_to_contract(recipient, amount, coin);
 }
 
@@ -2918,7 +2927,7 @@ export circuit rotate_enc_key_with_ed25519(
     kernel.self(), pk, evm_domain_salt, new_key, auth_nonce
   );
   const msg = ed25519_message_rotate_enc_key(kernel.self(), challenge, auth_nonce, new_key, enc_key, show);
-  require_authorised_with_ed25519<196>(pk, use_counter, sig, msg);
+  require_authorised_with_ed25519<202>(pk, use_counter, sig, msg);
   do_rotate_enc_key(new_key);
 }
 
@@ -2951,7 +2960,7 @@ export circuit open_swap_shielded_with_ed25519(
     kernel.self(), challenge, auth_nonce, give_color, give_amount, recipient_kind, recipient,
     want, valid_until, show
   );
-  require_authorised_with_ed25519<558>(
+  require_authorised_with_ed25519<564>(
     pk, use_counter, sig, msg
   );
   return do_open_swap(coin, give_amount, recipient_kind, recipient, want, want_entry, change_entry);

@@ -1,4 +1,4 @@
-// The `ed25519` arm's message — what a Solana wallet shows and signs (format F3 v2).
+// The `ed25519` arm's message — what a Solana wallet shows and signs (format F3 v3).
 //
 // A Solana wallet's `signMessage` signs the raw bytes it is handed and displays them as
 // UTF-8, so on this arm the MESSAGE is the approval screen. The contract renders it
@@ -14,7 +14,8 @@
 // fields are left-aligned, space-padded and end their line, so each operation's message has
 // one fixed length:
 //
-//   <label, 24>                                   the dApp's label, e.g. "Night Market - stagenet"
+//   Site: <label, 24>                             "Site: " is fixed (Q36); the label is the dApp's,
+//                                                 e.g. "Site: Night Market - stagenet"
 //   <operation title>                             fixed per circuit
 //   Base units <amount in base units>             ENFORCED: what the call moves
 //   Token <the full 32-byte token id, 64 hex>     ENFORCED: which token
@@ -30,12 +31,23 @@
 // enforced. The text therefore shows what the contract enforces (the base units and the full
 // token id) and puts the site's name and decimals on a line that says whose claim it is. The
 // site line's digits are still the amount's own digits: the site chooses only where the
-// decimal point goes and the symbol. Everything here is browser-safe: no Node built-ins.
+// decimal point goes and the symbol.
+//
+// Q36 (F3 v3, audit R2-3): the first line is marked as the site's too. The circuit renders the
+// fixed "Site: " in front of the label, so a label that imitates an enforced line ("Cancel all
+// open offers", "Give base units 1", a token id) reads "Site: Cancel all open offers": every
+// line of every message starts with a word the circuit fixes. The label itself must be words
+// of visible characters with single spaces between them (no leading space, no run of spaces
+// before more text, not empty), so it reads as one phrase right after "Site:"; `edLabel`
+// refuses exactly the labels the circuit refuses. Everything here is browser-safe: no Node
+// built-ins.
 
 import { bytesToHex } from './hex.js';
 
 /** The message format this module and the contract render. */
-export const ED25519_MESSAGE_FORMAT = 'F3 v2';
+export const ED25519_MESSAGE_FORMAT = 'F3 v3';
+/** The fixed text the circuit renders in front of the dApp's label on the first line (Q36). */
+export const ED25519_SITE_PREFIX = 'Site: ';
 export const ED25519_LABEL_BYTES = 24;
 export const ED25519_SYMBOL_BYTES = 8;
 /** The width of the base-unit amount field (24 decimal digits). */
@@ -111,6 +123,13 @@ export type EdShowAny = EdShowValue | EdShowAmountValue | EdShowSwapValue;
 
 const isPrintable = (s: string): boolean => /^[\x20-\x7e]*$/.test(s);
 
+/** Whether the arm can show this label on its first line (Q36): at most 24 characters, words of
+ *  visible ASCII (0x21-0x7e) with single spaces between them, at least one word; trailing spaces
+ *  are only padding. Exactly the circuit's `ed_label` rule on the space-padded 24 bytes. */
+export function isRenderableLabel(label: string): boolean {
+  return label.length <= ED25519_LABEL_BYTES && /^[\x21-\x7e]+( [\x21-\x7e]+)* *$/.test(label);
+}
+
 /** Printable ASCII, at most `width` characters, space-padded to `width`, as byte values. */
 function fixedText(text: string, width: number, what: string): bigint[] {
   if (!isPrintable(text)) throw new RangeError(`${what} must be printable ASCII (0x20-0x7e): ${JSON.stringify(text)}`);
@@ -118,8 +137,19 @@ function fixedText(text: string, width: number, what: string): bigint[] {
   return [...text.padEnd(width, ' ')].map((c) => BigInt(c.charCodeAt(0)));
 }
 
-/** The label a dApp puts on top of every message (<= 24 printable ASCII characters). */
-export const edLabel = (label: string): bigint[] => fixedText(label, ED25519_LABEL_BYTES, 'the ed25519 message label');
+/** The label a dApp puts on top of every message, after the circuit's "Site: " (Q36): <= 24
+ *  characters, words of visible ASCII with single spaces between them. Refuses exactly what the
+ *  circuit refuses. */
+export function edLabel(label: string): bigint[] {
+  const bytes = fixedText(label, ED25519_LABEL_BYTES, 'the ed25519 message label');
+  if (!isRenderableLabel(label)) {
+    throw new RangeError(
+      'the ed25519 message label must be words of visible ASCII with single spaces between them '
+      + `(no leading space, no run of spaces before more text, not empty): ${JSON.stringify(label)}`,
+    );
+  }
+  return bytes;
+}
 
 function checkAmount(value: bigint): void {
   if (value < 0n) throw new RangeError('a displayed amount cannot be negative');
@@ -233,7 +263,8 @@ export interface Ed25519MessageFrame {
   authNonce: bigint;
   /** The call's challenge (the arm's `challenge_<op>_with_ed25519`). */
   challenge: Uint8Array;
-  /** The dApp's label, <= 24 printable ASCII characters. */
+  /** The dApp's label (shown after the circuit's "Site: "): <= 24 characters, words of visible
+   *  ASCII with single spaces between them (`isRenderableLabel`). */
   label: string;
   /** The dApp's token list (symbol + decimals per colour), shown as the site's label. */
   tokens?: EdTokenResolver;
@@ -250,12 +281,12 @@ export interface Ed25519Message {
 
 /** The fixed message length of each gated circuit (`ed25519_message_*` return types). */
 export const ED25519_MESSAGE_BYTES = {
-  withdrawUnshielded: 359,
-  withdrawShielded: 353,
-  withdrawShieldedToContract: 361,
-  appendInbox: 186,
-  rotateEncKey: 196,
-  openSwapShielded: 558,
+  withdrawUnshielded: 365,
+  withdrawShielded: 359,
+  withdrawShieldedToContract: 367,
+  appendInbox: 192,
+  rotateEncKey: 202,
+  openSwapShielded: 564,
 } as const;
 
 /** The site's display for a colour: the resolver's, when the arm can render it; otherwise the
@@ -281,7 +312,7 @@ export function renderEd25519Message(frame: Ed25519MessageFrame, input: Ed25519M
   if (frame.challenge.length !== 32) throw new RangeError('the challenge is 32 bytes');
   const label = edLabel(frame.label);
   const nonce = edNonce(frame.authNonce);
-  const head = (title: string) => `${frame.label.padEnd(24, ' ')}\n${title}\n`;
+  const head = (title: string) => `${ED25519_SITE_PREFIX}${frame.label.padEnd(ED25519_LABEL_BYTES, ' ')}\n${title}\n`;
   const tail =
     `Account ${fp8(frame.contractAddress)} nonce ${renderNonce(frame.authNonce).padEnd(ED25519_NONCE_BYTES, ' ')}\n` +
     `Digest ${bytesToHex(frame.challenge)}`;

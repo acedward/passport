@@ -5,9 +5,11 @@
 //     below L and is never reduced;
 //   * the device: key, Solana address, rolling entries, boot commitment, arm separation;
 //   * signing: every gated operation and the offer, through a pluggable sign callback; the
-//     message equals the contract's own rendering (F3 v2: base units, full token id, the site's
-//     marked label, a UTC deadline); the tweetnacl pre-check refuses a wallet that signed
-//     anything else (another key, another message, a Ledger-wrapped message);
+//     message equals the contract's own rendering (F3 v3: "Site: <label>" first, base units,
+//     full token id, the site's marked label, a UTC deadline); the tweetnacl pre-check refuses a
+//     wallet that signed anything else (another key, another message, a Ledger-wrapped message);
+//   * Q36 (audit R2-3): a label that imitates an enforced line reads as the site's, and the
+//     device refuses, at construction, every label the circuit refuses;
 //   * one device per account (Q27): no add/remove device on this arm, in the client or the
 //     account shape; rotate_enc_key with the current key is the market's cancel (Q30);
 //   * the generic surface: `authorise`, `authArgs`, `activationArgs`, `deviceRosterKey`.
@@ -220,6 +222,20 @@ await runScenario('ed25519-offline (A4 client)', async () => {
   assert(cancel.text.includes('\nCancel all open offers\nYour key does not change\n'), 're-affirming the current key reads as "Cancel all open offers" (Q30)');
   const rotate = await device.sign(ctx, { op: 'rotateEncKey', newKey: det('new key') }, 0n);
   assert(rotate.text.includes('\nRotate encryption key \nNew key ') && !rotate.text.includes('Cancel'), 'any other key reads as a rotation');
+  assert(wd.text.startsWith('Site: Night Market - stagenet \nWithdraw shielded\n'),
+    'the first line is the circuit\'s "Site: " and then the label (Q36): it is marked as the site\'s');
+  // Q36 (audit R2-3, auditor A's probe B): a page that names itself like an enforced line, above a
+  // REAL key rotation. The text still says whose line it is.
+  const mimic = Ed25519Device.fromSeed(seed, { label: 'Cancel all open offers', tokens: (h) => TOKENS.get(h) });
+  const probe = await mimic.sign(ctx, { op: 'rotateEncKey', newKey: det('new key') }, 0n);
+  console.log(`  a label imitating the cancel, above a real rotation:\n    ${probe.text.split('\n').join('\n    ')}`);
+  assert(probe.text.startsWith('Site: Cancel all open offers  \nRotate encryption key \nNew key ')
+    && !probe.text.split('\n').some((line) => line.startsWith('Cancel')),
+    'a label "Cancel all open offers" reads "Site: Cancel all open offers"; no line of the message starts with it (Q36)');
+  for (const bad of ['  Cancel all open offers', 'Give  base units 1', '', ' ', 'tab\there', 'Night M\u00e4rket', 'Night Market - stagenet!!']) {
+    refuses(() => Ed25519Device.fromSeed(seed, { label: bad }), /label/,
+      `the device refuses the label ${JSON.stringify(bad)} at construction (the circuit refuses it too, Q36)`);
+  }
   await refusesAsync(() => device.sign({ ...ctx, encKey: undefined }, { op: 'rotateEncKey', newKey: encKey }, 0n),
     /current enc_key/, 'rotate_enc_key without the current key in the context');
   await refusesAsync(() => device.sign(ctx, { op: 'withdrawShielded', recipient: det('coin pk'), color: BTC, amount: 1n, coin }, 0n),
@@ -282,6 +298,8 @@ await runScenario('ed25519-offline (A4 client)', async () => {
   const popSig = nacl.sign.detached(pop, kp.secretKey);
   assert(nacl.sign.detached.verify(pop, popSig, device.publicKey), 'the possession message signs and verifies');
   assert(new TextDecoder().decode(pop).includes('authorises nothing'), 'it says it authorises nothing');
+  refuses(() => ed25519PossessionMessage({ label: ' Night Market', publicKeyBase58: device.address, purpose: 'open an account', nonce: 'a1b2c3d4' }),
+    /label/, 'its label follows the same rule as the gated messages\' (no leading space, Q36)');
 
   step('the renderer and the contract agree for the signed calls (spot check)');
   const again = renderEd25519Message(

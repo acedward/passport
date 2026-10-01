@@ -6,16 +6,21 @@
 #   * the seam's `R is the identity` assert and its `ed25519Verify` assert;
 #   * the activation's `require_live_ed25519_key` (so an identity key can be enrolled);
 #   * the two shielded withdrawals' C2 assert (`held coin colour does not match the withdrawn
-#     colour`), so a prover whose witness returns a coin of another colour gets a preimage.
+#     colour`), so a prover whose witness returns a coin of another colour gets a preimage;
+#   * the first line's label-shape assert (Q36: `the site label must be printable words with
+#     single spaces`), so a label the circuit refuses (leading spaces) still gets a preimage.
 # Everything else — arguments, message rendering, ledger operations — is identical, so a
 # proof preimage the twin produces for a MALICIOUS call (a forged signature, a substituted key,
 # a coin of another token) has exactly the shape the strict circuit expects, and the strict
 # circuit's IR can be run on it (a proof server's /check, or /prove): that is how the matrix
 # tests what a prover who skips the client could still submit.
 #
-# `ED25519_TWIN=c2-mutant` builds the MUTATION CHECK instead: the strict contract with ONLY the
-# C2 asserts removed (contracts/managed/account-c2-mutant), on which the matrix's C2 case must be
-# ACCEPTED — the test fails without the fix.
+# MUTATION CHECKS (each the strict contract with exactly one fix taken out; the matrix's case for
+# that fix must be ACCEPTED on it, so the case fails without the fix):
+#   ED25519_TWIN=c2-mutant        without the C2 asserts           contracts/managed/account-c2-mutant
+#   ED25519_TWIN=q36-mutant       without the "Site: " marker (the
+#                                 label is a bare first line)      contracts/managed/account-q36-mutant
+#   ED25519_TWIN=q36-shape-mutant without the label-shape assert   contracts/managed/account-q36-shape-mutant
 #
 # usage: scripts/ed25519-lax-twin.sh   (writes contracts/managed/account-lax, JS and ZKIR only)
 #   env: COMPACTC_TOOLCHAIN / COMPACTC_IMAGE as scripts/compile-account.sh
@@ -25,8 +30,8 @@ cd "$here"
 twin="${ED25519_TWIN:-lax}"
 case "$twin" in
   lax) out="contracts/managed/account-lax" ;;
-  c2-mutant) out="contracts/managed/account-c2-mutant" ;;
-  *) echo "ED25519_TWIN must be lax or c2-mutant" >&2; exit 64 ;;
+  c2-mutant|q36-mutant|q36-shape-mutant) out="contracts/managed/account-$twin" ;;
+  *) echo "ED25519_TWIN must be lax, c2-mutant, q36-mutant or q36-shape-mutant" >&2; exit 64 ;;
 esac
 work="${out}-src"
 rm -rf "$work" && mkdir -p "$work"
@@ -35,13 +40,21 @@ node - "$work/account.compact" "$twin" <<'JS'
 const fs = require('node:fs');
 let src = fs.readFileSync('contracts/account.compact', 'utf8');
 const c2 = ['  assert(coin.color == color, "held coin colour does not match the withdrawn colour");\n', '', 2];
-const cuts = process.argv[3] === 'c2-mutant' ? [c2] : [
-  ['  assert((curve25519PointX(sig.r) as Bytes<32>) != pad(32, ""), "R is the identity");\n', '', 1],
-  ['  assert(ed25519Verify<n>(msg, sig, pk), "invalid signature");\n', '', 1],
-  ['  require_live_ed25519_key(pk);\n  assert(derive_boot_commitment_with_ed25519(salt, pk) == boot, "boot commitment mismatch");\n',
-   '  assert(derive_boot_commitment_with_ed25519(salt, pk) == boot, "boot commitment mismatch");\n', 1],
-  c2,
-];
+const shape = ['  assert(r[2] && label[0] != 32, "display: the site label must be printable words with single spaces");\n', '', 1];
+const marker = ['  return [...pad(6, "Site: "), ...label];\n', '  return [...label, 32, 32, 32, 32, 32, 32];\n', 1];
+const cuts = {
+  'c2-mutant': [c2],
+  'q36-mutant': [marker],
+  'q36-shape-mutant': [shape],
+  lax: [
+    ['  assert((curve25519PointX(sig.r) as Bytes<32>) != pad(32, ""), "R is the identity");\n', '', 1],
+    ['  assert(ed25519Verify<n>(msg, sig, pk), "invalid signature");\n', '', 1],
+    ['  require_live_ed25519_key(pk);\n  assert(derive_boot_commitment_with_ed25519(salt, pk) == boot, "boot commitment mismatch");\n',
+     '  assert(derive_boot_commitment_with_ed25519(salt, pk) == boot, "boot commitment mismatch");\n', 1],
+    c2,
+    shape,
+  ],
+}[process.argv[3]];
 for (const [cut, repl, count] of cuts) {
   if (src.split(cut).length !== count + 1) throw new Error(`expected exactly ${count}: ${cut}`);
   src = src.split(cut).join(repl);

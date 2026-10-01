@@ -1,0 +1,330 @@
+{
+  "format": "passport ed25519 message F3 v3",
+  "cases": [
+    {
+      "name": "withdrawShielded zero, 6 dec",
+      "sha256": "b651580521e93a7f8d4b776cdf6e7ea4342eb52cfb14f1e2b6e3aed6a44c3962",
+      "text": "Site: Night Market - stagenet \nWithdraw shielded\nBase units 0                       \nToken e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 0.000000 twUSDC                   \nTo key a70baebb930b2bee\nAccount c307a862b710d2fb nonce 0                   \nDigest 18527fbaac49b1e25cfb32440c30bf8de8cec8ada8df03a1d67c286036e9ac3c"
+    },
+    {
+      "name": "withdrawUnshielded zero, 6 dec",
+      "sha256": "283fcaf50b91f7f0b342711950ee3e803cadb919283d78d74c36e559dcef643d",
+      "text": "Site: Cancel all open offers  \nWithdraw unshielded\nBase units 0                       \nToken e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 0.000000 twUSDC                   \nTo address a2e1d4cc1db07f0a\nAccount e6a06c03f05cc3aa nonce 1                   \nDigest 0a0fff3a3bf449d9aa5492d169f916cc7913b476500865f4eed45ed121840700"
+    },
+    {
+      "name": "withdrawShielded 1 base unit, 6 dec",
+      "sha256": "a9111eeb1c2a1363cc5499ed38b1763f3fa6687d85e4af00f56a2590b81073da",
+      "text": "Site: X                       \nWithdraw shielded\nBase units 1                       \nToken e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 0.000001 twUSDC                   \nTo key 55f84a524254f171\nAccount 77ca2412071459d8 nonce 17                  \nDigest 4209ff4979f210aea300324a2ccda2592fde1c4e05100770fb7ac9d673aa6c40"
+    },
+    {
+      "name": "withdrawUnshielded 1 base unit, 6 dec",
+      "sha256": "2fcb89b9f2118900a3551c424df1227d870acbf5ddd2702a80440179eede8c95",
+      "text": "Site: ABCDEFGHIJKLMNOPQRSTUVWX\nWithdraw unshielded\nBase units 1                       \nToken e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 0.000001 twUSDC                   \nTo address 3fd3fc0ac3e9a76f\nAccount c241b86f3538badf nonce 4294967296          \nDigest 043a54502a00d522e427af366631c047c5887dd6c1a38b55f4259536a2254d4c"
+    },
+    {
+      "name": "withdrawShielded 1 base unit, 8 dec",
+      "sha256": "793b261d6b875220d236c09b9d1bba160ad8c0d6439de8d99c0f23888ef1d579",
+      "text": "Site: Night Market | ~!@#$%^&*\nWithdraw shielded\nBase units 1                       \nToken ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 0.00000001 twBTC                  \nTo key 2b61655d1fecec2e\nAccount 89eafef23ff5c96b nonce 18446744073709551615\nDigest c62966c7382b131811cca9e84ac35211bf0d749dcbae4f1ae0c0a65d831e0dab"
+    },
+    {
+      "name": "withdrawUnshielded 1 base unit, 8 dec",
+      "sha256": "69dbaa5ab07fb37aa941b6fb86725c9edf2c4eeccd6bcdcd8d9ec3b40253ff1c",
+      "text": "Site: Give base units 1       \nWithdraw unshielded\nBase units 1                       \nToken ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 0.00000001 twBTC                  \nTo address 45b765ec8b6942eb\nAccount 49b8c088545e0a25 nonce 0                   \nDigest 473d9db7c0ee6079f93efcf11e09612ff2d60eb1581e71be4f4819e2d92c2408"
+    },
+    {
+      "name": "withdrawShielded 1 base unit, 18 dec",
+      "sha256": "db35923a8ab7d3398039ee8a81f4814fab23c643856f212445187d8f7a67ef55",
+      "text": "Site: Token e934b965a454ed68  \nWithdraw shielded\nBase units 1                       \nToken 2862f0f347068b6c4909079ab8e991067b71fe2263ef00c20f017eefb6e9477a\nThis site labels it: 0.000000000000000001 twETH        \nTo key c24760c4c0ea0975\nAccount 706be083cca9d4d4 nonce 1                   \nDigest 2b4ce2a7e0abf958d05c6fad30dc00977d022d5b611640b86cb722d32336e3dc"
+    },
+    {
+      "name": "withdrawUnshielded 1 base unit, 18 dec",
+      "sha256": "644159fd0eba43e60ab0ad35765d9d48d97739535d8ff01f3e3baa9710234553",
+      "text": "Site: Night Market - local    \nWithdraw unshielded\nBase units 1                       \nToken 2862f0f347068b6c4909079ab8e991067b71fe2263ef00c20f017eefb6e9477a\nThis site labels it: 0.000000000000000001 twETH        \nTo address e093496da5ca542d\nAccount 817a18be45e0bdb6 nonce 17                  \nDigest f29d73b941effd096d8eb43d0c10877e4106d42ed3159a24a6cb49bd694b1b56"
+    },
+    {
+      "name": "withdrawShielded 1 base unit, 0 dec",
+      "sha256": "a2404f0db3f0e1c774a8d80a1e9a21eff428b06858b691b8dd243d3f1a39e63e",
+      "text": "Site: Night Market - stagenet \nWithdraw shielded\nBase units 1                       \nToken ea319c7636c2a7bab04527c8d43abd082442d0cdcaf7b7b93bab22b2a93c3a47\nThis site labels it: 1 WHOLE                           \nTo key d12737bf93a4316e\nAccount 64e7cc114ef0d3e9 nonce 4294967296          \nDigest 384e6b33b34df647f86744f2e9d6343d9c3f82164342e8d2e6c0e90e2c6e1566"
+    },
+    {
+      "name": "withdrawUnshielded 1 base unit, 0 dec",
+      "sha256": "826dc4d2d684d70ebf00796ab1fc22eeb2b14e6d078fbc4d6ebbab07d0c43174",
+      "text": "Site: Cancel all open offers  \nWithdraw unshielded\nBase units 1                       \nToken ea319c7636c2a7bab04527c8d43abd082442d0cdcaf7b7b93bab22b2a93c3a47\nThis site labels it: 1 WHOLE                           \nTo address 8b7133328990a243\nAccount dbe221a7cdac10d1 nonce 18446744073709551615\nDigest bca6c8529b357a5da058e72f9ba5c6311b51cbf50c03ee05eedc9740fbcb5fc9"
+    },
+    {
+      "name": "withdrawShielded 10 twUSDC",
+      "sha256": "39eb8f0c1babb72647f93da9348313df0184e7ae9c101170d09cac901bbc66d6",
+      "text": "Site: X                       \nWithdraw shielded\nBase units 10000000                \nToken e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 10.000000 twUSDC                  \nTo key dbf68449cff10c89\nAccount 823656ad6d70be82 nonce 0                   \nDigest cbf0177b2b60e5996058cb5a4a498041cfa14d8c48085811994bb6af222d7a6c"
+    },
+    {
+      "name": "withdrawUnshielded 10 twUSDC",
+      "sha256": "873660f93f84b1cc5dbac4fcc540986ce993aa651b24f38574114d724d09c214",
+      "text": "Site: ABCDEFGHIJKLMNOPQRSTUVWX\nWithdraw unshielded\nBase units 10000000                \nToken e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 10.000000 twUSDC                  \nTo address 9e868bc4d68c129b\nAccount 62a5ca08b9ee0988 nonce 1                   \nDigest 80ebe4fecddd780e277054494348a3c71f77c45840e0098e7e51f79d9da17105"
+    },
+    {
+      "name": "withdrawShielded 0.0002 twBTC",
+      "sha256": "38a1bad3008ed9838b048cb5f4ac76f51e2eb6de53bbf3f80b9d31e73c3097f4",
+      "text": "Site: Night Market | ~!@#$%^&*\nWithdraw shielded\nBase units 20000                   \nToken ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 0.00020000 twBTC                  \nTo key 1a9313ae1f377e2c\nAccount bf51a74775a21003 nonce 17                  \nDigest 5ae4ba9f9d94755f9d4f7de363b12213bbfeb8d0961087d721570e682e5702fb"
+    },
+    {
+      "name": "withdrawUnshielded 0.0002 twBTC",
+      "sha256": "47da2944d94fb01568954e5037277b14082f58ca5fd873a868801aa594d8b338",
+      "text": "Site: Give base units 1       \nWithdraw unshielded\nBase units 20000                   \nToken ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 0.00020000 twBTC                  \nTo address 3ed6fcb4febed027\nAccount 0533c2071722d7a0 nonce 4294967296          \nDigest d4a330555e824147b136d04b3ab47272bca26ca5b6974337f8b098d51b753ba4"
+    },
+    {
+      "name": "withdrawShielded 1 twETH",
+      "sha256": "61525824b182beea10a5e61392409544560006f6d215d1ac6ef4f8c75f34f2f7",
+      "text": "Site: Token e934b965a454ed68  \nWithdraw shielded\nBase units 1000000000000000000     \nToken 2862f0f347068b6c4909079ab8e991067b71fe2263ef00c20f017eefb6e9477a\nThis site labels it: 1.000000000000000000 twETH        \nTo key 81fa607b99bdfc85\nAccount e63e3de67e938a01 nonce 18446744073709551615\nDigest 84e57ff06309cce2c305c95aa55444c090d19d831a1308e837b151b2cd801107"
+    },
+    {
+      "name": "withdrawUnshielded 1 twETH",
+      "sha256": "bf850cc025c7d10e20d0a61527269683960401e9448ed390d64350ec9a1ddd71",
+      "text": "Site: Night Market - local    \nWithdraw unshielded\nBase units 1000000000000000000     \nToken 2862f0f347068b6c4909079ab8e991067b71fe2263ef00c20f017eefb6e9477a\nThis site labels it: 1.000000000000000000 twETH        \nTo address a95a23a86a3c2512\nAccount 3f0b3111a414b10e nonce 0                   \nDigest 1dbf697d7cb8e2497dfcf20e68c04306511923f674f2439c0e46a8ba679f27cc"
+    },
+    {
+      "name": "withdrawShielded max u64, 0 dec",
+      "sha256": "966f2776ca6fd8b7986320c8036c2aacf4e1329c58f10e50f6a5fe3516d057b8",
+      "text": "Site: Night Market - stagenet \nWithdraw shielded\nBase units 18446744073709551615    \nToken ea319c7636c2a7bab04527c8d43abd082442d0cdcaf7b7b93bab22b2a93c3a47\nThis site labels it: 18446744073709551615 WHOLE        \nTo key 8a750d6f77b637be\nAccount c134c0032b9aa0f8 nonce 1                   \nDigest 743ba8be12f65b2194b824d2c35b7836aa5141650af99b8a6e65eecd0e72802b"
+    },
+    {
+      "name": "withdrawUnshielded max u64, 0 dec",
+      "sha256": "9b465ae98f7204bc1dc6c6c39f5890e1e70e0e97c68cec599fba6fcd0fd4489c",
+      "text": "Site: Cancel all open offers  \nWithdraw unshielded\nBase units 18446744073709551615    \nToken ea319c7636c2a7bab04527c8d43abd082442d0cdcaf7b7b93bab22b2a93c3a47\nThis site labels it: 18446744073709551615 WHOLE        \nTo address e680e15c49072abd\nAccount e843c89875f46853 nonce 17                  \nDigest e838c73a0c972a3dc0a0df8870b4319ce1a1b080870fce2ac4d2bc0d5503196e"
+    },
+    {
+      "name": "withdrawShielded max u64, 6 dec",
+      "sha256": "28832ab0d185cb0d6c624643af108906e12cd234af617a8c8f5950ad42053f6d",
+      "text": "Site: X                       \nWithdraw shielded\nBase units 18446744073709551615    \nToken 723e4cac789f6a9a39cc8eb104037ee0299e9fa7a3fcf58604cfbbc259748a87\nThis site labels it: 18446744073709.551615 twUSDM      \nTo key 5c6987e9469f2ccb\nAccount ac8af506b75d8dc4 nonce 4294967296          \nDigest 7cb3f5263c9931511e726750620023d3933011621d2b5c3a653a1f98e3249c66"
+    },
+    {
+      "name": "withdrawUnshielded max u64, 6 dec",
+      "sha256": "7608616204326891d31a29dbe04ad78f42d6b8bf34b5522dd0bb2223f6ca6e81",
+      "text": "Site: ABCDEFGHIJKLMNOPQRSTUVWX\nWithdraw unshielded\nBase units 18446744073709551615    \nToken 723e4cac789f6a9a39cc8eb104037ee0299e9fa7a3fcf58604cfbbc259748a87\nThis site labels it: 18446744073709.551615 twUSDM      \nTo address a9730284682c1133\nAccount c1fed745cfa33d89 nonce 18446744073709551615\nDigest bda6ae72e1d1d957fc18a109001f92b064fd2aab2b27298136ebdc94b961aa13"
+    },
+    {
+      "name": "withdrawShielded max u64, 18 dec",
+      "sha256": "c68949efe84a0cd477edf3580767f00952100bf1514e5dbdd7b67474d0147eab",
+      "text": "Site: Night Market | ~!@#$%^&*\nWithdraw shielded\nBase units 18446744073709551615    \nToken 2862f0f347068b6c4909079ab8e991067b71fe2263ef00c20f017eefb6e9477a\nThis site labels it: 18.446744073709551615 twETH       \nTo key 971d425039155e4e\nAccount 1c5f291f866853f2 nonce 0                   \nDigest ecfda0e4f0b72857da2b7e9359fb286681100a7e0981950b1287aad20c55f09a"
+    },
+    {
+      "name": "withdrawUnshielded max u64, 18 dec",
+      "sha256": "2b044669aa059be03f24925e9043c5e3b9c62af608feead35fee44c909df176d",
+      "text": "Site: Give base units 1       \nWithdraw unshielded\nBase units 18446744073709551615    \nToken 2862f0f347068b6c4909079ab8e991067b71fe2263ef00c20f017eefb6e9477a\nThis site labels it: 18.446744073709551615 twETH       \nTo address e3423a33c88d86e9\nAccount f268f0d6740fd34d nonce 1                   \nDigest 4cc83d1bf470ad7c92b75c361e6e3259d0feb033280efd77b8df038703e70de4"
+    },
+    {
+      "name": "withdrawShielded max renderable, 0 dec",
+      "sha256": "cb81c5af71802d5488bba49028afb4163604040835f0e2b65918600674c022fa",
+      "text": "Site: Token e934b965a454ed68  \nWithdraw shielded\nBase units 999999999999999999999999\nToken ea319c7636c2a7bab04527c8d43abd082442d0cdcaf7b7b93bab22b2a93c3a47\nThis site labels it: 999999999999999999999999 WHOLE    \nTo key 6276fa4dd9280691\nAccount 6b7f62e1fd54b791 nonce 17                  \nDigest b401058ab1bdd2f39e35d053c95e85d17e19562df3a42ae03461bd7cc3204dc3"
+    },
+    {
+      "name": "withdrawUnshielded max renderable, 0 dec",
+      "sha256": "7db3d314e9a5ac4b195c9f77b23842be1c6f4370013465465af1ef9466dc30d6",
+      "text": "Site: Night Market - local    \nWithdraw unshielded\nBase units 999999999999999999999999\nToken ea319c7636c2a7bab04527c8d43abd082442d0cdcaf7b7b93bab22b2a93c3a47\nThis site labels it: 999999999999999999999999 WHOLE    \nTo address bf66ef0cca3fe8cc\nAccount 1d97dd4c86b2756f nonce 4294967296          \nDigest 5ef079790e7050d64f013f7b01cf7a9b85b299933e5164579c32eebd4084987f"
+    },
+    {
+      "name": "withdrawShielded max renderable, 18 dec",
+      "sha256": "b038412e291e81cae5f8797e65db7aca0a8055fe179b5fbdde5ed621ef4917d9",
+      "text": "Site: Night Market - stagenet \nWithdraw shielded\nBase units 999999999999999999999999\nToken dc0e0a461a414948b2e01f4703b312560d657572f7dbe8a1c7e9edd8dad04644\nThis site labels it: 999999.999999999999999999 EIGHTCHR\nTo key 13f5d69136ef4342\nAccount c8377e1a1c4bf9c5 nonce 18446744073709551615\nDigest 86755311513a86a2ff601340742d842e787c4f797ffb0d174af308445e4483ef"
+    },
+    {
+      "name": "withdrawUnshielded max renderable, 18 dec",
+      "sha256": "91358f1a34d7fb14222259325cac63bee5dc356b25ff7b2288fc155adbffee3b",
+      "text": "Site: Cancel all open offers  \nWithdraw unshielded\nBase units 999999999999999999999999\nToken dc0e0a461a414948b2e01f4703b312560d657572f7dbe8a1c7e9edd8dad04644\nThis site labels it: 999999.999999999999999999 EIGHTCHR\nTo address 31d2390c7551eb85\nAccount 40a6a71376b5678f nonce 0                   \nDigest ee467f9244c62e52c1a227bda6a5c4bbe119092c27df1924a8286cf3a623f809"
+    },
+    {
+      "name": "withdrawShielded 1234567.891 twBTC",
+      "sha256": "7c3f62b64872632aaec0a50d4af45cde5b021938cdd0d03d1ce58b2ef7d8d053",
+      "text": "Site: X                       \nWithdraw shielded\nBase units 123456789100000         \nToken ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 1234567.89100000 twBTC            \nTo key 882c1ffd9020d349\nAccount 6a98f0476f9e0e75 nonce 1                   \nDigest bf08d89ea030ed8fca3f334a73667aa3e224512c8d69bceb0f93f7aa1875092b"
+    },
+    {
+      "name": "withdrawUnshielded 1234567.891 twBTC",
+      "sha256": "6f1cfed9f1df9db10ade90624efb1947be88a01ff54abcaf076ec1bbdc630ea6",
+      "text": "Site: ABCDEFGHIJKLMNOPQRSTUVWX\nWithdraw unshielded\nBase units 123456789100000         \nToken ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 1234567.89100000 twBTC            \nTo address f3dc89fa979bc512\nAccount df0b96087d3e7edd nonce 17                  \nDigest 1eb2b7aaafe38830b628dbe8249decc99b7e648d4a4f39949683d8e255ef26b3"
+    },
+    {
+      "name": "withdrawShielded unshielded 250 utwUSDC",
+      "sha256": "e372df95db43090d05b80b6005a0d34c896ce77f926c0d45e0ccf44ed1fdc2da",
+      "text": "Site: Night Market | ~!@#$%^&*\nWithdraw shielded\nBase units 250000000               \nToken a9e63fe9160bbe0e5758b310db16644d7d147eed8757f13c05197c057538926d\nThis site labels it: 250.000000 utwUSDC                \nTo key 8e2ebc8e33e3f4e3\nAccount dde03a6b3b717209 nonce 4294967296          \nDigest 949e40a3d39bc36afaf3b98376f771ba63212e3c292c6256cee77244bbd9497d"
+    },
+    {
+      "name": "withdrawUnshielded unshielded 250 utwUSDC",
+      "sha256": "c4e2d867326111d47885f001330129cf9d4c5ac981ade68363fafef75ee54ed8",
+      "text": "Site: Give base units 1       \nWithdraw unshielded\nBase units 250000000               \nToken a9e63fe9160bbe0e5758b310db16644d7d147eed8757f13c05197c057538926d\nThis site labels it: 250.000000 utwUSDC                \nTo address e5c7338dfef4c910\nAccount 634b245e815069f7 nonce 18446744073709551615\nDigest cea9f5ec6366f643722d1d8690382b28130020baccb9cc84378ce3db277636de"
+    },
+    {
+      "name": "withdrawShielded unshielded 0.5 utwBTC",
+      "sha256": "231c343b64fde1152a9ba8b9c0587dfd025cca920eca0629c0936d768c5a7e0d",
+      "text": "Site: Token e934b965a454ed68  \nWithdraw shielded\nBase units 50000000                \nToken 84392e97f3eb35ba7e41a575b6b77bb33e9025b39eee7bf9bc78fd17d059e575\nThis site labels it: 0.50000000 utwBTC                 \nTo key 98f0cf069109482c\nAccount c43431f20392f68d nonce 0                   \nDigest 927fa9c8253d783cbbdcb14c1aeb95b33afaeb34df3be41306b95d5c74a7851a"
+    },
+    {
+      "name": "withdrawUnshielded unshielded 0.5 utwBTC",
+      "sha256": "50ecdc99598b90911f731f706f30e12649192bd31e3565f1c2c2eadb01dfef1b",
+      "text": "Site: Night Market - local    \nWithdraw unshielded\nBase units 50000000                \nToken 84392e97f3eb35ba7e41a575b6b77bb33e9025b39eee7bf9bc78fd17d059e575\nThis site labels it: 0.50000000 utwBTC                 \nTo address 21d8311ee414b4f8\nAccount e2cad53503e1b286 nonce 1                   \nDigest cb6980e9e92beeca26734891b965e098bc950161792916a810a541295f827a68"
+    },
+    {
+      "name": "withdrawShielded unrenderable symbol (10 chars)",
+      "sha256": "68dc2ef78126681342c43e6694e868413b3b42e06a8e6e310793e989af2ff16c",
+      "text": "Site: Night Market - stagenet \nWithdraw shielded\nBase units 1500000                 \nToken 4650efbf1ac5a9e5b3eaefd132074dec5ef0f5e82b6ab6a591c1f0687d84e492\nThis site labels it: 1500000 ?                         \nTo key 44f6ebcb702e48a8\nAccount 8add9ce69fbef67f nonce 17                  \nDigest ad81373ea78ec74f1415f80eaa1e3f8ab551e9fde0003d5e15a6e47ce1574026"
+    },
+    {
+      "name": "withdrawUnshielded unrenderable symbol (10 chars)",
+      "sha256": "2a6237a1dab776bfa653c07a89bc2f521ae7cd5be4479265fa4d329b07df37fd",
+      "text": "Site: Cancel all open offers  \nWithdraw unshielded\nBase units 1500000                 \nToken 4650efbf1ac5a9e5b3eaefd132074dec5ef0f5e82b6ab6a591c1f0687d84e492\nThis site labels it: 1500000 ?                         \nTo address ebe70fc41b0275d0\nAccount 31fbc2d15959d3ca nonce 4294967296          \nDigest 5b52597a8d80796ed3b8443c8a85f68fb32376b686716cc7618f3a793d3a57da"
+    },
+    {
+      "name": "withdrawShieldedToContract 1 base unit, 6 dec",
+      "sha256": "e3b9021416a3f36b53640c3fffde73e8d8c0ad3cca56e077feae453eee0e136f",
+      "text": "Site: X                       \nWithdraw to contract\nBase units 1                       \nToken e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 0.000001 twUSDC                   \nTo contract 7d22303deba07582\nAccount 6fdbc7c9362462e4 nonce 18446744073709551615\nDigest cf7ee0ada553acba8ceaf4d767cb6cb8fcfe1a7188640359926f4657ed6382a0"
+    },
+    {
+      "name": "withdrawShieldedToContract 10 twUSDC",
+      "sha256": "0f4050ab013cd8aab67babeb13346dadc67d20b591aa136385be9cc8936f378d",
+      "text": "Site: ABCDEFGHIJKLMNOPQRSTUVWX\nWithdraw to contract\nBase units 10000000                \nToken e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 10.000000 twUSDC                  \nTo contract 8d493d9c1d4aa399\nAccount 0adca30d03568c3f nonce 0                   \nDigest f08b0543cca47d56021ec0da5680a37f165dc42856ebaff7014df104902299e3"
+    },
+    {
+      "name": "withdrawShieldedToContract max u64, 6 dec",
+      "sha256": "8d7857dbbf712571c13f9b07d72ce9f5aac4f1915cf33bfe578c74cdd7356796",
+      "text": "Site: Night Market | ~!@#$%^&*\nWithdraw to contract\nBase units 18446744073709551615    \nToken 723e4cac789f6a9a39cc8eb104037ee0299e9fa7a3fcf58604cfbbc259748a87\nThis site labels it: 18446744073709.551615 twUSDM      \nTo contract 4473f4ca91a3b70b\nAccount 2e126a17a62bdf91 nonce 1                   \nDigest 4c12aa6deddc4d686a556e84b3b9313c6ca2375a8d3c2b1518419710ae850788"
+    },
+    {
+      "name": "withdrawShieldedToContract 1234567.891 twBTC",
+      "sha256": "ce814956c364768efa5016d2ec34800a55d8350d31cb95e444fd53de9828e411",
+      "text": "Site: Give base units 1       \nWithdraw to contract\nBase units 123456789100000         \nToken ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 1234567.89100000 twBTC            \nTo contract 0d8568bddc723353\nAccount f43f0130a3e6ee48 nonce 17                  \nDigest 6a29288d1e1aecc2f2f653de8c31c9951467b3f873251cdb628aa9a0c03b2194"
+    },
+    {
+      "name": "withdrawShieldedToContract 3 twUSDC",
+      "sha256": "ee7fdcec9d536c05d830f1d6711740afae9a5208a396fa4bfb57a456b6747c04",
+      "text": "Site: Token e934b965a454ed68  \nWithdraw to contract\nBase units 3000000                 \nToken e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 3.000000 twUSDC                   \nTo contract 63fbcb17ca835e42\nAccount 7f276d62f07d0c5d nonce 4294967296          \nDigest 0de4a3bb5371d2109ce2c5429eb4cda1a5b9962f60eae808b5668fbc2ac28150"
+    },
+    {
+      "name": "withdrawShieldedToContract unknown token",
+      "sha256": "e5c16efe4d6709984399613bb453b66718d7c715005ac112964c0f77bf0a96aa",
+      "text": "Site: Night Market - local    \nWithdraw to contract\nBase units 42                      \nToken ca7365cd893e6740b3e06dd19e8a19b71fa853877b2435d3d345c945bc14c5e5\nThis site labels it: 42 ?                              \nTo contract 99085e4de34a3d9a\nAccount ed5f4744f5cdfc6d nonce 18446744073709551615\nDigest eac87af53846473e6275f95ae5a21705c98f74ffc165184cf7e61863b8777ec4"
+    },
+    {
+      "name": "withdrawShielded unknown token",
+      "sha256": "bd5525a4bb7444d0757ebd1ebc79452b941cefa9ab891a961473c40fcb82ec39",
+      "text": "Site: Night Market - stagenet \nWithdraw shielded\nBase units 123456789               \nToken ca7365cd893e6740b3e06dd19e8a19b71fa853877b2435d3d345c945bc14c5e5\nThis site labels it: 123456789 ?                       \nTo key def00825bd953266\nAccount 49459b01a587f8a2 nonce 0                   \nDigest 5c89ab9570622fcb468b0655eeb3fae7a6f5cda322648f538250836d3c664138"
+    },
+    {
+      "name": "appendInbox",
+      "sha256": "2da708bb3cd642a0b26a63b91b32e326425bd2f203cbd2d78631dadf4948775a",
+      "text": "Site: Cancel all open offers  \nFile inbox note\nNote 4f25f57f85699991\nAccount c5f6116559b7fbfc nonce 1                   \nDigest 9b405a5f6e8cf57b89d789706182597e735f868b87bbaae35ef2cb19e5c8f4d0"
+    },
+    {
+      "name": "appendInbox zero entry",
+      "sha256": "788d47e8e3e71e2d6285c7aaa4211ae12981d1f4a6a64c39e6e3247d18ca8c89",
+      "text": "Site: X                       \nFile inbox note\nNote 0000000000000000\nAccount 0de230c9181cbc5f nonce 17                  \nDigest 373dca6239d016d7f7b400675352980c706fd9ae20758d82f713eefc632c7f51"
+    },
+    {
+      "name": "withdrawShielded symbol with a space",
+      "sha256": "547429481c40f745fe6ff5b35f4d6c410a71d15da6baf701b58b558f4c1f0b48",
+      "text": "Site: ABCDEFGHIJKLMNOPQRSTUVWX\nWithdraw shielded\nBase units 2000000                 \nToken 720a4f4b5050df7d1f9609554bfddd5333d7702a0d58d9f2bd62362811b59046\nThis site labels it: 2000000 ?                         \nTo key df6226654c1622d6\nAccount ec0ca29a32ce548d nonce 4294967296          \nDigest c7acd15f4d41e4f7766f4f127764e7d4bf0f311a43b89cfcdee653d04b06a664"
+    },
+    {
+      "name": "rotateEncKey cancel (the current key)",
+      "sha256": "1f3f3f716804be567b3ac5c9abc4f43b164867e962726b958617379342325a8b",
+      "text": "Site: Night Market | ~!@#$%^&*\nCancel all open offers\nYour key does not change\nAccount c75cc21d0b2f9280 nonce 18446744073709551615\nDigest 8161a7430e0b42c7ec2d3aea3b2facb77826a343308c275e6bac94f54eea3689"
+    },
+    {
+      "name": "rotateEncKey cancel, zero key",
+      "sha256": "cd6a3e0c4cd09b54e7bcf3265c20f765f64a1b99d5d52a78d015d60c6e043299",
+      "text": "Site: Give base units 1       \nCancel all open offers\nYour key does not change\nAccount 7448819e1a45231e nonce 0                   \nDigest 629150b2d68d07fb269df656aa68d5314990801c88c591347e3abe0447f36495"
+    },
+    {
+      "name": "rotateEncKey to a new key",
+      "sha256": "af9be8d76bdee4a492e7f45d9fc6e87c44d04479224a3e8afe31f9001c64549e",
+      "text": "Site: Token e934b965a454ed68  \nRotate encryption key \nNew key e9111b86c9d0355d\nAccount e959d99f8430e212 nonce 1                   \nDigest b6d1bde1fa02c3341e07f0b8cca2f21956b58f370b7ab2d25b0e67b7f2af3e25"
+    },
+    {
+      "name": "openSwapShielded 10 twUSDC for 0.0002 twBTC, open, never",
+      "sha256": "361c30346761acebee80046743711330a842ae141463a17b4dde181a64d208cc",
+      "text": "Site: Night Market - local    \nSwap offer\nGive base units 10000000                \nGive token e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 10.000000 twUSDC                  \nGet base units 20000                   \nGet token ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 0.00020000 twBTC                  \nTaker anyone          \nExpires never                  \nAccount 7775594c1df2808a nonce 17                  \nDigest 82d206a409bcc4b372398a227667673b0918ba4a5cf3a84a852c76b31993d512"
+    },
+    {
+      "name": "openSwapShielded 1 twETH for 2500 twUSDC, open, deadline",
+      "sha256": "70b034554bbadfd0b51b32175d6f15aa3b7921061c05d712e2062280a142e6b2",
+      "text": "Site: Night Market - stagenet \nSwap offer\nGive base units 1000000000000000000     \nGive token 2862f0f347068b6c4909079ab8e991067b71fe2263ef00c20f017eefb6e9477a\nThis site labels it: 1.000000000000000000 twETH        \nGet base units 2500000000              \nGet token e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 2500.000000 twUSDC                \nTaker anyone          \nExpires 2025-09-30 02:40:00 UTC\nAccount fd373300f1224bf1 nonce 4294967296          \nDigest ebd38895df57a6164f375ca12dd1123596e177e8dfa129dcbf93995cb8bfd899"
+    },
+    {
+      "name": "openSwapShielded twUSDM for twUSDC, named, deadline",
+      "sha256": "ec7cd0738a49ca48cb20b44c57bafbbb722e47bc413d3798e968ec6f432f9d9a",
+      "text": "Site: Cancel all open offers  \nSwap offer\nGive base units 99990000                \nGive token 723e4cac789f6a9a39cc8eb104037ee0299e9fa7a3fcf58604cfbbc259748a87\nThis site labels it: 99.990000 twUSDM                  \nGet base units 100000000               \nGet token e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 100.000000 twUSDC                 \nTaker a7a9c6b437cc244f\nExpires 2025-09-30 03:40:00 UTC\nAccount 8142e809e4097bf5 nonce 18446744073709551615\nDigest 9fa87f3fa5701af5272b296e1f474c332922242fce34f53b904baf44dc2bdbed"
+    },
+    {
+      "name": "openSwapShielded twBTC for twETH, named, max deadline",
+      "sha256": "c59f1d6dcacac843d26b90bfc0360876bebe580c282d023fddeb5a47357024b5",
+      "text": "Site: X                       \nSwap offer\nGive base units 1                       \nGive token ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 0.00000001 twBTC                  \nGet base units 1                       \nGet token 2862f0f347068b6c4909079ab8e991067b71fe2263ef00c20f017eefb6e9477a\nThis site labels it: 0.000000000000000001 twETH        \nTaker 4b241ed3515a9c65\nExpires 9999-12-31 23:59:59 UTC\nAccount 4daa5448b7f71119 nonce 0                   \nDigest a4326904f69f91ad771fda86a2a07d473f6d68b142c0a35a718b6b67ba857de6"
+    },
+    {
+      "name": "openSwapShielded 1 base unit each, open, deadline 1",
+      "sha256": "d6fbc3a2d2e755e1b8c31b63f641c995728efed882e8e6ac1f67b30f8f5a1588",
+      "text": "Site: ABCDEFGHIJKLMNOPQRSTUVWX\nSwap offer\nGive base units 1                       \nGive token ea319c7636c2a7bab04527c8d43abd082442d0cdcaf7b7b93bab22b2a93c3a47\nThis site labels it: 1 WHOLE                           \nGet base units 1                       \nGet token ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 0.00000001 twBTC                  \nTaker anyone          \nExpires 1970-01-01 00:00:01 UTC\nAccount 3c47671cc0137c73 nonce 1                   \nDigest cdb2082181f7f0d247cd3d72b817ff092621d1c426a2a404931f47a5d3e79a51"
+    },
+    {
+      "name": "openSwapShielded max renderable both, open",
+      "sha256": "674d9ae0c3be8aeaa71f2f8f064b5132049d85ac09648ca715733f567aeaf26b",
+      "text": "Site: Night Market | ~!@#$%^&*\nSwap offer\nGive base units 999999999999999999999999\nGive token dc0e0a461a414948b2e01f4703b312560d657572f7dbe8a1c7e9edd8dad04644\nThis site labels it: 999999.999999999999999999 EIGHTCHR\nGet base units 999999999999999999999999\nGet token ea319c7636c2a7bab04527c8d43abd082442d0cdcaf7b7b93bab22b2a93c3a47\nThis site labels it: 999999999999999999999999 WHOLE    \nTaker anyone          \nExpires never                  \nAccount 0f983d68dd306a78 nonce 17                  \nDigest 386695f0bdc5b802b976fe2f256c7a731c406795fa8f90bd2730b4ac502b86d9"
+    },
+    {
+      "name": "openSwapShielded max u64 give, named",
+      "sha256": "fc505d81a1d798943a09cbfed390354351d5efd91453da2baa8ed05fc80104cc",
+      "text": "Site: Give base units 1       \nSwap offer\nGive base units 18446744073709551615    \nGive token e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 18446744073709.551615 twUSDC      \nGet base units 12345                   \nGet token 2862f0f347068b6c4909079ab8e991067b71fe2263ef00c20f017eefb6e9477a\nThis site labels it: 0.000000000000012345 twETH        \nTaker bdcc953ce05793d3\nExpires 2096-10-02 07:06:40 UTC\nAccount ae1b6597321ce78e nonce 4294967296          \nDigest 9e03200208e50741ed7048f8c8a5a018980ca9f912152dfa2791cfcd2c969bb7"
+    },
+    {
+      "name": "openSwapShielded unknown want token, open",
+      "sha256": "71b0efa720104b47b995e69f74b3a952f1b2fec47d2defb9b966daf5d5b2927e",
+      "text": "Site: Token e934b965a454ed68  \nSwap offer\nGive base units 5000000                 \nGive token e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 5.000000 twUSDC                   \nGet base units 7                       \nGet token ca7365cd893e6740b3e06dd19e8a19b71fa853877b2435d3d345c945bc14c5e5\nThis site labels it: 7 ?                               \nTaker anyone          \nExpires never                  \nAccount 51d51b077c8f4569 nonce 18446744073709551615\nDigest 17eba13b2860cbb1659d2f3e81bdce1f2e94531f336e9ac342e277d66c681d03"
+    },
+    {
+      "name": "openSwapShielded leap day 2024-02-29 12:00:00",
+      "sha256": "c854e433be811450044bdb0a8bbf9014a98949f6121946e206e17279e4042130",
+      "text": "Site: Night Market - local    \nSwap offer\nGive base units 10000000                \nGive token e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 10.000000 twUSDC                  \nGet base units 20000                   \nGet token ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 0.00020000 twBTC                  \nTaker anyone          \nExpires 2024-02-29 12:00:00 UTC\nAccount cc11481a221cd4c4 nonce 0                   \nDigest 25c7342ede003b9933befc4bbef2e5cbdc5fa4bf8feb1b8678010f4c78939e4a"
+    },
+    {
+      "name": "openSwapShielded leap day of a 400-year 2000-02-29 23:59:59",
+      "sha256": "34666625f66cf9e545fa19090a6a7e90c16aa99ebab3fc208f55b7d864b10db3",
+      "text": "Site: Night Market - stagenet \nSwap offer\nGive base units 20000                   \nGive token ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 0.00020000 twBTC                  \nGet base units 10000000                \nGet token e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 10.000000 twUSDC                  \nTaker anyone          \nExpires 2000-02-29 23:59:59 UTC\nAccount 3777b3dcfd891f47 nonce 1                   \nDigest 1853ef65585b0ece12e8a3d285de32b4f653ee9a9173b67418f956d2e5348adf"
+    },
+    {
+      "name": "openSwapShielded not a leap year 2100-03-01 00:00:00",
+      "sha256": "8d398980e807d13e01d2131a057860a9b767ef5feba419f1b18a39e79a7b73fa",
+      "text": "Site: Cancel all open offers  \nSwap offer\nGive base units 1000000000000000000     \nGive token 2862f0f347068b6c4909079ab8e991067b71fe2263ef00c20f017eefb6e9477a\nThis site labels it: 1.000000000000000000 twETH        \nGet base units 2500000000              \nGet token e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 2500.000000 twUSDC                \nTaker 5ee36a5596eee5a9\nExpires 2100-03-01 00:00:00 UTC\nAccount e006d78e50350ee0 nonce 17                  \nDigest c8eead20380796311c9458e64775c7be9c90f4b0bf5b1b7a5a0085e458180f2f"
+    },
+    {
+      "name": "openSwapShielded end of a year 2026-12-31 23:59:59",
+      "sha256": "3a68a3a92953be7a1412f7b7eee7d092a23d24216529fdc838f0d2dfd025f3f1",
+      "text": "Site: X                       \nSwap offer\nGive base units 1                       \nGive token 723e4cac789f6a9a39cc8eb104037ee0299e9fa7a3fcf58604cfbbc259748a87\nThis site labels it: 0.000001 twUSDM                   \nGet base units 1                       \nGet token e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 0.000001 twUSDC                   \nTaker anyone          \nExpires 2026-12-31 23:59:59 UTC\nAccount 2642b62a8d05a642 nonce 4294967296          \nDigest 9aff4b464b2d935302879bb0e1aaa5315103f28732bbae34ba130441214e267c"
+    },
+    {
+      "name": "openSwapShielded an hour from now-ish 2026-10-01 13:34:56",
+      "sha256": "4fc0a41915023a96d8340b1ba848521bcdbfdb56a843c5f8e31e4e14ea9b7de0",
+      "text": "Site: ABCDEFGHIJKLMNOPQRSTUVWX\nSwap offer\nGive base units 10000000                \nGive token e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 10.000000 twUSDC                  \nGet base units 20000                   \nGet token ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 0.00020000 twBTC                  \nTaker anyone          \nExpires 2026-10-01 13:34:56 UTC\nAccount a29cd89ca553378d nonce 18446744073709551615\nDigest a6b4b5fc722cf2712ab562958afdfed9cd03cfc9b2f42ca993d6cef0802df45c"
+    },
+    {
+      "name": "openSwapShielded unrenderable give symbol",
+      "sha256": "7394490655ed88683e687f4dd9249b31161a1ef9f4c7d9c415499b0310197c2b",
+      "text": "Site: Night Market | ~!@#$%^&*\nSwap offer\nGive base units 3000000                 \nGive token 4650efbf1ac5a9e5b3eaefd132074dec5ef0f5e82b6ab6a591c1f0687d84e492\nThis site labels it: 3000000 ?                         \nGet base units 1                       \nGet token ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 0.00000001 twBTC                  \nTaker anyone          \nExpires 2026-10-01 13:34:56 UTC\nAccount 48eb9fd521c5d1b6 nonce 0                   \nDigest ed4c822b09285b41af4f33cbfdd7307547750b8244e6458f7658d58e7461e2b8"
+    },
+    {
+      "name": "Q36 rotateEncKey to a new key under the label \"Cancel all open offers\"",
+      "sha256": "ed16904a7f5a36013e66cfe252f4ecf3a5755ca331191d33537494b8ea72831f",
+      "text": "Site: Cancel all open offers  \nRotate encryption key \nNew key 636240c8a9a6ec75\nAccount 871f090b47a03545 nonce 1                   \nDigest 06058225bff6ae2266442f8872a20c68f12d25af7a23bf004e9670c402e0543d"
+    },
+    {
+      "name": "Q36 openSwapShielded giving 1000000 under the label \"Give base units 1\"",
+      "sha256": "e8f9c9ac702818dd1e896cb843dd98e2f97b0601b2dee1d02913102ee2b2a6a4",
+      "text": "Site: Give base units 1       \nSwap offer\nGive base units 1000000                 \nGive token e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f\nThis site labels it: 1.000000 twUSDC                   \nGet base units 1                       \nGet token ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 0.00000001 twBTC                  \nTaker anyone          \nExpires 2026-10-01 13:34:56 UTC\nAccount c875fb17d8a857d4 nonce 17                  \nDigest c7ff4b416aee62758f6492b426b67cbf820a1a7e6e809ed3ded77460cbe519bf"
+    },
+    {
+      "name": "Q36 withdrawShielded under the label \"Token e934b965a454ed68\"",
+      "sha256": "5aacec4f2e076b8a85d219b87ed1057fbd7e990ce36f2ee1bcdf891a74897fc1",
+      "text": "Site: Token e934b965a454ed68  \nWithdraw shielded\nBase units 5000                    \nToken ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e\nThis site labels it: 0.00005000 twBTC                  \nTo key 1bb66e5545a64eca\nAccount bb12b7804956c313 nonce 4294967296          \nDigest 549020e84ddeecce90e762e367ec0f1075f1a71569157764ec158fe1c4441665"
+    },
+    {
+      "name": "Q36 withdrawUnshielded under the label \"Base units 1\"",
+      "sha256": "afd5512a63e0ec17793ad2ee5a1df052a0a1f1d671b323b3e0c4ffca02197318",
+      "text": "Site: Base units 1            \nWithdraw unshielded\nBase units 900000000               \nToken a9e63fe9160bbe0e5758b310db16644d7d147eed8757f13c05197c057538926d\nThis site labels it: 900.000000 utwUSDC                \nTo address 9c476554857406c8\nAccount cc8e121cde7daabe nonce 18446744073709551615\nDigest b4bb5125c59b10b1b20409e2ed74fc839820601109869375f31967efeef317b7"
+    }
+  ]
+}
