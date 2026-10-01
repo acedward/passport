@@ -28,9 +28,12 @@ once, below every arm.
   `signMessage`, RFC 8032 Ed25519) as the device, verified in plain Compact by
   the standard library's `ed25519Verify<#n>` (compactc 0.35.0), with R =
   identity also refused. The wallet signs a readable message the circuit
-  renders from its own arguments (format F3), so what the wallet shows is
-  what executes. Everything about it — the circuits, the message, the safety
-  matrix, the client API and the BREAKING notes of the compiler bump — is in
+  renders from its own arguments (format F3 v2: the exact base units and the
+  full token id it enforces, the site's name and decimals marked as the
+  site's label, a UTC deadline), so what the wallet shows is what executes.
+  One device per account: the arm has no add/remove-device circuits.
+  Everything about it — the circuits, the message, the safety matrix, the
+  client API and the BREAKING notes — is in
   [`docs/ED25519-ARM.md`](docs/ED25519-ARM.md).
 - **Arm `jubjub`** — Schnorr over JubJub, the **normative MIP-0013
   scheme**, unchanged in substance from the trunk: §5.1 challenge
@@ -201,7 +204,8 @@ implementation and in MIP-0013 §3 and §6.
 
 Toolchain (since project 00047): the account compiles with **compactc 0.35.0**
 (language 0.27.0, ZKIR 3.1, compact-runtime 0.20.0 for the generated module
-only, pinned by release-archive SHA-256 in `scripts/compile-account.sh`); see
+only, pinned by release-archive SHA-256: `scripts/compile-account.sh` refuses
+any toolchain `scripts/verify-compactc.sh` cannot verify); see
 `docs/ED25519-ARM.md` § "Toolchain and runtime" for the runtime pin, the two
 proof servers and the BREAKING notes. The paragraph below describes the
 0.34.0 set this package pinned before, which the ERC20 vault package still

@@ -5,8 +5,11 @@
 //     below L and is never reduced;
 //   * the device: key, Solana address, rolling entries, boot commitment, arm separation;
 //   * signing: every gated operation and the offer, through a pluggable sign callback; the
-//     message equals the contract's own rendering; the tweetnacl pre-check refuses a wallet
-//     that signed anything else (another key, another message, a Ledger-wrapped message);
+//     message equals the contract's own rendering (F3 v2: base units, full token id, the site's
+//     marked label, a UTC deadline); the tweetnacl pre-check refuses a wallet that signed
+//     anything else (another key, another message, a Ledger-wrapped message);
+//   * one device per account (Q27): no add/remove device on this arm, in the client or the
+//     account shape; rotate_enc_key with the current key is the market's cancel (Q30);
 //   * the generic surface: `authorise`, `authArgs`, `activationArgs`, `deviceRosterKey`.
 
 import { createHash } from 'node:crypto';
@@ -36,8 +39,17 @@ import {
   type AuthRequest,
   type CallContext,
 } from '../wallet/signer.js';
-import { ED25519_GATED_IN_WAVE_ONE, armCircuits, ed25519AccountWaves } from '../wallet/wave-deploy.js';
+import {
+  ED25519_GATED_IN_WAVE_ONE,
+  ED25519_SWAP_CIRCUIT,
+  armCircuits,
+  contractForArms,
+  contractForEd25519Account,
+  ed25519AccountCircuits,
+  ed25519AccountWaves,
+} from '../wallet/wave-deploy.js';
 import { pureCircuits } from '../wallet/contract.js';
+import { makeWitnesses } from '../wallet/witnesses.js';
 import { bytesToHex } from '../wallet/hex.js';
 
 function assert(cond: boolean, label: string): void {
@@ -158,13 +170,29 @@ await runScenario('ed25519-offline (A4 client)', async () => {
   const act = activationArgs(device, salt);
   assert(act.length === 2 && act[0] === device.pk && act[1] === salt, 'activationArgs: (pk, salt)');
   assert(deviceRosterKey(device) === `ed25519:${device.publicKeyHex}`, 'the roster keys the device by its public key');
-  assert(armCircuits('ed25519').length === 8 && armCircuits('ed25519')[0] === 'activate_initial_device_with_ed25519', 'armCircuits(ed25519): activation + 7 gated');
+  assert(armCircuits('ed25519').length === 6 && armCircuits('ed25519')[0] === 'activate_initial_device_with_ed25519', 'armCircuits(ed25519): activation + 5 gated');
   const waves = ed25519AccountWaves({ withSwap: true });
-  assert(waves.waveOne.length === 3 + ED25519_GATED_IN_WAVE_ONE && waves.waveTwo.at(-1) === 'open_swap_shielded_with_ed25519',
+  assert(waves.waveOne.length === 3 + ED25519_GATED_IN_WAVE_ONE && waves.waveOne.length === 8
+    && waves.waveTwo.length === 1 && waves.waveTwo[0] === ED25519_SWAP_CIRCUIT,
     `waves: ${waves.waveOne.length} in wave 1, ${waves.waveTwo.join(', ')} in wave 2`);
+  assert(ed25519AccountWaves().waveTwo.length === 0, 'without the offer, wave 2 only retires the authority');
+
+  step('one device per account (Q27): no device management on this arm');
+  const noDeviceOps = (ids: string[]) => !ids.some((id) => /^(add|remove)_device_with_ed25519$/.test(id));
+  assert(noDeviceOps(armCircuits('ed25519')) && noDeviceOps(ed25519AccountCircuits({ withSwap: true })),
+    'armCircuits(ed25519) and the market account shape carry no add_device/remove_device');
+  assert(armCircuits('ed25519').includes('rotate_enc_key_with_ed25519'), 'rotate_enc_key stays (the market\'s on-chain cancel, Q30)');
+  for (const [what, C] of [['contractForArms([ed25519])', contractForArms(['ed25519'])], ['contractForEd25519Account({withSwap})', contractForEd25519Account({ withSwap: true })]] as const) {
+    const ids = Object.keys((new (C as any)(makeWitnesses()) as any).provableCircuits);
+    assert(noDeviceOps(ids) && ids.includes('withdraw_shielded_with_ed25519'), `${what}: ${ids.filter((i) => i.endsWith('_with_ed25519')).length} ed25519 circuits, none for devices`);
+  }
+  const allIds = Object.keys((pureCircuits as any));
+  assert(!allIds.some((id) => /(add|remove)_device_with_ed25519|ed25519_message_(add|remove)_device/.test(id)),
+    'the compiled contract exports no ed25519 add/remove-device challenge or message');
 
   step('signing every gated operation through the pluggable callback');
-  const ctx: CallContext = { contractAddress: account, authNonce: 17n, evmDomainSalt: det('network salt') };
+  const encKey = det('current enc key');
+  const ctx: CallContext = { contractAddress: account, authNonce: 17n, evmDomainSalt: det('network salt'), encKey };
   const coin = { nonce: det('coin nonce'), color: USDC, value: 50_000_000n, mt_index: 7n };
   const requests: AuthRequest[] = [
     { op: 'withdrawUnshielded', color: USDC, amount: 1_000_000n, recipient: det('user address') },
@@ -172,8 +200,7 @@ await runScenario('ed25519-offline (A4 client)', async () => {
     { op: 'withdrawShieldedToContract', recipient: det('contract'), color: USDC, amount: 2n, coin },
     { op: 'appendInbox', entry: det('entry', 192) },
     { op: 'rotateEncKey', newKey: det('new key') },
-    { op: 'addDevice', newEntry: other.entryAt(account, 0n, 0n) },
-    { op: 'removeDevice', entry: other.entryAt(account, 0n, 0n) },
+    { op: 'rotateEncKey', newKey: encKey },
   ];
   for (const r of requests) {
     const a = await authorise(device, ctx, r, 3n);
@@ -186,11 +213,22 @@ await runScenario('ed25519-offline (A4 client)', async () => {
   }
   const wd = await device.sign(ctx, requests[1], 0n);
   console.log(`  what Phantom shows for withdrawShielded:\n    ${wd.text.split('\n').join('\n    ')}`);
-  assert(wd.text.includes('Amount                 10.000000 twUSDC   [e934b965]'), 'the amount line shows 10.000000 twUSDC with the colour fingerprint');
+  assert(wd.text.includes('\nBase units 10000000 ') && wd.text.includes(`\nToken ${bytesToHex(USDC)}\n`)
+    && wd.text.includes('\nThis site labels it: 10.000000 twUSDC '),
+    'the withdrawal shows the base units, the full token id and the site\'s marked label (Q25 B′)');
+  const cancel = await device.sign(ctx, { op: 'rotateEncKey', newKey: encKey }, 0n);
+  assert(cancel.text.includes('\nCancel all open offers\nYour key does not change\n'), 're-affirming the current key reads as "Cancel all open offers" (Q30)');
+  const rotate = await device.sign(ctx, { op: 'rotateEncKey', newKey: det('new key') }, 0n);
+  assert(rotate.text.includes('\nRotate encryption key \nNew key ') && !rotate.text.includes('Cancel'), 'any other key reads as a rotation');
+  await refusesAsync(() => device.sign({ ...ctx, encKey: undefined }, { op: 'rotateEncKey', newKey: encKey }, 0n),
+    /current enc_key/, 'rotate_enc_key without the current key in the context');
   await refusesAsync(() => device.sign(ctx, { op: 'withdrawShielded', recipient: det('coin pk'), color: BTC, amount: 1n, coin }, 0n),
     /another token/, 'C2: a shielded withdrawal naming twBTC with a twUSDC coin is refused before the wallet is asked');
   await refusesAsync(() => device.sign(ctx, { op: 'withdrawShieldedToContract', recipient: det('contract'), color: BTC, amount: 1n, coin }, 0n),
     /another token/, 'C2: the same for a withdrawal to a contract');
+  for (const r of [{ op: 'addDevice', newEntry: other.entryAt(account, 0n, 0n) }, { op: 'removeDevice', entry: other.entryAt(account, 0n, 0n) }] as AuthRequest[]) {
+    await refusesAsync(() => device.sign(ctx, r, 0n), /no device management/, `${r.op} is refused on this arm (Q27)`);
+  }
 
   step('the offer (open_swap_shielded_with_ed25519)');
   const call = {
@@ -200,8 +238,13 @@ await runScenario('ed25519-offline (A4 client)', async () => {
   };
   const offer = await device.signOffer(ctx, call, coin, 4n);
   assert(nacl.sign.detached.verify(offer.message, encodeSig(offer.sig), device.publicKey), 'the offer signature verifies');
-  assert(offer.text.includes('Give                 10.000000 twUSDC') && offer.text.includes('Get                 0.00020000 twBTC')
-    && offer.text.includes('Taker anyone') && offer.text.includes('never'), 'the offer text reads give / get / taker / expiry');
+  assert(offer.text.includes('\nGive base units 10000000 ') && offer.text.includes(`\nGive token ${bytesToHex(USDC)}\n`)
+    && offer.text.includes('\nThis site labels it: 10.000000 twUSDC ')
+    && offer.text.includes('\nGet base units 20000 ') && offer.text.includes(`\nGet token ${bytesToHex(BTC)}\n`)
+    && offer.text.includes('\nThis site labels it: 0.00020000 twBTC ')
+    && offer.text.includes('Taker anyone') && offer.text.includes('\nExpires never'), 'the offer text reads give / get / taker / expiry');
+  const timed = await device.signOffer(ctx, { ...call, validUntil: 1_790_861_696n }, coin, 4n);
+  assert(timed.text.includes('\nExpires 2026-10-01 13:34:56 UTC\n'), 'a signed deadline reads as a UTC date and time (C6)');
   assert(ed25519AuthArgs(offer).length === 4, 'the offer expands to the same four trailing arguments');
 
   step('the tweetnacl pre-check refuses a wallet that signed anything else, before any proof');

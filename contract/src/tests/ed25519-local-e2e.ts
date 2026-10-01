@@ -1,8 +1,8 @@
 // The ed25519 arm end to end on a ledger-9 localnet (project 00047, A5 c).
 //
-//   1. deploy a Solana-shaped account: wave 1 = the deposits, the activation and five gated
-//      circuits; wave 2 = the device-lifecycle pair and the offer circuit, in the maintenance
-//      update that retires the authority;
+//   1. deploy a Solana-shaped account: wave 1 = the deposits, the activation and the arm's five
+//      gated circuits; wave 2 = the offer circuit, in the maintenance update that retires the
+//      authority (since P9.C there is no device-lifecycle pair: one device per account, Q27);
 //   2. activate it with a test Ed25519 key (Phantom's scheme, tweetnacl);
 //   3. mint faucet tokens to the wallet and deposit them into the account (`deposit_shielded`);
 //   4. withdraw part of them (`withdraw_shielded_with_ed25519`, the wallet's approval rendered

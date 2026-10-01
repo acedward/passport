@@ -1,4 +1,4 @@
-// The `ed25519` arm's message — what a Solana wallet shows and signs (format F3, v1).
+// The `ed25519` arm's message — what a Solana wallet shows and signs (format F3 v2).
 //
 // A Solana wallet's `signMessage` signs the raw bytes it is handed and displays them as
 // UTF-8, so on this arm the MESSAGE is the approval screen. The contract renders it
@@ -10,57 +10,94 @@
 // `src/tests/ed25519-message-offline.ts` holds the two renderers to byte equality over a
 // golden corpus.
 //
-// The layout (docs/ED25519-ARM.md, "The message"), printable ASCII and '\n' only:
+// The layout (docs/ED25519-ARM.md, "The message"), printable ASCII and '\n' only. Variable-width
+// fields are left-aligned, space-padded and end their line, so each operation's message has
+// one fixed length:
 //
 //   <label, 24>                                   the dApp's label, e.g. "Night Market - stagenet"
 //   <operation title>                             fixed per circuit
-//   <operation lines>                             amounts, fingerprints, deadline
-//   Account <16 hex> nonce <20, right-aligned>
+//   Base units <amount in base units>             ENFORCED: what the call moves
+//   Token <the full 32-byte token id, 64 hex>     ENFORCED: which token
+//   This site labels it: <amount> <symbol>        the site's decimals and name, marked as such
+//   <recipient / taker / deadline lines>          "Expires YYYY-MM-DD hh:mm:ss UTC" (or never)
+//
+// (rotate_enc_key has no amount: "Rotate encryption key / New key <16 hex>", or, for the same
+// key, the market's cancel: "Cancel all open offers / Your key does not change".)
+//   Account <16 hex> nonce <auth_nonce>
 //   Digest <64 hex>                               the challenge
 //
-// Amounts are 25 characters, right-aligned, with the token's decimal point; a u64 counter is
-// 20 right-aligned digits; a fingerprint is the first 8 bytes (4 for a colour) as lowercase
-// hex. Everything here is browser-safe: no Node built-ins.
+// Q25 B′: there is no token registry on chain, so a token's name and decimals cannot be
+// enforced. The text therefore shows what the contract enforces (the base units and the full
+// token id) and puts the site's name and decimals on a line that says whose claim it is. The
+// site line's digits are still the amount's own digits: the site chooses only where the
+// decimal point goes and the symbol. Everything here is browser-safe: no Node built-ins.
 
 import { bytesToHex } from './hex.js';
 
+/** The message format this module and the contract render. */
+export const ED25519_MESSAGE_FORMAT = 'F3 v2';
 export const ED25519_LABEL_BYTES = 24;
 export const ED25519_SYMBOL_BYTES = 8;
-export const ED25519_AMOUNT_DIGITS = 24;
-export const ED25519_COUNT_DIGITS = 20;
+/** The width of the base-unit amount field (24 decimal digits). */
+export const ED25519_UNITS_BYTES = 24;
+/** The width of the site-label field: up to 25 characters of amount, a space, an 8-character symbol. */
+export const ED25519_SITE_BYTES = 34;
+/** The width of the auth_nonce field (a u64 has at most 20 decimal digits). */
+export const ED25519_NONCE_BYTES = 20;
 export const ED25519_MAX_DECIMALS = 18;
 /** The largest base-unit amount the arm can render (and therefore authorise): 10^24 - 1. */
 export const ED25519_MAX_AMOUNT = 10n ** 24n - 1n;
+/** The latest offer deadline the arm can render: 9999-12-31 23:59:59 UTC (Unix seconds). */
+export const ED25519_MAX_DEADLINE = 253_402_300_799n;
 const U64_MAX = (1n << 64n) - 1n;
 
-/** How a token is shown: its symbol (<= 8 printable ASCII characters) and decimals (0..18).
- *  Display only — the colour itself is bound by the challenge and fingerprinted in the text. */
+/** How the site labels a token: its symbol (1..8 printable ASCII characters, no space) and
+ *  decimals (0..18). Display only — the message marks it as the site's label, and shows the
+ *  enforced base units and the full token id beside it. */
 export interface EdTokenDisplay {
   symbol: string;
   decimals: number;
 }
 
-/** Looks a colour up in the dApp's token list. Unknown colours render as base units
- *  (decimals 0) under the symbol "?" — the colour fingerprint beside it is still exact. */
+/** Looks a colour up in the dApp's token list. Unknown colours (and displays the arm cannot
+ *  render) are labelled in base units (decimals 0) under the symbol "?". */
 export type EdTokenResolver = (colorHex: string) => EdTokenDisplay | undefined;
 
 export const UNKNOWN_TOKEN: EdTokenDisplay = { symbol: '?', decimals: 0 };
 
-// ── The circuit's display inputs (the generated `EdAmount`, `EdCount`, `EdShow*` shapes) ──
-
-export interface EdAmountValue {
-  digits: bigint[];
-  top: bigint;
-  decimals: bigint;
-  symbol: bigint[];
+/** Whether the arm can show this token display: a symbol of 1..8 printable ASCII characters
+ *  without a space, and integer decimals in 0..18. */
+export function isRenderableTokenDisplay(t: EdTokenDisplay | undefined): t is EdTokenDisplay {
+  return (
+    t !== undefined &&
+    /^[\x21-\x7e]{1,8}$/.test(t.symbol) &&
+    Number.isInteger(t.decimals) &&
+    t.decimals >= 0 &&
+    t.decimals <= ED25519_MAX_DECIMALS
+  );
 }
-export interface EdCountValue {
+
+// ── The circuit's display inputs (the generated `EdAmount`, `EdDeadline`, `EdShow*` shapes) ──
+
+/** An amount's display input: two ASCII texts, left-aligned and space-padded. */
+export interface EdAmountValue {
+  /** The base-unit amount in decimal, 24 bytes. */
+  units: bigint[];
+  /** The site's label "<amount with its decimal point> <symbol>", 34 bytes. */
+  site: bigint[];
+}
+/** An offer deadline's display input: the civil UTC date and time, and the leap-day quotients. */
+export interface EdDeadlineValue {
+  /** YYYYMMDDhhmmss, one digit (0..9) each. */
   digits: bigint[];
-  top: bigint;
+  q4: bigint;
+  q100: bigint;
+  q400: bigint;
 }
 export interface EdShowValue {
   label: bigint[];
-  nonce: EdCountValue;
+  /** The auth_nonce in decimal, 20 bytes. */
+  nonce: bigint[];
 }
 export interface EdShowAmountValue extends EdShowValue {
   amount: EdAmountValue;
@@ -68,7 +105,7 @@ export interface EdShowAmountValue extends EdShowValue {
 export interface EdShowSwapValue extends EdShowValue {
   give: EdAmountValue;
   want: EdAmountValue;
-  until: EdCountValue;
+  until: EdDeadlineValue;
 }
 export type EdShowAny = EdShowValue | EdShowAmountValue | EdShowSwapValue;
 
@@ -84,78 +121,100 @@ function fixedText(text: string, width: number, what: string): bigint[] {
 /** The label a dApp puts on top of every message (<= 24 printable ASCII characters). */
 export const edLabel = (label: string): bigint[] => fixedText(label, ED25519_LABEL_BYTES, 'the ed25519 message label');
 
-/** A token symbol as the circuit takes it (<= 8 printable ASCII characters). */
-export const edSymbol = (symbol: string): bigint[] => fixedText(symbol, ED25519_SYMBOL_BYTES, 'a token symbol');
-
-/** Little-endian decimal digits of `value`, and the index of the top SHOWN digit: the larger
- *  of its most significant non-zero digit and `units` (the position of the units digit). */
-export function edDigits(value: bigint, width: number, units: number): { digits: bigint[]; top: bigint } {
-  if (value < 0n) throw new RangeError('a displayed value cannot be negative');
-  if (value >= 10n ** BigInt(width)) throw new RangeError(`${value} does not fit ${width} decimal digits`);
-  const digits: bigint[] = [];
-  let v = value;
-  for (let i = 0; i < width; i++) {
-    digits.push(v % 10n);
-    v /= 10n;
+function checkAmount(value: bigint): void {
+  if (value < 0n) throw new RangeError('a displayed amount cannot be negative');
+  if (value > ED25519_MAX_AMOUNT) {
+    throw new RangeError(`the ed25519 arm renders amounts below 10^24 base units; ${value} is too large`);
   }
-  let msd = 0;
-  for (let i = 0; i < width; i++) if (digits[i] !== 0n) msd = i;
-  return { digits, top: BigInt(Math.max(msd, units)) };
+}
+
+/** A base-unit amount as the message shows it: plain decimal ("10000000"). */
+export function renderUnits(value: bigint): string {
+  checkAmount(value);
+  return value.toString();
+}
+
+/** A base-unit amount with `decimals` digits after the point ("10.000000"; no point for 0). */
+export function renderDecimal(value: bigint, decimals: number): string {
+  checkAmount(value);
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > ED25519_MAX_DECIMALS) {
+    throw new RangeError(`token decimals must be an integer in 0..${ED25519_MAX_DECIMALS}, got ${decimals}`);
+  }
+  if (decimals === 0) return value.toString();
+  const text = value.toString().padStart(decimals + 1, '0');
+  return `${text.slice(0, text.length - decimals)}.${text.slice(text.length - decimals)}`;
+}
+
+/** The site's label for an amount: "<amount with the site's decimals> <symbol>" ("10.000000 twUSDC"). */
+export function renderSiteLabel(value: bigint, token: EdTokenDisplay): string {
+  if (!isRenderableTokenDisplay(token)) {
+    throw new RangeError(
+      `a token label needs a symbol of 1..${ED25519_SYMBOL_BYTES} printable characters without a space and `
+      + `decimals 0..${ED25519_MAX_DECIMALS}: ${JSON.stringify(token)}`,
+    );
+  }
+  return `${renderDecimal(value, token.decimals)} ${token.symbol}`;
 }
 
 /** The circuit's `EdAmount` for a base-unit amount of a token. */
 export function edAmount(value: bigint, token: EdTokenDisplay): EdAmountValue {
-  if (!Number.isInteger(token.decimals) || token.decimals < 0 || token.decimals > ED25519_MAX_DECIMALS) {
-    throw new RangeError(`token decimals must be an integer in 0..${ED25519_MAX_DECIMALS}, got ${token.decimals}`);
-  }
-  if (value > ED25519_MAX_AMOUNT) {
-    throw new RangeError(`the ed25519 arm renders amounts below 10^24 base units; ${value} is too large`);
-  }
-  const { digits, top } = edDigits(value, ED25519_AMOUNT_DIGITS, token.decimals);
-  return { digits, top, decimals: BigInt(token.decimals), symbol: edSymbol(token.symbol) };
+  return {
+    units: fixedText(renderUnits(value), ED25519_UNITS_BYTES, 'the base-unit amount'),
+    site: fixedText(renderSiteLabel(value, token), ED25519_SITE_BYTES, 'the site label'),
+  };
 }
 
-/** The circuit's `EdCount` for a u64 counter (auth_nonce, an offer deadline). */
-export function edCount(value: bigint): EdCountValue {
+/** A u64 counter (the auth_nonce) as the message shows it. */
+export function renderNonce(value: bigint): string {
   if (value < 0n || value > U64_MAX) throw new RangeError(`${value} is not a u64`);
-  return edDigits(value, ED25519_COUNT_DIGITS, 0);
+  return value.toString();
+}
+
+/** The circuit's nonce text (20 bytes). */
+export const edNonce = (value: bigint): bigint[] => fixedText(renderNonce(value), ED25519_NONCE_BYTES, 'the nonce');
+
+/** The civil UTC date and time of a deadline (Unix seconds), 1970..9999. */
+function civil(value: bigint): { y: number; mo: number; d: number; h: number; mi: number; s: number } {
+  if (value < 0n || value > ED25519_MAX_DEADLINE) {
+    throw new RangeError(`the ed25519 arm renders deadlines up to 9999-12-31 23:59:59 UTC (${ED25519_MAX_DEADLINE}); ${value} is out of range`);
+  }
+  const t = new Date(Number(value) * 1000);
+  return { y: t.getUTCFullYear(), mo: t.getUTCMonth() + 1, d: t.getUTCDate(), h: t.getUTCHours(), mi: t.getUTCMinutes(), s: t.getUTCSeconds() };
+}
+
+const two = (n: number) => String(n).padStart(2, '0');
+
+/** An offer deadline as the message shows it (23 characters): "YYYY-MM-DD hh:mm:ss UTC", or
+ *  "never" (space-padded) for 0, the contract's no-deadline value. */
+export function renderDeadline(value: bigint): string {
+  const c = civil(value);
+  if (value === 0n) return 'never'.padEnd(23, ' ');
+  return `${String(c.y).padStart(4, '0')}-${two(c.mo)}-${two(c.d)} ${two(c.h)}:${two(c.mi)}:${two(c.s)} UTC`;
+}
+
+/** The circuit's `EdDeadline` for an offer deadline (0 is 1970-01-01 00:00:00). */
+export function edDeadline(value: bigint): EdDeadlineValue {
+  const c = civil(value);
+  const text = `${String(c.y).padStart(4, '0')}${two(c.mo)}${two(c.d)}${two(c.h)}${two(c.mi)}${two(c.s)}`;
+  const before = BigInt(c.y - 1);
+  return { digits: [...text].map((ch) => BigInt(ch)), q4: before / 4n, q100: before / 100n, q400: before / 400n };
 }
 
 // ── The independent renderer ────────────────────────────────────────────────
 
-/** A base-unit amount as 25 right-aligned characters with the token's decimal point. */
-export function renderAmount(value: bigint, decimals: number): string {
-  if (value < 0n || value > ED25519_MAX_AMOUNT) throw new RangeError(`amount ${value} out of the renderable range`);
-  let text = value.toString();
-  if (decimals > 0) {
-    text = text.padStart(decimals + 1, '0');
-    text = `${text.slice(0, text.length - decimals)}.${text.slice(text.length - decimals)}`;
-  }
-  return text.padStart(25, ' ');
-}
-
-/** A u64 as 20 right-aligned digits. */
-export const renderCount = (value: bigint): string => {
-  if (value < 0n || value > U64_MAX) throw new RangeError(`${value} is not a u64`);
-  return value.toString().padStart(20, ' ');
-};
-
-/** An offer deadline: its value, or "never" for zero (the contract's no-deadline value). */
-export const renderDeadline = (value: bigint): string => (value === 0n ? 'never'.padStart(20, ' ') : renderCount(value));
-
 const fp8 = (bytes: Uint8Array): string => bytesToHex(bytes.subarray(0, 8));
-const fp4 = (bytes: Uint8Array): string => bytesToHex(bytes.subarray(0, 4));
 
 /** One gated operation, as the message needs it. The shapes mirror `AuthRequest` (signer.ts)
- *  plus the offer, whose request lives in `offer.ts`. */
+ *  plus the offer, whose request lives in `offer.ts`. The arm has no device management (Q27),
+ *  so there is no addDevice or removeDevice message. `rotateEncKey` carries the account's
+ *  CURRENT key too: re-affirming it is the market's on-chain cancel (Q30), and the message says
+ *  "Cancel all open offers" for it instead of "Rotate encryption key". */
 export type Ed25519MessageInput =
   | { op: 'withdrawUnshielded'; color: Uint8Array; amount: bigint; recipient: Uint8Array }
   | { op: 'withdrawShielded'; recipient: Uint8Array; color: Uint8Array; amount: bigint }
   | { op: 'withdrawShieldedToContract'; recipient: Uint8Array; color: Uint8Array; amount: bigint }
   | { op: 'appendInbox'; entry: Uint8Array }
-  | { op: 'rotateEncKey'; newKey: Uint8Array }
-  | { op: 'addDevice'; newEntry: Uint8Array }
-  | { op: 'removeDevice'; entry: Uint8Array }
+  | { op: 'rotateEncKey'; newKey: Uint8Array; currentKey: Uint8Array }
   | {
       op: 'openSwapShielded';
       giveColor: Uint8Array;
@@ -176,7 +235,7 @@ export interface Ed25519MessageFrame {
   challenge: Uint8Array;
   /** The dApp's label, <= 24 printable ASCII characters. */
   label: string;
-  /** The dApp's token list (symbol + decimals per colour). */
+  /** The dApp's token list (symbol + decimals per colour), shown as the site's label. */
   tokens?: EdTokenResolver;
 }
 
@@ -191,21 +250,29 @@ export interface Ed25519Message {
 
 /** The fixed message length of each gated circuit (`ed25519_message_*` return types). */
 export const ED25519_MESSAGE_BYTES = {
-  withdrawUnshielded: 249,
-  withdrawShielded: 243,
-  withdrawShieldedToContract: 251,
+  withdrawUnshielded: 359,
+  withdrawShielded: 353,
+  withdrawShieldedToContract: 361,
   appendInbox: 186,
-  rotateEncKey: 195,
-  addDevice: 182,
-  removeDevice: 185,
-  openSwapShielded: 313,
+  rotateEncKey: 196,
+  openSwapShielded: 558,
 } as const;
 
-const tokenFor = (frame: Ed25519MessageFrame, color: Uint8Array): EdTokenDisplay =>
-  frame.tokens?.(bytesToHex(color)) ?? UNKNOWN_TOKEN;
+/** The site's display for a colour: the resolver's, when the arm can render it; otherwise the
+ *  UNKNOWN label ("?", decimals 0). */
+export function tokenDisplayFor(tokens: EdTokenResolver | undefined, color: Uint8Array): EdTokenDisplay {
+  const t = tokens?.(bytesToHex(color));
+  return isRenderableTokenDisplay(t) ? t : UNKNOWN_TOKEN;
+}
 
-function amountLine(prefix: string, value: bigint, color: Uint8Array, token: EdTokenDisplay): string {
-  return `${prefix}${renderAmount(value, token.decimals)} ${token.symbol.padEnd(8, ' ')} [${fp4(color)}]\n`;
+/** "Base units <24>\nToken <64 hex>\nThis site labels it: <34>\n" with optional word prefixes. */
+function amountLines(value: bigint, color: Uint8Array, token: EdTokenDisplay, units: string, tokenWord: string): string {
+  if (color.length !== 32) throw new RangeError('a token id is 32 bytes');
+  return (
+    `${units}${renderUnits(value).padEnd(ED25519_UNITS_BYTES, ' ')}\n`
+    + `${tokenWord}${bytesToHex(color)}\n`
+    + `This site labels it: ${renderSiteLabel(value, token).padEnd(ED25519_SITE_BYTES, ' ')}\n`
+  );
 }
 
 /** Render the message for one call. Throws on anything the circuit would refuse to render. */
@@ -213,10 +280,10 @@ export function renderEd25519Message(frame: Ed25519MessageFrame, input: Ed25519M
   if (frame.contractAddress.length !== 32) throw new RangeError('the account address is 32 bytes');
   if (frame.challenge.length !== 32) throw new RangeError('the challenge is 32 bytes');
   const label = edLabel(frame.label);
-  const nonce = edCount(frame.authNonce);
+  const nonce = edNonce(frame.authNonce);
   const head = (title: string) => `${frame.label.padEnd(24, ' ')}\n${title}\n`;
   const tail =
-    `Account ${fp8(frame.contractAddress)} nonce ${renderCount(frame.authNonce)}\n` +
+    `Account ${fp8(frame.contractAddress)} nonce ${renderNonce(frame.authNonce).padEnd(ED25519_NONCE_BYTES, ' ')}\n` +
     `Digest ${bytesToHex(frame.challenge)}`;
 
   let text: string;
@@ -225,13 +292,13 @@ export function renderEd25519Message(frame: Ed25519MessageFrame, input: Ed25519M
     case 'withdrawUnshielded':
     case 'withdrawShielded':
     case 'withdrawShieldedToContract': {
-      const token = tokenFor(frame, input.color);
+      const token = tokenDisplayFor(frame.tokens, input.color);
       const [title, to] = {
         withdrawUnshielded: ['Withdraw unshielded', 'To address '],
         withdrawShielded: ['Withdraw shielded', 'To key '],
         withdrawShieldedToContract: ['Withdraw to contract', 'To contract '],
       }[input.op];
-      text = head(title) + amountLine('Amount ', input.amount, input.color, token) + `${to}${fp8(input.recipient)}\n` + tail;
+      text = head(title) + amountLines(input.amount, input.color, token, 'Base units ', 'Token ') + `${to}${fp8(input.recipient)}\n` + tail;
       show = { label, nonce, amount: edAmount(input.amount, token) };
       break;
     }
@@ -239,26 +306,23 @@ export function renderEd25519Message(frame: Ed25519MessageFrame, input: Ed25519M
       text = head('File inbox note') + `Note ${fp8(input.entry)}\n` + tail;
       show = { label, nonce };
       break;
-    case 'rotateEncKey':
-      text = head('Rotate encryption key') + `New key ${fp8(input.newKey)}\n` + tail;
+    case 'rotateEncKey': {
+      if (input.newKey.length !== 32 || input.currentKey.length !== 32) throw new RangeError('an encryption key is 32 bytes');
+      const keep = bytesToHex(input.newKey) === bytesToHex(input.currentKey);
+      text = keep
+        ? head('Cancel all open offers') + 'Your key does not change\n' + tail
+        : head('Rotate encryption key'.padEnd(22, ' ')) + `New key ${fp8(input.newKey)}\n` + tail;
       show = { label, nonce };
       break;
-    case 'addDevice':
-      text = head('Add device') + `Entry ${fp8(input.newEntry)}\n` + tail;
-      show = { label, nonce };
-      break;
-    case 'removeDevice':
-      text = head('Remove device') + `Entry ${fp8(input.entry)}\n` + tail;
-      show = { label, nonce };
-      break;
+    }
     case 'openSwapShielded': {
-      const give = tokenFor(frame, input.giveColor);
-      const want = tokenFor(frame, input.want.color);
+      const give = tokenDisplayFor(frame.tokens, input.giveColor);
+      const want = tokenDisplayFor(frame.tokens, input.want.color);
       const taker = input.recipientKind === 0n ? 'anyone'.padEnd(16, ' ') : fp8(input.recipient);
       text =
         head('Swap offer') +
-        amountLine('Give ', input.giveAmount, input.giveColor, give) +
-        amountLine('Get  ', input.want.value, input.want.color, want) +
+        amountLines(input.giveAmount, input.giveColor, give, 'Give base units ', 'Give token ') +
+        amountLines(input.want.value, input.want.color, want, 'Get base units ', 'Get token ') +
         `Taker ${taker}\n` +
         `Expires ${renderDeadline(input.validUntil)}\n` +
         tail;
@@ -267,9 +331,13 @@ export function renderEd25519Message(frame: Ed25519MessageFrame, input: Ed25519M
         nonce,
         give: edAmount(input.giveAmount, give),
         want: edAmount(input.want.value, want),
-        until: edCount(input.validUntil),
+        until: edDeadline(input.validUntil),
       };
       break;
+    }
+    default: {
+      const op = (input as { op: string }).op;
+      throw new Error(`${op}: the ed25519 arm has no such operation (no add/remove device: one device per account, Q27)`);
     }
   }
   const bytes = Uint8Array.from([...text].map((c) => c.charCodeAt(0)));

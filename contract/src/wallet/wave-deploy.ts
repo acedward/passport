@@ -75,9 +75,28 @@ const GATED_BASES = [
   'remove_device',
 ] as const;
 
+/**
+ * The gated operations of the `ed25519` arm (project 00047): GATED_BASES without the device
+ * pair. Q27 (owner, 2026-10-01): an account a Solana wallet controls carries exactly ONE device,
+ * so the arm exports no `add_device` or `remove_device` circuit (the market never used them, and
+ * "Add device" was one phishing signature from a takeover: audit C5). `rotate_enc_key` stays
+ * because the market uses it (Q30): re-affirming the current key is its on-chain cancel. The
+ * order is GATED_BASES'.
+ */
+export const ED25519_GATED_BASES = [
+  'withdraw_unshielded',
+  'append_inbox',
+  'withdraw_shielded',
+  'withdraw_shielded_to_contract',
+  'rotate_enc_key',
+] as const;
+
+/** The gated operations an arm exports, in deploy order. */
+export const gatedBases = (arm: Arm): readonly string[] => (arm === 'ed25519' ? ED25519_GATED_BASES : GATED_BASES);
+
 /** Every impure circuit of one arm, activation included. */
 export const armCircuits = (arm: Arm): string[] =>
-  ['activate_initial_device', ...GATED_BASES].map((base) => `${base}_with_${arm}`);
+  ['activate_initial_device', ...gatedBases(arm)].map((base) => `${base}_with_${arm}`);
 
 /** The permissionless deposits, carried by every account whatever its arms. */
 export const SHARED_CIRCUITS = ['deposit_unshielded', 'deposit_shielded'];
@@ -190,13 +209,14 @@ export const EVM_GATED_IN_WAVE_ONE = 5;
  */
 
 /**
- * How many of the `ed25519` arm's seven gated circuits fit wave 1 (project 00047).
+ * How many of the `ed25519` arm's gated circuits go in wave 1 (project 00047): all five.
  *
- * The arm's gated circuits are k=17/18 like the `evm` arm's, so its wave 1 is capped at the
- * same eight operations the node was measured to accept for `evm` (Q28): the deposits, the
- * activation and five gated circuits. The ORDER is `GATED_BASES`, so what waits for wave 2
- * is the device-lifecycle pair, exactly as for `evm`. `src/tests/ed25519-local-e2e.ts`
- * deploys this split on a ledger-9 localnet (docs/ED25519-ARM.md records the measurement).
+ * The arm's gated circuits are k=17/18 like the `evm` arm's, so its wave 1 is capped at the same
+ * eight operations the node was measured to accept for `evm` (Q28): the deposits, the activation
+ * and five gated circuits, which since Q27 (no add/remove device) is the whole arm. Wave 2 is the
+ * maintenance update that retires the authority, carrying the offer circuit for a market account
+ * and nothing else. (Before Q27 the device-lifecycle pair rode wave 2 too;
+ * `src/tests/ed25519-local-e2e.ts` deployed that split on a ledger-9 localnet.)
  */
 export const ED25519_GATED_IN_WAVE_ONE = 5;
 
@@ -210,7 +230,7 @@ export function defaultWaves(firstArm: Arm): { waveOne: string[]; waveTwo: strin
     return { waveOne: [...SHARED_CIRCUITS, ...armCircuits(firstArm)], waveTwo: [] };
   }
   const inWaveOne = firstArm === 'evm' ? EVM_GATED_IN_WAVE_ONE : ED25519_GATED_IN_WAVE_ONE;
-  const gated = GATED_BASES.map((base) => `${base}_with_${firstArm}`);
+  const gated = gatedBases(firstArm).map((base) => `${base}_with_${firstArm}`);
   return {
     waveOne: [...SHARED_CIRCUITS, `activate_initial_device_with_${firstArm}`, ...gated.slice(0, inWaveOne)],
     waveTwo: gated.slice(inWaveOne),
@@ -219,9 +239,11 @@ export function defaultWaves(firstArm: Arm): { waveOne: string[]; waveTwo: strin
 
 /**
  * The waves of an account whose device is a Solana wallet (`ed25519`), with or without the
- * offer circuit. A market account passes `{ withSwap: true }`; the offer circuit then rides the
- * maintenance update that also retires the authority (`retireAuthority` stays true: a customer
- * account keeps no key above its device seam).
+ * offer circuit. Wave 1: the deposits, the activation and the arm's four gated circuits. A market
+ * account passes `{ withSwap: true }`; the offer circuit then rides the maintenance update that
+ * also retires the authority (`retireAuthority` stays true: a customer account keeps no key above
+ * its device seam). Without the offer, wave 2 only retires the authority. No device management
+ * (Q27): one device per account.
  */
 export function ed25519AccountWaves(o: { withSwap?: boolean } = {}): { waveOne: string[]; waveTwo: string[] } {
   const w = defaultWaves('ed25519');

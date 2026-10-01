@@ -19,7 +19,14 @@
 // The state is built in the simulator: the constructor, then the activation of the case's key
 // (the lax twin's activation for keys the strict one refuses), then the gated call.
 //
-//   CIRCUITS=rotate_enc_key_with_ed25519,append_inbox_with_ed25519 \
+// C2 (P9.C): on the two shielded withdrawals one more case, a VALID signature over a withdrawal
+// that names one token while the `held_coin` witness returns a coin of another (what a dishonest
+// prover's witness can do): the strict circuit must refuse it (`held coin colour does not match
+// the withdrawn colour`). The mutation check runs the same case on the C2 MUTANT (the strict
+// contract minus only that assert; `ED25519_TWIN=c2-mutant scripts/ed25519-lax-twin.sh`), where
+// it must be ACCEPTED: the case fails without the fix.
+//
+//   CIRCUITS=append_inbox_with_ed25519,rotate_enc_key_with_ed25519,withdraw_shielded_with_ed25519,withdraw_shielded_to_contract_with_ed25519 \
 //   PROOF_SERVER=http://ps8:6300 IR_DIR=<dir with <circuit>.bzkir> OUT=<dir> npx tsx src/tests/ed25519-safety.ts
 
 import { createHash } from 'node:crypto';
@@ -33,19 +40,22 @@ import * as ledgerLib from '@midnightntwrk/ledger-v9';
 
 import { runScenario, step } from './runner.js';
 import * as Strict from '../../contracts/managed/account/contract/index.js';
-import { ED25519_L, decodeEd25519Point, decodeEd25519Signature, encodeEd25519Point } from '../wallet/ed25519.js';
-import { renderEd25519Message, edCount, type Ed25519MessageInput } from '../wallet/ed25519-message.js';
-import { emptyCoinStore, makeWitnesses } from '../wallet/witnesses.js';
+import { ED25519_L, decodeEd25519Point, decodeEd25519Signature, ed25519RequestFor, encodeEd25519Point } from '../wallet/ed25519.js';
+import { renderEd25519Message, type Ed25519MessageInput } from '../wallet/ed25519-message.js';
+import { emptyCoinStore, makeWitnesses, withCoin, type CoinStorePrivateState } from '../wallet/witnesses.js';
+import type { AuthRequest } from '../wallet/signer.js';
 import { bytesToHex, hexToBytes } from '../wallet/hex.js';
 
 const ledger: any = ledgerLib;
 const HERE = path.dirname(new URL(import.meta.url).pathname);
 const ROOT = path.resolve(HERE, '..', '..');
 const LAX_DIR = process.env.LAX_DIR ?? path.join(ROOT, 'contracts', 'managed', 'account-lax');
+const MUTANT_DIR = process.env.MUTANT_DIR ?? path.join(ROOT, 'contracts', 'managed', 'account-c2-mutant');
 const IR_DIR = process.env.IR_DIR ?? path.join(ROOT, 'contracts', 'managed', 'account', 'zkir');
 const OUT = process.env.OUT ?? path.join(ROOT, 'out', 'ed25519-safety');
 const PROOF_SERVER = process.env.PROOF_SERVER?.replace(/\/$/, '');
-const CIRCUITS = (process.env.CIRCUITS ?? 'rotate_enc_key_with_ed25519,append_inbox_with_ed25519').split(',');
+const CIRCUITS = (process.env.CIRCUITS
+  ?? 'append_inbox_with_ed25519,rotate_enc_key_with_ed25519,withdraw_shielded_with_ed25519,withdraw_shielded_to_contract_with_ed25519').split(',');
 
 const det = (label: string, n = 32): Uint8Array => {
   const out = new Uint8Array(n);
@@ -76,25 +86,68 @@ const SALT = det('network salt');
 const OTHER_SALT = det('another network');
 const OTHER_ADDRESS = det('another account');
 const LABEL = 'Night Market - stagenet';
+const ENC_KEY = det('enc key');
+// Two tokens: the account holds a coin of USDC; the C2 case's withdrawal NAMES BTC.
+const USDC = hexToBytes('e934b965a454ed6857080e9956ea83fb5542e0a860e96ce91daf35f5d7b02c9f');
+const BTC = hexToBytes('ad2ba014014e6ec705357be9db5d3ad6f535d4bef6576f84a461f23b313a2e8e');
+const COIN = { nonce: det('held coin nonce'), color: USDC, value: 50_000_000n, mtIndex: 3n };
+const QCOIN = { nonce: COIN.nonce, color: COIN.color, value: COIN.value, mt_index: COIN.mtIndex };
 
-/** The call each circuit makes, as the message renderer and the circuit take it. */
-function callOf(circuit: string): { input: Ed25519MessageInput; args: unknown[]; challenge: (addr: Uint8Array, pk: any, salt: Uint8Array, nonce: bigint) => Uint8Array } {
+/** The call a case makes. `c2`: the withdrawal names BTC while the witness returns the USDC coin. */
+type Variant = 'honest' | 'c2';
+
+/** The call each circuit makes, as the message renderer and the circuit take it, plus the private
+ *  state its witness reads. */
+function callOf(circuit: string, variant: Variant = 'honest'): {
+  input: Ed25519MessageInput;
+  request: AuthRequest;
+  args: unknown[];
+  challenge: (addr: Uint8Array, pk: any, salt: Uint8Array, nonce: bigint) => Uint8Array;
+  privateState: () => CoinStorePrivateState;
+} {
   const pc: any = (Strict as any).pureCircuits;
+  const store = () => emptyCoinStore();
   switch (circuit) {
     case 'rotate_enc_key_with_ed25519': {
       const newKey = det('new enc key');
       return {
-        input: { op: 'rotateEncKey', newKey },
+        input: { op: 'rotateEncKey', newKey, currentKey: ENC_KEY },
+        request: { op: 'rotateEncKey', newKey },
         args: [newKey],
         challenge: (addr, pk, salt, nonce) => pc.challenge_rotate_enc_key_with_ed25519({ bytes: addr }, pk, salt, newKey, nonce),
+        privateState: store,
       };
     }
     case 'append_inbox_with_ed25519': {
       const entry = det('inbox entry', 192);
       return {
         input: { op: 'appendInbox', entry },
+        request: { op: 'appendInbox', entry },
         args: [entry],
         challenge: (addr, pk, salt, nonce) => pc.challenge_append_inbox_with_ed25519({ bytes: addr }, pk, salt, entry, nonce),
+        privateState: store,
+      };
+    }
+    case 'withdraw_shielded_with_ed25519':
+    case 'withdraw_shielded_to_contract_with_ed25519': {
+      const toContract = circuit === 'withdraw_shielded_to_contract_with_ed25519';
+      const recipient = det(toContract ? 'recipient contract' : 'recipient coin key');
+      const amount = 20_000_000n;
+      // Honest: the coin store holds the USDC coin under its own colour. C2: the store answers
+      // the BTC lookup with the USDC coin (a dishonest prover's witness).
+      const color = variant === 'c2' ? BTC : USDC;
+      const held = () => {
+        const s = withCoin(emptyCoinStore(), COIN);
+        return variant === 'c2' ? { ...s, coins: { [bytesToHex(BTC)]: s.coins[bytesToHex(USDC)] } } : s;
+      };
+      const op = toContract ? 'withdrawShieldedToContract' : 'withdrawShielded';
+      const challengeFn = toContract ? pc.challenge_withdraw_shielded_to_contract_with_ed25519 : pc.challenge_withdraw_shielded_with_ed25519;
+      return {
+        input: { op, recipient, color, amount },
+        request: { op, recipient, color, amount, coin: QCOIN },
+        args: [{ bytes: recipient }, color, amount],
+        challenge: (addr, pk, salt, nonce) => challengeFn({ bytes: addr }, pk, salt, { bytes: recipient }, color, amount, QCOIN, nonce),
+        privateState: held,
       };
     }
     default:
@@ -103,8 +156,8 @@ function callOf(circuit: string): { input: Ed25519MessageInput; args: unknown[];
 }
 
 /** The bytes the circuit renders for this call at (account, pk, network, nonce). */
-function messageFor(circuit: string, addr: Uint8Array, pk: any, salt: Uint8Array, nonce: bigint) {
-  const call = callOf(circuit);
+function messageFor(circuit: string, addr: Uint8Array, pk: any, salt: Uint8Array, nonce: bigint, variant: Variant = 'honest') {
+  const call = callOf(circuit, variant);
   const challenge = call.challenge(addr, pk, salt, nonce);
   return renderEd25519Message({ contractAddress: addr, authNonce: nonce, challenge, label: LABEL }, call.input);
 }
@@ -116,7 +169,7 @@ async function stateWith(mod: any, pk: { x: bigint; y: bigint }, earlier?: { cir
   const boot = (Strict as any).pureCircuits.derive_boot_commitment_with_ed25519(bootSalt, pk);
   const init = await contract.initialState(
     rt.createConstructorContext(emptyCoinStore(det('enc secret')), COIN_PK),
-    boot, det('enc key'), SALT, { bytes: new Uint8Array(32) }, { bytes: new Uint8Array(32) },
+    boot, ENC_KEY, SALT, { bytes: new Uint8Array(32) }, { bytes: new Uint8Array(32) },
   );
   const ctx = rt.createCircuitContext({
     circuitId: 'activate_initial_device_with_ed25519', contractAddress: ADDRESS, coinPublicKeyOrZswapState: COIN_PK,
@@ -131,14 +184,15 @@ async function stateWith(mod: any, pk: { x: bigint; y: bigint }, earlier?: { cir
   return state;
 }
 
-async function callCircuit(mod: any, state: any, circuit: string, pk: any, useCounter: bigint, sig: any): Promise<{ state: any; pd: any }> {
+async function callCircuit(mod: any, state: any, circuit: string, pk: any, useCounter: bigint, sig: any, variant: Variant = 'honest'): Promise<{ state: any; pd: any }> {
   const contract = new mod.Contract(makeWitnesses());
   const nonce = mod.ledger(state).auth_nonce as bigint;
-  const m = messageFor(circuit, hexToBytes(ADDRESS), pk, SALT, nonce);
+  const call = callOf(circuit, variant);
+  const m = messageFor(circuit, hexToBytes(ADDRESS), pk, SALT, nonce, variant);
   const ctx = rt.createCircuitContext({
-    circuitId: circuit, contractAddress: ADDRESS, coinPublicKeyOrZswapState: COIN_PK, contractState: state, privateState: emptyCoinStore(),
+    circuitId: circuit, contractAddress: ADDRESS, coinPublicKeyOrZswapState: COIN_PK, contractState: state, privateState: call.privateState(),
   });
-  const res = await contract.impureCircuits[circuit](ctx, ...callOf(circuit).args, pk, useCounter, sig, m.show);
+  const res = await contract.impureCircuits[circuit](ctx, ...call.args, pk, useCounter, sig, m.show);
   const trace = res.context.callProofDataTrace;
   return { state: (res.context.queryContexts?.[ADDRESS] ?? res.context.callContext.currentQueryContext).state, pd: trace[trace.length - 1] };
 }
@@ -162,12 +216,17 @@ interface Case {
   proverR?: any;
   /** Replay: first make one valid call, then present this (older) signature at the next nonce. */
   replay?: boolean;
+  /** The call (C2: the withdrawal names another token than the coin the witness returns). */
+  variant?: Variant;
   expect: 'accept' | 'refuse';
   libsodium: 'accept' | 'reject';
 }
 
 async function main() {
   const lax: any = await import(path.join(LAX_DIR, 'contract', 'index.js'));
+  const mutant: any = existsSync(path.join(MUTANT_DIR, 'contract', 'index.js'))
+    ? await import(path.join(MUTANT_DIR, 'contract', 'index.js'))
+    : undefined;
   mkdirSync(OUT, { recursive: true });
   const report: any = { circuits: {}, proofServer: null as string | null };
   if (PROOF_SERVER) report.proofServer = await (await fetch(`${PROOF_SERVER}/version`)).text();
@@ -245,6 +304,12 @@ async function main() {
       const s = (k * a) % L;
       cases.push({ name: 'R = identity, equation holds', pkBytes: Aenc, sigBytes: Uint8Array.from([...O.toBytes(), ...le32(s)]), expect: 'refuse', libsodium: 'reject' });
     }
+    // C2: a VALID signature over a withdrawal that names BTC, while the witness returns the USDC
+    // coin (bound in the challenge, so the signature verifies): only the colour assert refuses it.
+    if (circuit.startsWith('withdraw_shielded')) {
+      const sig = sign(messageFor(circuit, addr, pkA, SALT, 0n, 'c2').bytes);
+      cases.push({ name: 'C2: names BTC, spends the USDC coin (valid sig)', pkBytes: Aenc, sigBytes: sig, variant: 'c2', expect: 'refuse', libsodium: 'accept' });
+    }
 
     const rows: any[] = [];
     for (const c of cases) {
@@ -253,7 +318,9 @@ async function main() {
       try {
         const pk = decodeEd25519Point(c.pkBytes, 'the key');
         const sig = decodeEd25519Signature(c.sigBytes);
-        const msg = c.replay ? messageFor(circuit, addr, pk, SALT, 1n).bytes : messageFor(circuit, addr, pk, SALT, 0n).bytes;
+        const msg = c.replay ? messageFor(circuit, addr, pk, SALT, 1n).bytes : messageFor(circuit, addr, pk, SALT, 0n, c.variant).bytes;
+        // The honest client builds the call's challenge first (it refuses a coin of another token, C2).
+        ed25519RequestFor({ contractAddress: addr, authNonce: 0n, evmDomainSalt: SALT, encKey: ENC_KEY }, SALT, pk, callOf(circuit, c.variant).request);
         if (!nacl.sign.detached.verify(msg, c.sigBytes, c.pkBytes)) throw new Error('tweetnacl pre-check: does not verify');
         row.client = 'accepted';
         void sig;
@@ -272,10 +339,20 @@ async function main() {
         try {
           const earlier = c.replay ? { circuit, sig: { r: typedR, s } } : undefined;
           const state = await stateWith(Strict, typedPk, earlier);
-          await callCircuit(Strict, state, circuit, typedPk, c.replay ? 1n : 0n, { r: typedR, s });
+          await callCircuit(Strict, state, circuit, typedPk, c.replay ? 1n : 0n, { r: typedR, s }, c.variant);
           row.js = 'ACCEPTED';
         } catch (e) {
           row.js = `refused: ${errText(e)}`;
+        }
+        // The mutation check: the C2 case on the contract WITHOUT the colour assert must pass.
+        if (c.variant === 'c2' && mutant) {
+          try {
+            const state = await stateWith(mutant, typedPk);
+            await callCircuit(mutant, state, circuit, typedPk, 0n, { r: typedR, s }, c.variant);
+            row.mutant = 'ACCEPTED (without the C2 assert the coin of the other token is spent)';
+          } catch (e) {
+            row.mutant = `refused: ${errText(e)}`;
+          }
         }
       }
       // ── circuit: the prover's typed arguments → lax preimage → the strict IR
@@ -287,7 +364,7 @@ async function main() {
         try {
           const earlier = c.replay ? { circuit, sig: { r: rP, s } } : undefined;
           const state = await stateWith(lax, pkP, earlier);
-          const { pd } = await callCircuit(lax, state, circuit, pkP, c.replay ? 1n : 0n, { r: rP, s });
+          const { pd } = await callCircuit(lax, state, circuit, pkP, c.replay ? 1n : 0n, { r: rP, s }, c.variant);
           const pre: Uint8Array = ledger.proofDataIntoSerializedPreimage(pd.input, pd.output, pd.publicTranscript, pd.privateTranscriptOutputs, circuit);
           const file = `${circuit}.${c.name.replace(/[^a-z0-9]+/gi, '_')}.preimage`;
           writeFileSync(path.join(OUT, file), pre);
@@ -307,10 +384,10 @@ async function main() {
       const refusedEverywhere = layers.every((l: string) => !/^(accepted|ACCEPTED)/.test(l));
       row.ok = c.expect === 'accept'
         ? /^accepted/.test(row.client) && row.js === 'ACCEPTED' && (!PROOF_SERVER || /^ACCEPTED/.test(row.circuit))
-        : refusedEverywhere;
+        : refusedEverywhere && (c.variant !== 'c2' || !mutant || /^ACCEPTED/.test(row.mutant ?? ''));
       void acceptedAnywhere;
       rows.push(row);
-      console.log(`  ${row.ok ? '✓' : '✗'} ${c.name.padEnd(42)} client: ${row.client.slice(0, 48).padEnd(48)} js: ${row.js.slice(0, 44).padEnd(44)} circuit: ${row.circuit.slice(0, 60)}`);
+      console.log(`  ${row.ok ? '✓' : '✗'} ${c.name.padEnd(48)} client: ${row.client.slice(0, 48).padEnd(48)} js: ${row.js.slice(0, 44).padEnd(44)} circuit: ${row.circuit.slice(0, 60)}${row.mutant ? `  mutant: ${row.mutant.slice(0, 40)}` : ''}`);
     }
     report.circuits[circuit] = rows;
     const bad = rows.filter((x) => !x.ok);
@@ -320,6 +397,5 @@ async function main() {
   writeFileSync(path.join(OUT, 'ed25519-safety.json'), JSON.stringify(report, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 1) + '\n');
 }
 
-await runScenario('ed25519-safety (A5 b: the matrix on the real arm circuits)', main);
-void edCount;
+await runScenario('ed25519-safety (A5 b, P9.C: the matrix on the real arm circuits, incl. C2)', main);
 void encodeEd25519Point;

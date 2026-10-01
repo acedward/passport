@@ -94,6 +94,10 @@ export interface CallContext {
    *  `ed25519` arm binds it into every challenge as the account's network
    *  salt; the jubjub and k256 arms leave it unset. */
   evmDomainSalt?: Uint8Array;
+  /** The account's current `enc_key`, read from ledger state. Only the `ed25519` arm's
+   *  rotate_enc_key needs it: its message says "Cancel all open offers" when the new key IS
+   *  the current one (the market's on-chain cancel, Q30) and "Rotate encryption key" otherwise. */
+  encKey?: Uint8Array;
 }
 
 const addr = (ctx: CallContext) => ({ bytes: ctx.contractAddress });

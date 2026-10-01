@@ -8,7 +8,10 @@
 // too, with a type error instead of a reason.
 //
 // WHAT THE WALLET SIGNS is the readable message the contract renders in-circuit
-// (`ed25519-message.ts`, docs/ED25519-ARM.md). To authorise one call the device:
+// (`ed25519-message.ts`, format F3 v2, docs/ED25519-ARM.md). The arm has NO device
+// management (one device per account, Q27): its gated operations are the shielded and
+// unshielded withdrawals, the inbox append, rotate_enc_key (re-affirming the current key is
+// the market's on-chain cancel, Q30) and the offer. To authorise one call the device:
 //
 //   1. computes the call's challenge with the contract's own pure circuit
 //      (`challenge_<op>_with_ed25519`, binding the account's network salt);
@@ -171,7 +174,9 @@ export interface Ed25519DeviceOptions {
   /** The first line of every message: the dApp's name and network, <= 24 printable ASCII
    *  characters (e.g. "Night Market - stagenet"). */
   label?: string;
-  /** The dApp's token list, for symbols and decimals. Unknown colours show base units. */
+  /** The dApp's token list: each amount's "This site labels it:" line (symbol and decimals).
+   *  The base units and the full token id are shown whatever it says; unknown colours, or a
+   *  display the arm cannot render, are labelled as base units under "?". */
   tokens?: EdTokenResolver;
 }
 
@@ -230,7 +235,9 @@ export class Ed25519Device {
     return (pureCircuits as any).derive_boot_commitment_with_ed25519(salt, this.pk) as Uint8Array;
   }
 
-  /** Authorise one of the seven gated operations (the same `AuthRequest` every arm takes). */
+  /** Authorise one of the arm's five gated operations (the same `AuthRequest` every arm takes;
+   *  addDevice and removeDevice are refused: one device per account, Q27). rotateEncKey needs
+   *  the account's current key in `ctx.encKey` (CustodyAccount.callContext reads it). */
   async sign(ctx: CallContext, request: AuthRequest, useCounter: bigint): Promise<Ed25519Authorisation> {
     const salt = requireNetworkSalt(ctx);
     const { challenge, input } = ed25519RequestFor(ctx, salt, this.pk, request);
@@ -367,12 +374,24 @@ export function ed25519RequestFor(
       };
     case 'appendInbox':
       return { challenge: pc.challenge_append_inbox_with_ed25519(self, pk, salt, r.entry, n), input: { op: r.op, entry: r.entry } };
-    case 'rotateEncKey':
-      return { challenge: pc.challenge_rotate_enc_key_with_ed25519(self, pk, salt, r.newKey, n), input: { op: r.op, newKey: r.newKey } };
+    case 'rotateEncKey': {
+      if (!ctx.encKey || ctx.encKey.length !== 32) {
+        throw new Error(
+          "the ed25519 arm's rotate_enc_key message tells a cancel (the account's current key) from a key "
+          + 'change: put the current enc_key in the call context (CustodyAccount.callContext reads it)',
+        );
+      }
+      return {
+        challenge: pc.challenge_rotate_enc_key_with_ed25519(self, pk, salt, r.newKey, n),
+        input: { op: r.op, newKey: r.newKey, currentKey: ctx.encKey },
+      };
+    }
     case 'addDevice':
-      return { challenge: pc.challenge_add_device_with_ed25519(self, pk, salt, r.newEntry, n), input: { op: r.op, newEntry: r.newEntry } };
     case 'removeDevice':
-      return { challenge: pc.challenge_remove_device_with_ed25519(self, pk, salt, r.entry, n), input: { op: r.op, entry: r.entry } };
+      throw new Error(
+        `${r.op}: the ed25519 arm has no device management (one device per account, Q27); `
+        + 'the account exports no add_device or remove_device _with_ed25519 circuit',
+      );
     case 'bridgeDepositStart':
     case 'bridgeWithdrawStart':
       throw new Error(
@@ -402,11 +421,7 @@ export function contractEd25519Message(
     case 'appendInbox':
       return pc.ed25519_message_append_inbox(self, challenge, n, input.entry, show);
     case 'rotateEncKey':
-      return pc.ed25519_message_rotate_enc_key(self, challenge, n, input.newKey, show);
-    case 'addDevice':
-      return pc.ed25519_message_add_device(self, challenge, n, input.newEntry, show);
-    case 'removeDevice':
-      return pc.ed25519_message_remove_device(self, challenge, n, input.entry, show);
+      return pc.ed25519_message_rotate_enc_key(self, challenge, n, input.newKey, input.currentKey, show);
     case 'openSwapShielded':
       return pc.ed25519_message_open_swap_shielded(
         self, challenge, n, input.giveColor, input.giveAmount, input.recipientKind, input.recipient,
