@@ -72,6 +72,12 @@ export interface NetworkConfig {
   indexerWS: string;
   node: string;
   proofServer: string;
+  /** Where CONTRACT circuits are proved, when that is not `proofServer` (project 00047).
+   *  The `ed25519` arm's circuits use ZKIR 3.1 (sha512), which proof server 9.0.0-rc.6 cannot
+   *  read, while stagenet still requires the wallet's DUST proof from rc.6 (dust/9): until
+   *  stagenet moves to dust/10 the wallet proves on `proofServer` (rc.6) and contract calls on
+   *  this one (rc.8). Defaults to `proofServer`. */
+  contractProofServer?: string;
 }
 
 /**
@@ -136,6 +142,11 @@ export const CONFIG: NetworkConfig = {
       : base.indexerWS),
   node: process.env.MIDNIGHT_NODE_URL ?? base.node,
   proofServer: process.env.MIDNIGHT_PROOF_SERVER_URL ?? base.proofServer,
+  contractProofServer:
+    process.env.MIDNIGHT_CONTRACT_PROOF_SERVER_URL
+    ?? process.env.MIDNIGHT_PROOF_SERVER_URL
+    ?? base.contractProofServer
+    ?? base.proofServer,
 };
 setNetworkId(CONFIG.networkId as any);
 
@@ -341,7 +352,7 @@ export async function createProviders(walletCtx: WalletContext, contractZkPath: 
     }),
     publicDataProvider: pdp,
     zkConfigProvider,
-    proofProvider: httpClientProofProvider(CONFIG.proofServer, zkConfigRegistry),
+    proofProvider: httpClientProofProvider(CONFIG.contractProofServer ?? CONFIG.proofServer, zkConfigRegistry),
     walletProvider,
     midnightProvider: walletProvider,
   };

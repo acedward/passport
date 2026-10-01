@@ -310,6 +310,8 @@ export class CustodyAccount {
       contractAddress: this.addressBytes,
       authNonce: l.auth_nonce,
       evmDomainSalt: l.evm_domain_salt,
+      // The ed25519 arm's rotate_enc_key message tells a cancel (the same key, Q30) from a change.
+      encKey: l.enc_key,
     };
   }
 

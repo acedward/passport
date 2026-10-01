@@ -73,6 +73,73 @@ export {
 } from './wallet/eip712.js';
 export type { EvmOp, EvmMessage, TypedDataV4, FieldDefinition, TypeDefinition } from './wallet/eip712.js';
 
+// The `ed25519` arm (project 00047): a Solana wallet as the device. The device, strict
+// decoding, the tweetnacl pre-check, and the readable message the contract renders in-circuit.
+export {
+  Ed25519Device,
+  decodeEd25519Point,
+  decodeEd25519Signature,
+  encodeEd25519Point,
+  base58Encode,
+  base58Decode,
+  ED25519_L,
+  ed25519AuthArgs,
+  ed25519RequestFor,
+  contractEd25519Message,
+  requireNetworkSalt,
+  offerChallenge,
+} from './wallet/ed25519.js';
+export type {
+  Ed25519Authorisation,
+  Ed25519DeviceOptions,
+  Ed25519SignFn,
+  Curve25519Point,
+  Ed25519SignatureArg,
+} from './wallet/ed25519.js';
+export {
+  renderEd25519Message,
+  assertSafeEd25519Message,
+  parsesAsSolanaTransaction,
+  ed25519PossessionMessage,
+  edAmount,
+  edNonce,
+  edDeadline,
+  edLabel,
+  renderUnits,
+  renderDecimal,
+  renderSiteLabel,
+  renderNonce,
+  renderDeadline,
+  isRenderableTokenDisplay,
+  isRenderableLabel,
+  tokenDisplayFor,
+  ED25519_MESSAGE_FORMAT,
+  ED25519_SITE_PREFIX,
+  ED25519_MESSAGE_BYTES,
+  ED25519_MAX_AMOUNT,
+  ED25519_MAX_DEADLINE,
+  ED25519_LABEL_BYTES,
+  ED25519_SYMBOL_BYTES,
+  ED25519_UNITS_BYTES,
+  ED25519_SITE_BYTES,
+  ED25519_NONCE_BYTES,
+  ED25519_MAX_DECIMALS,
+  UNKNOWN_TOKEN,
+} from './wallet/ed25519-message.js';
+export type {
+  Ed25519Message,
+  Ed25519MessageFrame,
+  Ed25519MessageInput,
+  EdTokenDisplay,
+  EdTokenResolver,
+  EdAmountValue,
+  EdDeadlineValue,
+  EdShowValue,
+  EdShowAmountValue,
+  EdShowSwapValue,
+  EdShowAny,
+} from './wallet/ed25519-message.js';
+
 // The secp256k1 plumbing an `evm` device needs: recovery, the Ethereum address
 // derivation the seam performs in-circuit, and low-S normalisation.
 export {
@@ -97,6 +164,14 @@ export {
   deployAccountInWaves,
   SHARED_CIRCUITS,
   EVM_GATED_IN_WAVE_ONE,
+  ED25519_GATED_IN_WAVE_ONE,
+  ED25519_GATED_BASES,
+  gatedBases,
+  ED25519_SWAP_CIRCUIT,
+  ed25519AccountWaves,
+  ed25519AccountCircuits,
+  contractForEd25519Account,
+  contractRestrictedTo,
 } from './wallet/wave-deploy.js';
 export type { WaveDeployOptions } from './wallet/wave-deploy.js';
 

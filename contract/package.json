@@ -43,7 +43,9 @@
   ],
   "scripts": {
     "link-callees": "bash scripts/link-callees.sh",
-    "compile:account": "npm run link-callees && COMPACT_PATH=node_modules compact compile +0.34.0 --feature-zkir-v3 --compact-path node_modules:contracts/managed contracts/account.compact contracts/managed/account",
+    "compile:account": "bash scripts/compile-account.sh",
+    "compile:account:skip-zk": "bash scripts/compile-account.sh --skip-zk",
+    "pin-contract-runtime": "node scripts/pin-contract-runtime.mjs contracts/managed/account",
     "compile": "npm run compile:account && compact compile +0.34.0 --feature-zkir-v3 contracts/control.compact contracts/managed/control && compact compile +0.34.0 --feature-zkir-v3 contracts/faucet.compact contracts/managed/faucet",
     "build": "tsc && node scripts/copy-artifacts.mjs && node scripts/bundle-signet-sdk.mjs",
     "measure-k": "node scripts/measure-k.mjs",
@@ -66,6 +68,11 @@
     "test:swap-deploy-budget": "tsx src/tests/swap-deploy-budget.ts",
     "probe:swap-placement": "tsx src/tests/swap-placement-probe.ts",
     "test:unit": "tsx src/tests/unit-offline.ts",
+    "test:ed25519-message": "tsx src/tests/ed25519-message-offline.ts",
+    "test:ed25519-offline": "tsx src/tests/ed25519-offline.ts",
+    "ed25519-lax-twin": "bash scripts/ed25519-lax-twin.sh",
+    "test:ed25519-safety": "tsx src/tests/ed25519-safety.ts",
+    "test:ed25519-local-e2e": "tsx src/tests/ed25519-local-e2e.ts",
     "test:crossimpl-offline": "tsx src/tests/crossimpl-offline.ts",
     "test:auth-crossimpl": "tsx src/tests/auth-crossimpl.ts",
     "test:auth": "tsx src/tests/auth-conformance.ts",
@@ -91,6 +98,7 @@
   "dependencies": {
     "@midnight-ntwrk/compact-js": "2.5.5-rc.8",
     "@midnight-ntwrk/compact-runtime": "0.19.0",
+    "@midnight-ntwrk/compact-runtime-0.20": "npm:@midnight-ntwrk/compact-runtime@0.20.0",
     "@midnight-ntwrk/midnight-js-contracts": "5.0.0-beta.7",
     "@midnight-ntwrk/midnight-js-http-client-proof-provider": "5.0.0-beta.7",
     "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "5.0.0-beta.7",
@@ -108,6 +116,7 @@
     "@noble/hashes": "2.2.0",
     "@sig-net/midnight": "0.22.0-rc.1",
     "rxjs": "^7.8.2",
+    "tweetnacl": "1.0.3",
     "ws": "^8.19.0"
   }
 }

@@ -1,0 +1,81 @@
+# The smallest ledger-9 localnet for the ed25519 arm (project 00047): node + indexer + TWO proof
+# servers. rc.6 proves the wallet's DUST (dust/9, as stagenet requires); rc.8 proves the account's
+# circuits (ZKIR 3.1: the ed25519 arm uses the sha512 instruction, which rc.6 cannot read).
+# From project 00047's spike 3 stack (the node is stagenet's build).
+#
+#   COMPOSE_PROJECT_NAME=… NODE_PORT=… INDEXER_PORT=… PROOF_PORT=… PROOF8_PORT=… \
+#   PS_PARAMS=<writable params dir> PS8_PARAMS=<writable params dir> \
+#     docker compose -f infra/docker-compose.ed25519.yml up -d        (… down -v to remove)
+#
+# Every host port is bound to 127.0.0.1 and chosen by the caller. The test runs on the compose
+# network with MIDNIGHT_PROOF_SERVER_URL=http://proof-server:6300 (the wallet) and
+# MIDNIGHT_CONTRACT_PROOF_SERVER_URL=http://proof-server-rc8:6300 (the contract).
+services:
+  node:
+    # midnight-node 2.0.0-rc.4 multiarch index; reports 2.0.0-d9729c13, stagenet's build.
+    image: docker.io/midnightntwrk/midnight-node@sha256:caf93d6f9fb3630c906ef3e714c151655377f3d28f907d17545de1870514da2e
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: ['no-new-privileges:true']
+    ports: ['127.0.0.1:${NODE_PORT:?}:9944']
+    volumes: [node-data:/node]
+    environment:
+      CFG_PRESET: 'dev'
+      SIDECHAIN_BLOCK_BENEFICIARY: '04bcf7ad3be7a5c790460be82a713af570f22e0f801f6659ab8e84a52be6969e'
+      THRESHOLD: '0'
+    healthcheck:
+      test:
+        - 'CMD-SHELL'
+        - >
+          curl -fs -H 'Content-Type: application/json' -d
+          '{"id":1,"jsonrpc":"2.0","method":"chain_getBlockHash","params":[1]}' http://localhost:9944 | grep -q
+          '"result":"0x'
+      interval: 2s
+      timeout: 5s
+      retries: 45
+      start_period: 120s
+
+  indexer:
+    # indexer-standalone 4.4.0-rc.3 (the evidence run used the effectstream/binaries 0.3.120 build).
+    image: ${INDEXER_IMAGE:-midnightntwrk/indexer-standalone:4.4.0-rc.3}
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    ports: ['127.0.0.1:${INDEXER_PORT:?}:8088']
+    volumes: [indexer-data:/data]
+    environment:
+      RUST_LOG: 'indexer=info,chain_indexer=info,indexer_api=info,wallet_indexer=info,indexer_common=info,info'
+      APP__APPLICATION__NETWORK_ID: 'undeployed'
+      APP__APPLICATION__CONCURRENCY_LIMIT: '1'
+      APP__INFRA__STORAGE__MAX_CONNECTIONS: '8'
+      APP__INFRA__NODE__URL: 'ws://node:9944'
+      APP__INFRA__SPO_NODE__URL: 'ws://node:9944'
+      APP__INFRA__SPO_NODE__BLOCKFROST_ID: 'localnet-not-using-spo'
+      APP__INFRA__SPO_NODE__RECONNECT_MAX_DELAY: '24h'
+      APP__INFRA__SECRET: '303132333435363738393031323334353637383930313233343536373839303132'
+    depends_on:
+      node:
+        condition: service_healthy
+
+  proof-server:
+    # 9.0.0-rc.6: the wallet's DUST proofs (dust/9).
+    image: midnightntwrk/proof-server@sha256:38a819eacde273f725551fdf90ca7c31ebf3c0ff145f3ed58ee35f92fb7ce95b
+    ports: ['127.0.0.1:${PROOF_PORT:?}:6300']
+    environment:
+      PORT: '6300'
+      MIDNIGHT_PP: /params
+    volumes: ['${PS_PARAMS:?}:/params']
+    mem_limit: 12g
+
+  proof-server-rc8:
+    # 9.0.0-rc.8 (index sha256:2666c7bd…45ecf): the account's circuits (ZKIR 3.1).
+    image: midnightntwrk/proof-server:9.0.0-rc.8
+    ports: ['127.0.0.1:${PROOF8_PORT:?}:6300']
+    environment:
+      PORT: '6300'
+      MIDNIGHT_PP: /params
+    volumes: ['${PS8_PARAMS:?}:/params']
+    mem_limit: 14g
+
+volumes:
+  node-data:
+  indexer-data:

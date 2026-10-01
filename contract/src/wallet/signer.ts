@@ -67,6 +67,7 @@ import {
   type EvmOp,
   type TypedDataV4,
 } from './eip712.js';
+import type { Ed25519Authorisation, Ed25519Device } from './ed25519.js';
 import {
   ethereumAddress,
   lowS,
@@ -79,18 +80,24 @@ import {
   type EvmPoint,
 } from './evm-signature.js';
 
-/** The authorisation arms the contract exports circuits for. */
-export type Arm = 'jubjub' | 'k256' | 'evm';
+/** The authorisation arms the contract exports circuits for. `ed25519` (project 00047) is a
+ *  Solana wallet: see `ed25519.ts`. */
+export type Arm = 'jubjub' | 'k256' | 'evm' | 'ed25519';
 
 export interface CallContext {
   /** The account's contract address, raw bytes (binds the account, AUTH-3). */
   contractAddress: Uint8Array;
   /** The auth_nonce the call will execute against (pre-increment, AUTH-2). */
   authNonce: bigint;
-  /** The account's sealed `evm_domain_salt`, read from ledger state. Only the
-   *  `evm` arm needs it — it is the EIP-712 domain's `salt` field — so the
-   *  other two arms leave it unset. */
+  /** The account's sealed `evm_domain_salt`, read from ledger state. The
+   *  `evm` arm needs it as the EIP-712 domain's `salt` field, and the
+   *  `ed25519` arm binds it into every challenge as the account's network
+   *  salt; the jubjub and k256 arms leave it unset. */
   evmDomainSalt?: Uint8Array;
+  /** The account's current `enc_key`, read from ledger state. Only the `ed25519` arm's
+   *  rotate_enc_key needs it: its message says "Cancel all open offers" when the new key IS
+   *  the current one (the market's on-chain cancel, Q30) and "Rotate encryption key" otherwise. */
+  encKey?: Uint8Array;
 }
 
 const addr = (ctx: CallContext) => ({ bytes: ctx.contractAddress });
@@ -810,8 +817,8 @@ export const evmChallenges = {
 // Arm-generic surface
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type AnyDevice = JubjubDevice | K256Device | EvmDevice;
-export type Authorisation = JubjubAuthorisation | K256Authorisation | EvmAuthorisation;
+export type AnyDevice = JubjubDevice | K256Device | EvmDevice | Ed25519Device;
+export type Authorisation = JubjubAuthorisation | K256Authorisation | EvmAuthorisation | Ed25519Authorisation;
 
 /**
  * One gated operation and its arguments, arm-independent.
@@ -1017,6 +1024,8 @@ export async function authorise(
       return device.sign(k256ChallengeFor(ctx, device.pk, request), useCounter);
     case 'evm':
       return device.sign(ctx, request, useCounter);
+    case 'ed25519':
+      return device.sign(ctx, request, useCounter);
   }
 }
 
@@ -1027,6 +1036,7 @@ export function authArgs(a: Authorisation): unknown[] {
     case 'jubjub': return [a.pk, a.use_counter, a.sig_r, a.sig_s, a.grind_nonce];
     case 'k256': return [a.pk, a.use_counter, a.sig, a.envelope];
     case 'evm': return [a.pk, a.use_counter, a.sig];
+    case 'ed25519': return [a.pk, a.use_counter, a.sig, a.show];
   }
 }
 
@@ -1059,5 +1069,7 @@ export function pointRosterKey(pk: { x: bigint; y: bigint }): string {
  *  is the identity the ledger holds and the only one known before the device
  *  has signed; the other arms are keyed by their point, unchanged. */
 export function deviceRosterKey(device: AnyDevice): string {
-  return device.arm === 'evm' ? `evm:${device.addressHex}` : pointRosterKey(device.pk);
+  if (device.arm === 'evm') return `evm:${device.addressHex}`;
+  if (device.arm === 'ed25519') return `ed25519:${device.publicKeyHex}`;
+  return pointRosterKey(device.pk);
 }
