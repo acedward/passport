@@ -9,10 +9,16 @@
 # unaffected, new deployments get the new keys.
 #
 # WHAT IS PINNED.
-#   * the compiler: `compactc --version` must print exactly $PIN (commit debb05f94). The
-#     docker toolchain is built from docker/compactc-0.35.0.Dockerfile, which checks the
-#     release archive's SHA-256; the host toolchain (`compact compile +0.35.0`) is checked
-#     by its version line and, where the `compact` CLI keeps it, by the archive's digest.
+#   * the compiler, FAIL CLOSED (audit C9a): scripts/verify-compactc.sh must verify the
+#     toolchain before anything is compiled — the release archive (`artifact.zip`) present and
+#     equal to the pinned SHA-256 for this platform, and every binary a compile runs byte-equal
+#     to the archive's copy — and `compactc --version` must print exactly $PIN (commit
+#     debb05f94). A toolchain it cannot check is refused, never skipped. The host toolchain is
+#     the `compact` CLI's install of 0.35.0 (~/.compact/versions/0.35.0/<arch>-<os>/, which
+#     keeps the archive), run directly from that verified directory; the docker toolchain is
+#     docker/compactc-0.35.0.Dockerfile, which checks the archive's SHA-256 while it builds and
+#     keeps it in /opt/compactc so the same check runs in the container; `path` is a verified
+#     directory on PATH (inside that image).
 #   * the runtime: the generated module requires compact-runtime 0.20.0, while compact-js
 #     2.5.5-rc.8 and midnight-js 5.0.0-beta.7 keep 0.19.0. scripts/pin-contract-runtime.mjs
 #     points the generated module (and only it) at the npm alias
@@ -48,29 +54,24 @@ bash scripts/link-callees.sh
 
 case "$TOOLCHAIN" in
   host)
-    got="$(compact compile +0.35.0 --version)"
-    [[ "$got" == "$PIN" ]] || { echo "error: compactc +0.35.0 is '$got', expected '$PIN'" >&2; exit 70; }
-    # The `compact` CLI keeps the downloaded release archive beside the binaries, in
-    # ~/.compact/versions/0.35.0/<arch>-<os>/artifact.zip: check its digest where it exists.
-    for dir in "$HOME"/.compact/versions/0.35.0/*/; do
-      zip="${dir}artifact.zip"; [[ -f "$zip" ]] || continue
-      case "$(basename "$dir")" in
-        aarch64-darwin) want=5898b3d916b2b26f2c110b55a4a4121c22c88eefbd076994e8c3dd3e56c571fc ;;
-        x86_64-darwin) want=adfd3738965d758897d8038b86a5c32e5bd20fb437fc0f1cbc01c8d816b0e212 ;;
-        aarch64-linux) want=3f74ec6fc98ccca7365c5c915f6015d8893db4527faafe04a90bc36effc40a3a ;;
-        x86_64-linux) want=70f22fb8209cc5a8504b2b3d91796cfdab2d71d88807ceef12fab87fed03bae2 ;;
-        *) continue ;;
-      esac
-      got_sha="$(shasum -a 256 "$zip" | cut -d ' ' -f 1)"
-      [[ "$got_sha" == "$want" ]] || { echo "error: $zip sha256 $got_sha, expected $want" >&2; exit 70; }
-    done
-    COMPACT_PATH=node_modules compact compile +0.35.0 "${flags[@]}" \
+    case "$(uname -m)" in arm64|aarch64) arch=aarch64 ;; x86_64|amd64) arch=x86_64 ;; *) arch="$(uname -m)" ;; esac
+    os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    dir="$HOME/.compact/versions/0.35.0/$arch-$os"
+    bash scripts/verify-compactc.sh "$dir"
+    got="$("$dir/compactc" --version)"
+    [[ "$got" == "$PIN" ]] || { echo "error: $dir/compactc is '$got', expected '$PIN'" >&2; exit 70; }
+    COMPACT_PATH=node_modules "$dir/compactc" "${flags[@]}" \
       --compact-path node_modules:contracts/managed contracts/account.compact contracts/managed/account
     ;;
   docker)
     if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
       docker build -f docker/compactc-0.35.0.Dockerfile -t "$IMAGE" docker
     fi
+    # The same fail-closed check, inside the image (an image built from an older Dockerfile has
+    # no /opt/compactc/artifact.zip and is refused: rebuild it).
+    docker run --rm --network none -v "$here/scripts/verify-compactc.sh:/verify-compactc.sh:ro" "$IMAGE" \
+      bash /verify-compactc.sh /opt/compactc \
+      || { echo "error: $IMAGE is not a verified compactc 0.35.0 (rebuild: docker build -f docker/compactc-0.35.0.Dockerfile -t $IMAGE docker)" >&2; exit 70; }
     got="$(docker run --rm --network none "$IMAGE" compactc --version)"
     [[ "$got" == "$PIN" ]] || { echo "error: $IMAGE compactc is '$got', expected '$PIN'" >&2; exit 70; }
     params=()
@@ -89,9 +90,12 @@ case "$TOOLCHAIN" in
       contracts/account.compact contracts/managed/account
     ;;
   path)
-    got="$(compactc --version)"
-    [[ "$got" == "$PIN" ]] || { echo "error: compactc on PATH is '$got', expected '$PIN'" >&2; exit 70; }
-    COMPACT_PATH=node_modules compactc "${flags[@]}" --compact-path node_modules:contracts/managed \
+    bin="$(command -v compactc)" || { echo "error: no compactc on PATH" >&2; exit 70; }
+    dir="$(cd "$(dirname "$bin")" && pwd -P)"
+    bash scripts/verify-compactc.sh "$dir"
+    got="$("$dir/compactc" --version)"
+    [[ "$got" == "$PIN" ]] || { echo "error: $dir/compactc is '$got', expected '$PIN'" >&2; exit 70; }
+    COMPACT_PATH=node_modules "$dir/compactc" "${flags[@]}" --compact-path node_modules:contracts/managed \
       contracts/account.compact contracts/managed/account
     ;;
   *) echo "error: COMPACTC_TOOLCHAIN must be host, docker or path" >&2; exit 64 ;;

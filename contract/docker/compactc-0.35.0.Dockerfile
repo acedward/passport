@@ -4,8 +4,10 @@
 # THE PIN is the release archive's SHA-256, checked while the image is built. The release
 # (LFDT-Minokawa/compact tag compactc-v0.35.0 @ debb05f9414b9d1e176741c2be289bb32233f0fc)
 # publishes no checksum file; the digests below are GitHub's per-asset sha256 values, each
-# re-checked against a download. scripts/compile-account.sh then checks `compactc --version`
-# before anything is compiled.
+# re-checked against a download. The verified archive STAYS in the image
+# (/opt/compactc/artifact.zip), so scripts/compile-account.sh can run the same fail-closed
+# check in the container (scripts/verify-compactc.sh: the archive's digest, and every binary
+# equal to the archive's copy) and `compactc --version` before anything is compiled.
 #
 #   docker build -f docker/compactc-0.35.0.Dockerfile -t passport-compactc:0.35.0 docker
 FROM alpine:3.22
@@ -28,7 +30,7 @@ RUN set -eux; \
     mkdir -p /opt/compactc; \
     unzip -q /tmp/compactc.zip -d /opt/compactc; \
     chmod +x /opt/compactc/compactc /opt/compactc/compactc.bin /opt/compactc/zkir /opt/compactc/zkir-v3; \
-    rm -f /tmp/compactc.zip
+    mv /tmp/compactc.zip /opt/compactc/artifact.zip
 
 ENV PATH="/opt/compactc:${PATH}"
 WORKDIR /w
