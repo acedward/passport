@@ -18,7 +18,11 @@
 #     keeps the archive), run directly from that verified directory; the docker toolchain is
 #     docker/compactc-0.35.0.Dockerfile, which checks the archive's SHA-256 while it builds and
 #     keeps it in /opt/compactc so the same check runs in the container; `path` is a verified
-#     directory on PATH (inside that image).
+#     directory on PATH (inside that image). Every branch RUNS the compiler it verified, by its
+#     full path, never a `compactc` looked up on PATH again (audit R2-9): in the docker branch,
+#     /opt/compactc/compactc of the image id resolved once from the tag, so neither a PATH that
+#     puts another `compactc` first nor a tag moved between the steps can swap the compiler (the
+#     wrapper itself puts its own directory first on PATH for compactc.bin, zkir and zkir-v3).
 #   * the runtime: the generated module requires compact-runtime 0.20.0, while compact-js
 #     2.5.5-rc.8 and midnight-js 5.0.0-beta.7 keep 0.19.0. scripts/pin-contract-runtime.mjs
 #     points the generated module (and only it) at the npm alias
@@ -67,13 +71,16 @@ case "$TOOLCHAIN" in
     if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
       docker build -f docker/compactc-0.35.0.Dockerfile -t "$IMAGE" docker
     fi
+    # The tag is resolved ONCE: the check, the version and the compile all run this image id.
+    img="$(docker image inspect -f '{{.Id}}' "$IMAGE")" || { echo "error: cannot resolve $IMAGE" >&2; exit 70; }
     # The same fail-closed check, inside the image (an image built from an older Dockerfile has
     # no /opt/compactc/artifact.zip and is refused: rebuild it).
-    docker run --rm --network none -v "$here/scripts/verify-compactc.sh:/verify-compactc.sh:ro" "$IMAGE" \
+    docker run --rm --network none -v "$here/scripts/verify-compactc.sh:/verify-compactc.sh:ro" "$img" \
       bash /verify-compactc.sh /opt/compactc \
       || { echo "error: $IMAGE is not a verified compactc 0.35.0 (rebuild: docker build -f docker/compactc-0.35.0.Dockerfile -t $IMAGE docker)" >&2; exit 70; }
-    got="$(docker run --rm --network none "$IMAGE" compactc --version)"
-    [[ "$got" == "$PIN" ]] || { echo "error: $IMAGE compactc is '$got', expected '$PIN'" >&2; exit 70; }
+    # Run the verified directory's compiler by its full path, never `compactc` from the image's PATH.
+    got="$(docker run --rm --network none "$img" /opt/compactc/compactc --version)"
+    [[ "$got" == "$PIN" ]] || { echo "error: $IMAGE /opt/compactc/compactc is '$got', expected '$PIN'" >&2; exit 70; }
     params=()
     if [[ " ${flags[*]} " != *" --skip-zk "* ]]; then
       pp="${MIDNIGHT_PP:-$HOME/.cache/midnight/zk-params}"
@@ -85,8 +92,9 @@ case "$TOOLCHAIN" in
       real="$(cd "$callee" && pwd -P)"
       [[ "$real" == "$here"/* ]] || params+=(-v "$real:$real:ro")
     done
-    docker run --rm --network none "${params[@]}" -v "$here:$here" -w "$here" -e COMPACT_PATH=node_modules \
-      "$IMAGE" compactc "${flags[@]}" --compact-path node_modules:contracts/managed \
+    # ${params[@]+…}: an empty array under `set -u` is an error in bash 3.2 (macOS), e.g. --skip-zk.
+    docker run --rm --network none ${params[@]+"${params[@]}"} -v "$here:$here" -w "$here" -e COMPACT_PATH=node_modules \
+      "$img" /opt/compactc/compactc "${flags[@]}" --compact-path node_modules:contracts/managed \
       contracts/account.compact contracts/managed/account
     ;;
   path)
